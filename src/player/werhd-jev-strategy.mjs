@@ -378,7 +378,12 @@ export function investmentGroups(api, catalog, snapshot, memory, groups) {
     if (['mobilize','counter_range','counter_pressure'].includes(plan?.purpose) && a.queue === plan.queue) {
       delete g.actions[key]; delete g.criteria[key]; continue;
     }
-    const essential = id === 'construction' && (r.power > 0 || r.refinery && !s.economy.refineries || r.factory === 'UnitType' && !r.naval && !s.economy.factories);
+    // A missing barracks belongs here with power, the first refinery and the first factory: it is
+    // the opening's defence, and the reserve must not hold it back.
+    const essential = id === 'construction' && (r.power > 0
+      || r.factory === 'InfantryType' && !buildings.some(b => catalog[b.name]?.factory === 'InfantryType')
+      || r.refinery && !s.economy.refineries
+      || r.factory === 'UnitType' && !r.naval && !s.economy.factories);
     if (!essential && s.uncommittedCredits - a.cost < strategy.reserve) { delete g.actions[key]; delete g.criteria[key]; }
   }
   // Explain upgraded unit advantages to the model using current target armor, range and rules.
@@ -391,7 +396,7 @@ export function investmentGroups(api, catalog, snapshot, memory, groups) {
     groups.vehicles.instructions += ' URGENT: the base has fewer than four mobile armored units. Build the offered combat reinforcement now when affordable; do not wait for an unplanned future technology investment.';
     groups.vehicles.criteria.wait = 'Wait only while the queue is busy or none of these reinforcements is affordable. There is no reserved capital project now; an idle affordable queue leaves the base exposed.';
   }
-  recoveryGroups(api, catalog, snapshot, groups);
+  recoveryGroups(api, catalog, snapshot, groups, memory);
   operationalGoals(api, catalog, snapshot, groups, memory);
 }
 
@@ -445,15 +450,24 @@ function operationalGoals(api, catalog, snapshot, groups, memory = {}) {
   }
 }
 
-function recoveryGroups(api, catalog, snapshot, groups) {
+function recoveryGroups(api, catalog, snapshot, groups, memory) {
   const { units, buildings } = snapshot.raw, s = snapshot.state;
   const hasYard = buildings.some(u => catalog[u.name]?.yard);
   const refineryCount = buildings.filter(u => catalog[u.name]?.refinery).length;
   const miners = units.filter(u => catalog[u.name]?.harvester).length;
+  // A base that never had a refinery is starting, not recovering. The opening is power, barracks,
+  // refinery — the game's own AI order — and forcing the refinery first deleted the power plant and
+  // barracks options every turn, so the base opened with income and no way to defend it.
+  // Recovery applies to a refinery that was lost, which is what `seenRefinery` records.
+  if (refineryCount > 0 && memory) memory.seenRefinery = true;
+  const lostRefinery = !!memory?.seenRefinery;
   if (hasYard && refineryCount && miners || !buildings.length) return;
   const builder = units.find(u => catalog[catalog[u.name]?.deploysInto]?.yard);
   const miner = refineryCount && !miners && api.production.available(api.QueueType.Vehicles).find(i => catalog[i.name]?.harvester);
   if (!hasYard && builder && !miner) return;
+  // Nothing to rebuild: no miner missed and no refinery lost. A missing yard (or a deployable
+  // construction vehicle) still falls through, because that is the base itself.
+  if (!miner && hasYard && !lostRefinery) return;
   const queue = miner ? api.QueueType.Vehicles : hasYard ? api.QueueType.Structures : api.QueueType.Vehicles;
   const candidate = miner || api.production.available(queue).find(i => hasYard ? catalog[i.name]?.refinery : catalog[catalog[i.name]?.deploysInto]?.yard);
   if (!candidate) return;

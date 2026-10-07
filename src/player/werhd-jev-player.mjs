@@ -499,14 +499,22 @@ export function candidateGroups(api, catalog, snapshot, memory) {
     );
   const queueOf = (type) => state.queues.find((q) => q.type === type);
   const constructionType = api.QueueType?.Structures ?? 0;
+  const buildable = api.production.available(constructionType);
+  // A step is skipped when this game build does not offer it, so the opening cannot stall on a
+  // barracks that is not on the menu.
+  const canBarracks = buildable.some((i) => catalog[i.name]?.factory === "InfantryType");
   if (!queueOf(constructionType)?.size)
-    for (const item of api.production.available(constructionType)) {
+    for (const item of buildable) {
       const r = catalog[item.name];
       if (!r || r.naval) continue;
       let need = false;
+      // Power, then barracks, then refinery: the opening the game's own AI uses. A barracks early
+      // is what turns the first credits into something that can defend the base — infantry and a
+      // turret — while a refinery only widens the income channel. Putting the refinery second spent
+      // the opening on income and left nothing to fight the first raid with.
       if (powerMargin < 50 || !buildings.length) need = r.power > 0;
+      else if (!barracks && canBarracks) need = r.factory === "InfantryType";
       else if (!refineries) need = r.refinery;
-      else if (!barracks) need = r.factory === "InfantryType";
       else if (!factories) need = r.factory === "UnitType";
       else if (refineries < state.economy.targetRefineries) need = r.refinery;
       else if (state.economy.surplus && factories < 2 && (queueOf(api.QueueType?.Vehicles ?? 3)?.size ?? 0) > 0)

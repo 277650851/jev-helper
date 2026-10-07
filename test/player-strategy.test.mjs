@@ -96,6 +96,46 @@ assert.ok(groups.vehicles.actions.recover_MCV);
 assert.ok(!Object.values(groups.salvage.actions).some(a=>a.objectId===40),'preserve the prerequisite needed to produce the MCV');
 console.log('Pressure strategy: early counter-fire, directional placement, shared budget, airfield/lab progression and query-only planning passed');
 
+// The opening follows the game's own AI: power, then barracks, then refinery. A barracks early turns
+// the first credits into something that can defend; a refinery only widens income.
+{
+  const savedOwn=own,savedCredits=credits,savedOffered=offered,savedEnemies=enemies,savedMe=api.me;
+  // The fixture reports a fixed 200/50 supply, so the "no power plant" branch could never fire.
+  // Report what the base actually has: 200 per power plant, 50 drain per building.
+  api.me=()=>({credits,power:{total:200*own.filter(x=>catalog[x.name]?.power>0).length,drain:25*own.filter(x=>x.type===2).length}});
+  catalog.REF.cost=2000;catalog.BARRACKS.cost=500;catalog.FACTORY.cost=2000;
+  offered={ 0:['POWER','REF','FACTORY','BARRACKS','AIRFIELD'], 1:['PILL','GUN'], 2:[], 3:['MINER','TANK'], 4:[], 5:[] };
+  enemies=[];credits=20000;
+  const pick=()=>{
+    const s=collectState(api,catalog),g=candidateGroups(api,catalog,s,{});
+    return Object.keys(g.construction.actions).filter(k=>k.startsWith('produce_')).map(k=>k.slice(8)).sort();
+  };
+  // 1. A fresh base: power first, and the refinery is not forced ahead of it.
+  own=[u(1,'YARD',2)];
+  assert.deepEqual(pick(),['POWER'],'a base with no power plants builds power first');
+  // 2. Power up: the barracks comes before the refinery.
+  own=[u(1,'YARD',2),u(2,'POWER',2,26,30)];
+  assert.deepEqual(pick(),['BARRACKS'],'a barracks is the second building, ahead of the refinery');
+  // 3. Power and barracks up: the refinery follows.
+  own=[u(1,'YARD',2),u(2,'POWER',2,26,30),u(5,'BARRACKS',2,32,30)];
+  assert.deepEqual(pick(),['REF'],'the refinery is the third building');
+  // 4. And the vehicle factory after that. The refinery supplies a miner, so the base is no longer
+  //    in an income outage and the ordinary ordering applies.
+  own=[u(1,'YARD',2),u(2,'POWER',2,26,30),u(5,'BARRACKS',2,32,30),u(3,'REF',2,30,35),{...u(60,'MINER',7),isIdle:false}];
+  assert.deepEqual(pick(),['FACTORY'],'the vehicle factory follows the refinery');
+  // 5. Losing the refinery is different: that is an outage, and its rebuild is forced.
+  own=own.filter(x=>x.name!=='REF');
+  const lost=collectState(api,catalog),lostGroups=candidateGroups(api,catalog,lost,{seenRefinery:true});
+  assert.equal(lost.state.strategy.recovery,true,'a refinery that was lost is an outage');
+  assert.ok(lostGroups.construction.actions.recover_REF,'and its rebuild is offered as recovery');
+  // ...but the very same base at the opening, never having had a refinery, is not an outage.
+  const fresh=collectState(api,catalog),freshGroups=candidateGroups(api,catalog,fresh,{});
+  assert.notEqual(fresh.state.strategy.recovery,true,'a refinery that was never built is not an outage');
+  assert.ok(!freshGroups.construction.actions.recover_REF,'and nothing forces it ahead of the opening');
+  own=savedOwn;credits=savedCredits;offered=savedOffered;enemies=savedEnemies;api.me=savedMe;
+  console.log('Opening order: power, barracks, refinery, factory — a lost refinery is still recovered');
+}
+
 // An intact refinery cannot generate income after the last miner dies.
 catalog.MINER.cost=1400;catalog.MINER.label='Miner';
 own=own.filter(u=>u.name!=='MINER');own.push(u(50,'YARD',2),u(51,'REF',2));offered[3].push('MINER');credits=0;
@@ -167,13 +207,16 @@ console.log('Economic priority: two-miner expansion protected, combat prompt pre
 // credits with 24 idle units for 1,574 s. The fallback has to put a unit on offer itself.
 {
   const savedOwn = own, savedEnemies = enemies, savedCredits = credits, savedOffered = offered;
+  // One memory for the whole block, as the player keeps across decisions: it is what lets the
+  // strategy tell a refinery that was lost from a base that never had one yet.
+  const recMemory = {};
   // Intact refinery and factory, no miner left, army well past the force target: no economy plan
   // (the refinery cannot be fed) and no reinforcement plan (that needs miners), so vehicles is empty.
   own = [u(1,'YARD',2),u(2,'POWER',2,26,30),u(3,'REF',2,30,35),u(5,'BARRACKS',2),u(6,'FACTORY',2),
     ...Array.from({length:24},(_,i)=>u(70+i,'TANK',7))];
   enemies = []; credits = 21065;
   offered = { 0: ['POWER'], 1: ['PILL'], 2: [], 3: ['TANK'], 4: [], 5: [] };
-  snap = collectState(api, catalog); groups = candidateGroups(api, catalog, snap, {});
+  snap = collectState(api, catalog); groups = candidateGroups(api, catalog, snap, recMemory);
   assert.equal(snap.state.strategy.recovery, undefined, 'a refinery with no miner is not a recovery case');
   const auto = Object.entries(groups.vehicles?.actions ?? {}).find(([k, a]) => k.startsWith('auto_produce_'));
   assert.ok(auto, 'rich, idle and offered nothing: the fallback puts a combat vehicle on offer');
@@ -182,20 +225,20 @@ console.log('Economic priority: two-miner expansion protected, combat prompt pre
   assert.ok(auto[1].minCredits <= 500, 'same affordability floor as every other production option');
   // A busy factory queue must not be doubled up on.
   api.production.queues = () => idleQueues().map(q => q.type === 3 ? { ...q, size: 1, items: [{ name: 'TANK', quantity: 1, creditsEach: 750, creditsSpent: 0 }] } : q);
-  snap = collectState(api, catalog); groups = candidateGroups(api, catalog, snap, {});
+  snap = collectState(api, catalog); groups = candidateGroups(api, catalog, snap, recMemory);
   assert.ok(!Object.keys(groups.vehicles?.actions ?? {}).some(k => k.startsWith('auto_produce_')), 'a busy factory queue is left alone');
   api.production.queues = idleQueues;
   // Recovery keeps its own budget: while income is broken the fallback must not spend it on tanks.
   own = own.filter(x => x.name !== 'REF');
   offered = { 0: ['POWER','REF'], 1: ['PILL'], 2: [], 3: ['TANK','MINER'], 4: [], 5: [] };
   catalog.REF.cost = 2000;
-  snap = collectState(api, catalog); groups = candidateGroups(api, catalog, snap, {});
-  assert.equal(snap.state.strategy.recovery, true, 'no refinery at all is a recovery case');
+  snap = collectState(api, catalog); groups = candidateGroups(api, catalog, snap, recMemory);
+  assert.equal(snap.state.strategy.recovery, true, 'a refinery that was lost is a recovery case');
   assert.ok(!Object.values(groups.vehicles?.actions ?? {}).some(a => a?.type === 'produce'), 'recovery money is not spent on armor');
   assert.equal(groups.construction.actions.recover_REF?.auto, 2, 'an affordable rebuild is still automatic');
   // With no money at all the rebuild cannot be offered, so the only way back is selling something.
   credits = 0;
-  snap = collectState(api, catalog); groups = candidateGroups(api, catalog, snap, {});
+  snap = collectState(api, catalog); groups = candidateGroups(api, catalog, snap, recMemory);
   assert.ok(!groups.construction.actions.recover_REF, 'an unaffordable rebuild is not offered');
   const sell = Object.entries(groups.salvage?.actions ?? {}).find(([k, a]) => k.startsWith('recover_sell_'));
   assert.ok(sell, 'the only way back is selling a building');
