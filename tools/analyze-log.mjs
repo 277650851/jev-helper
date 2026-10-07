@@ -27,7 +27,9 @@ if (text.trimStart().startsWith('{') && text.includes('"entries"')) {
   if (autos.length) console.log(`\n自动兜底动作：${list(autos.reduce((m, a) => (m[a.reason] = (m[a.reason] ?? 0) + 1, m), {}))}（模型连续拒绝后由扩展直接执行）`);
   const stale = decisions.filter(e => e.state?.hints && Object.keys(e.state.hints).length).length;
   if (stale) console.log(`带「历史参考 / 老选项降级」提示的决策：${stale} 次`);
-  const low = decisions.filter(e => Object.values(e.groups ?? {}).every(g => g.choice === 'wait')).length;
+  // A decision with no groups at all must not count as "chose wait everywhere": every() over an
+  // empty list is true, so the group count is checked too.
+  const low = decisions.filter(e => { const g = Object.values(e.groups ?? {}); return g.length > 0 && g.every(x => x.choice === 'wait'); }).length;
   console.log(`\n全部选择等待的决策：${low} / ${decisions.length}（${pct(low, decisions.length)}）`);
   const first = decisions[0];
   if (first) { console.log('\n首条决策样例：'); for (const [id, g] of Object.entries(first.groups)) console.log(`  ${id}: ${g.choice} (${g.confidence}) ← ${Object.keys(g.options).join(' | ')}`); }

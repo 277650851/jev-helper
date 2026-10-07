@@ -1,5 +1,7 @@
-import {deflateSync} from 'node:zlib';
+import {deflateSync,deflateRawSync} from 'node:zlib';
 export function crc32(data){let c=0xffffffff;for(const x of data){c^=x;for(let i=0;i<8;i++)c=(c>>>1)^(c&1?0xedb88320:0);}return (c^0xffffffff)>>>0;}
+// ZIP entries are raw deflate streams, no zlib wrapper.
+export function deflateRaw(data){return deflateRawSync(data,{level:9});}
 export function iconPng(size){
   const raw=Buffer.alloc((size*4+1)*size);
   for(let y=0;y<size;y++)for(let x=0;x<size;x++){

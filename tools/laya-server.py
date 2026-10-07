@@ -14,6 +14,7 @@ The extension sends ``{"model", "state", "questions"}`` and expects ``{"model", 
 """
 
 import argparse
+import hmac
 import json
 import os
 import secrets
@@ -25,7 +26,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 DEFAULT_PORT = 8742
-MAX_BODY = 256_000  # matches the extension's own request bound
+MAX_BODY = 256_000  # bytes, counted from Content-Length; src/shared.mjs BODY_MAX_BYTES is the same number
 DEFAULT_CHECKPOINTS = ("models/hub/laya-multilingual-mlx", "models/laya-multilingual")
 
 
@@ -79,7 +80,7 @@ class Service:
     def authorized(self, header):
         if not self.token:
             return True
-        return header == f"Bearer {self.token}"
+        return hmac.compare_digest(header or "", f"Bearer {self.token}")
 
     def decide(self, body):
         state, questions = validate_request(body)
@@ -91,7 +92,12 @@ class Service:
             elapsed = (time.perf_counter() - started) * 1000
             self.requests += 1
         if self.log_path:
-            self.log(state, questions, output, elapsed)
+            # The decision log is a diagnostic side output. A bad --log path must not throw away a
+            # good answer and answer 500 "inference failed", so a write failure is reported and dropped.
+            try:
+                self.log(state, questions, output, elapsed)
+            except OSError as error:
+                self.log_message("could not append to --log %s: %s", self.log_path, error)
         return {
             "model": self.model_name,
             "answers": output["answers"],
@@ -267,7 +273,11 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if args.lan:
         args.host = "0.0.0.0"
-    if args.host not in ("127.0.0.1", "localhost", "::1"):
+    # "::1" is accepted as a spelling of loopback but not bindable: ThreadingHTTPServer is AF_INET,
+    # so binding it raises gaierror. Normalized away here rather than at startup.
+    if args.host == "::1":
+        args.host = "127.0.0.1"
+    if args.host not in ("127.0.0.1", "localhost"):
         # Anything beyond this machine must authenticate. The token is kept in the user's home so
         # it stays the same across restarts; delete the file to rotate it.
         if not args.token:
@@ -276,11 +286,18 @@ def main(argv=None):
                 args.token = token_file.read_text().strip()
             if not args.token:
                 args.token = secrets.token_urlsafe(24)
-                token_file.write_text(args.token + "\n")
-                os.chmod(token_file, 0o600)
+                # Created with its final mode, so it is never briefly world-readable the way
+                # write_text() + chmod() leaves it.
+                fd = os.open(str(token_file), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                with os.fdopen(fd, "w") as handle:
+                    handle.write(args.token + "\n")
 
     repo = Path(args.repo).expanduser() if args.repo else Path(__file__).resolve().parents[2] / "laya-vs-jev"
-    checkpoint = resolve_checkpoint(args.model, repo)
+    try:
+        checkpoint = resolve_checkpoint(args.model, repo)
+    except FileNotFoundError as error:
+        # The documented remedy is in the message; a traceback here would bury it.
+        raise SystemExit(str(error)) from None
     print(f"Loading Laya checkpoint {checkpoint} ({args.dtype}, {args.device})…", flush=True)
     started = time.perf_counter()
     agent = load_agent(checkpoint, args.dtype, args.device)

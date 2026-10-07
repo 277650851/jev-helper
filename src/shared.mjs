@@ -5,6 +5,10 @@ export const providerId = value => value === 'local' || value === 'openai' ? val
 // Which stored fields each provider uses. The popup, validation and background all read this.
 export const PROVIDER_FIELDS = /* @__PURE__ */ Object.freeze({ jev: { base: 'apiBase', key: 'apiKey', model: 'model' }, local: { base: 'localBase', key: 'localKey', model: 'localModel' }, openai: { base: 'openaiBase', key: 'openaiKey', model: 'openaiModel' } });
 const JEV_MODEL = /^[\w.\/-]{1,80}$/, OPENAI_MODEL = /^[\w.\/:@+-]{1,160}$/;
+// Group ids become keys of JSON-schema and answer objects. `__proto__` would hit the prototype
+// setter instead of creating an own key, so the emitted schema would name a member it does not
+// define; these names never match a real decision group.
+const RESERVED_IDS = new Set(['__proto__', 'prototype', 'constructor']);
 // The active provider decides which stored endpoint, key and model the background uses.
 // kind: whether requests leave for a hosted service ("cloud") or stay on this machine / LAN ("local").
 export function activeProvider(s) {
@@ -15,7 +19,9 @@ export function activeProvider(s) {
   if (id === 'openai') return { ...p, apiBase, apiKey, model, mode: s?.openaiMode === 'json' ? 'json' : 'tools', strategy: strategyMode(s?.strategyMode), requiresKey: !privateHost(host), kind: privateHost(host) ? 'local' : 'cloud' };
   return { ...p, apiBase, apiKey, model, strategy: 'choices', kind: id === 'local' ? 'local' : 'cloud' };
 }
-export const GAME_HOSTS = ['ra2web.github.io', 'staging.wangerhuoda.com', 'wangerhuoda.com', 'www.wangerhuoda.com'];
+// Every host that serves the game. The extension only talks to these, and the manifest asks for
+// access to exactly them; anything else the page sends is treated as an unsupported game page.
+export const GAME_HOSTS = ['ra2web.github.io', 'staging.wangerhuoda.com', 'wangerhuoda.com', 'www.wangerhuoda.com', 'gonghui.k0s.cn', 'game.ra2web.com', 'wan.youlidefuchou.com'];
 export const CHANNEL = 'werhd-jev-extension-v1';
 export function supportedGame(url) {
   try { const u = new URL(url); return u.protocol === 'https:' && GAME_HOSTS.includes(u.hostname) || u.protocol === 'http:' && ['localhost','127.0.0.1'].includes(u.hostname); } catch { return false; }
@@ -75,6 +81,10 @@ export function hostAllowed(value, allowedHosts = []) {
   return u.protocol === 'https:' || privateHost(host) || sanitizeAllowedHosts(allowedHosts).includes(host);
 }
 export const originPattern = value => { const u = new URL(apiEndpoint(value)); return `${u.protocol}//${u.hostname}/*`; };
+// A match pattern for a bare host from the allow list, once at save time. Scheme-wide on purpose:
+// the user may enter the host over http or https and the form has not settled on one yet. IPv6
+// literals need their brackets back, because normalizeHost stores the host without them.
+export const hostPattern = host => { const h = String(host ?? '').trim().toLowerCase(); return h.includes(':') ? `*://[${h}]/*` : `*://${h}/*`; };
 export function normalizeHotkey(value) {
   const parts = String(value).split('+').map(s => s.trim());
   const key = parts.pop()?.toUpperCase();
@@ -152,21 +162,31 @@ export const publicSettings = s => ({provider:providerId(s.provider), providerNa
   openaiBase:s.openaiBase??DEFAULTS.openaiBase, openaiModel:s.openaiModel??'', openaiMode:s.openaiMode==='json'?'json':'tools', strategyMode:strategyMode(s.strategyMode), openaiModels:Array.isArray(s.openaiModels)?s.openaiModels:[], hasOpenaiKey:!!s.openaiKey, hotkey:s.hotkey, autoCamera:s.autoCamera, showOverlay:s.showOverlay??DEFAULTS.showOverlay, autoReport:s.autoReport!==false, allowedHosts:sanitizeAllowedHosts(s.allowedHosts), maxDecisions:s.maxDecisions, objective:s.objective??'', language:s.language??DEFAULTS.language, hasKey:!!s.apiKey});
 // For the extension's own popup only: the stored keys, so the form can show them masked.
 export const privateSettings = s => ({...publicSettings(s), apiKey:s.apiKey??'', localKey:s.localKey??'', openaiKey:s.openaiKey??''});
+// Request-size limits are counted the way the far end counts them: in UTF-8 bytes of the
+// serialized body, because that is what Content-Length carries. Most of this text is Chinese,
+// so counting characters would let three times the budget through and draw a 413 instead of
+// the clear message here. The local Laya server enforces the same number (tools/laya-server.py).
+export const BODY_MAX_BYTES = 256000;
+// TextEncoder, not Buffer: this module is bundled for the browser and the service worker.
+export const jsonBytes = value => textBytes(JSON.stringify(value) ?? '');
+export const textBytes = value => new TextEncoder().encode(value).length;
 export function prepareQuestions(body) {
-  if (!body || JSON.stringify(body).length > 256000 || !body.state || typeof body.state !== 'object' || Array.isArray(body.state)) throw new Error('战况请求格式或大小无效。');
+  if (!body || jsonBytes(body) > BODY_MAX_BYTES || !body.state || typeof body.state !== 'object' || Array.isArray(body.state)) throw new Error('战况请求格式或大小无效。');
   const entries = Object.entries(body.groups ?? {});
   if (!entries.length || entries.length > 8) throw new Error('一次请求需要 1–8 个决策组。');
   return Object.fromEntries(entries.map(([id,g]) => {
     const criteria = Object.entries(g?.criteria ?? {});
-    if (!/^[a-z_]+$/.test(id) || typeof g.instructions !== 'string' || !g.instructions || !criteria.length || criteria.length > 255 || criteria.some(([k,v])=>!k || typeof v !== 'string')) throw new Error('决策候选无效。');
+    // Reserved object-key names would land on the prototype instead of becoming own keys.
+    if (!/^[a-z_]+$/.test(id) || RESERVED_IDS.has(id) || typeof g.instructions !== 'string' || !g.instructions || !criteria.length || criteria.length > 255 || criteria.some(([k,v])=>!k || typeof v !== 'string')) throw new Error('决策候选无效。');
     return [id,{type:'choice',instructions:g.instructions,criteria:Object.fromEntries(criteria)}];
   }));
 }
 // Commander requests carry the brief instead of decision groups; it is larger than a choice request.
-export const BRIEF_MAX_CHARS = 200000;
+// Counted in UTF-8 bytes for the same reason as BODY_MAX_BYTES.
+export const BRIEF_MAX_BYTES = 600000;
 export function prepareBrief(body) {
   const brief = body?.brief;
-  if (body?.mode !== 'commander' || !brief || typeof brief !== 'object' || Array.isArray(brief) || JSON.stringify(brief).length > BRIEF_MAX_CHARS) throw new Error('指挥请求格式或大小无效。');
+  if (body?.mode !== 'commander' || !brief || typeof brief !== 'object' || Array.isArray(brief) || jsonBytes(brief) > BRIEF_MAX_BYTES) throw new Error('指挥请求格式或大小无效。');
   const legal = brief.legal && typeof brief.legal === 'object' && !Array.isArray(brief.legal) ? brief.legal : {};
   return { ...brief, legal };
 }

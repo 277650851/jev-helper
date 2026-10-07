@@ -13,6 +13,27 @@ function mockChrome(shared){
   const c={storage:{local:area('local'),session:area('session')},runtime:{id:'test-extension',getURL:p=>'chrome-extension://test-extension/'+p,onMessage:{addListener:fn=>{listeners.message=fn;}}},permissions:{contains:async()=>true},tabs:{get:async()=>({id:7,url:sender.url,title:'王二火大'}),query:async()=>[{id:7,url:sender.url}],sendMessage:async(id,m)=>{messages.push(m);return {ok:true};},onUpdated:{addListener:fn=>{listeners.updated=fn;}},onRemoved:{addListener:fn=>{listeners.removed=fn;}}},action:{setBadgeText:async()=>{},setBadgeBackgroundColor:async()=>{}},scripting:{executeScript:async x=>{scripts.push(x);return [{documentId:sender.documentId,result:x.args?.[0]==='start'?{running:true}:x.args?.[0]==='stop'?{running:false}:{available:true,running:!!data.session['session:7']?.running}}];}}};
   return {c,data,messages,scripts,listeners};
 }
+test('the background still starts where storage.local.setAccessLevel is missing, as on Edge 130',async()=>{
+  // storage.setAccessLevel is Chromium 118+ and the storage.local variant is absent on some Edge
+  // builds. It runs at top level, so an unguarded call throws during service worker registration:
+  // the worker never starts and the popup shows a form that cannot be saved. Verified on Edge 130,
+  // where chrome.storage.local.setAccessLevel is undefined while storage.session has it.
+  const x=mockChrome();
+  delete x.c.storage.local.setAccessLevel;
+  assert.equal(typeof x.c.storage.local.setAccessLevel,'undefined','the mock reproduces the Edge 130 gap');
+  const app=createBackground(x.c,{fetchImpl:async()=>answer(),uuid:()=>crypto.randomUUID()});
+  await app.ready;
+  assert.equal(x.listeners.sessionAccess.accessLevel,'TRUSTED_CONTEXTS','session storage is still restricted');
+  assert.equal(x.listeners.localAccess,undefined);
+  const settings=await app.handle({type:'GET_SETTINGS'},extension);
+  assert.equal(settings.hotkey,DEFAULTS.hotkey);assert.equal(settings.provider,'jev');
+  // And it is a working background, not merely one that started: a session runs end to end.
+  await app.handle({type:'START',tabId:7},extension);
+  const s=await app.getSession(7);
+  const result=await app.handle({type:'DECIDE',token:s.token,body},sender);
+  assert.equal(result.answers.tactics.choice,'attack');
+});
+
 const answer=()=>new Response(JSON.stringify({answers:{tactics:{type:'choice',choice:'attack',confidence:.8}},model:'jev-test',usage:{input_tokens:40,output_tokens:8}}));
 async function setup(fetchImpl,shared){const mock=mockChrome(shared);const app=createBackground(mock.c,{fetchImpl,uuid:()=>crypto.randomUUID()});await app.ready;await app.handle({type:'START',tabId:7},extension);const s=await app.getSession(7);return {...mock,app,s,request:{type:'DECIDE',token:s.token,body}};}
 
@@ -323,6 +344,39 @@ test('external hosts are allowed by hand: until then a public plaintext address 
   await app.handle({type:'DISALLOW_HOST',host:'vps.example'},extension);
   const s=await app.getSession(7);await assert.rejects(app.handle({type:'DECIDE',token:s.token,body},sender),/允许的外部地址/,'a removed host stops being used at once');
   assert.deepEqual((await app.handle({type:'GET_SETTINGS'},extension)).allowedHosts,[]);
+});
+
+test('a start that never reaches the page records no match and downloads no report',async()=>{
+  const downloads=[];const x=mockChrome();x.c.downloads={download:async o=>{downloads.push(o);return 1;}};
+  // The page-side start throws, which is how attachJevPlayer failing to find window.werhd arrives.
+  const original=x.c.scripting.executeScript;
+  x.c.scripting.executeScript=async args=>args.args?.[0]==='start'?[{documentId:sender.documentId,error:'attachJevPlayer failed: window.werhd missing'}]:original(args);
+  const app=createBackground(x.c,{fetchImpl:async()=>assert.fail('a failed start must not call the model')});
+  // The real reason from the page is reported, not the generic fallback.
+  await assert.rejects(app.handle({type:'START',tabId:7},extension),/window\.werhd missing/);
+  assert.equal((await app.handle({type:'MATCHES_LIST'},extension)).matches.length,0,'a start that failed is not a match');
+  assert.equal(downloads.length,0,'and it writes no battle report');
+  // A start the page accepts is a real match and is recorded normally.
+  x.c.scripting.executeScript=original;
+  await app.handle({type:'START',tabId:7},extension);await app.handle({type:'STOP',tabId:7},extension);
+  assert.equal((await app.handle({type:'MATCHES_LIST'},extension)).matches.length,1);
+});
+
+test('closing the tab or navigating away records the match instead of dropping it',async()=>{
+  const x=await setup(async()=>answer());
+  await x.app.handle(x.request,sender);
+  x.listeners.removed(7);
+  await new Promise(r=>setTimeout(r,20));
+  const {matches}=await x.app.handle({type:'MATCHES_LIST'},extension);
+  assert.equal(matches.length,1,'a closed tab still leaves a record');
+  assert.equal(matches[0].reason,'tab_closed');assert.equal(matches[0].decisions,1);
+  // Navigation is the other teardown, and re-stopping afterwards must not duplicate the record.
+  await x.app.handle({type:'START',tabId:7},extension);
+  x.listeners.updated(7,{status:'loading'});
+  await new Promise(r=>setTimeout(r,20));
+  assert.equal((await x.app.handle({type:'MATCHES_LIST'},extension)).matches.length,2);
+  await x.app.handle({type:'STOP',tabId:7},extension);
+  assert.equal((await x.app.handle({type:'MATCHES_LIST'},extension)).matches.length,2,'no second record for the same session');
 });
 
 test('the data panel, opened in a tab, is trusted like the popup; game pages and other extensions are not',async()=>{

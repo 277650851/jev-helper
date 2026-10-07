@@ -139,6 +139,7 @@ const errors = {
  '未获得 API 访问授权，设置未保存。':'API access was not authorized. Settings were not saved.',
  '更换 API 服务时，请重新输入该服务的密钥。':'Re-enter the key for the new API service.',
  'API 访问权限未获授权。':'API access has not been authorized.',
+ '无法为该地址申请访问权。':'Access to that address could not be requested.',
  '请先保存设置并授权 API 访问。':'Save settings and authorize API access first.',
  '连接测试正在进行，请稍候。':'A connection test is already running.',
  'Jev 连接测试超时。':'Jev connection test timed out.',
@@ -156,7 +157,9 @@ const errors = {
 export function errorText(language,message){
  if(language!=='en')return message;
  const name=message?.match(/^(Jev|Laya|OpenAI)\b/)?.[1]??'Jev',normalized=name==='Jev'?message:message.replace(name,'Jev');
- if(errors[normalized])return errors[normalized].replace(/\bJev\b/g,name);
+ // errors is a plain object, so an inherited member ("constructor", "toString") would satisfy the
+ // truthiness check and then fail on .replace(). Only own keys are translations.
+ if(Object.hasOwn(errors,normalized))return errors[normalized].replace(/\bJev\b/g,name);
  const http=message?.match(/HTTP (\d{3})/);
  if(http){const code=http[1];return `${name} HTTP ${code}: `+({'401':'check your API key.','402':'check your account balance or billing.','403':'check key permissions and the API URL.','429':'rate or quota limit reached. Try again later.'}[code]??'request failed.');}
  return /[\u3400-\u9fff]/.test(message??'')?'Operation failed. Check your connection and settings.':message;

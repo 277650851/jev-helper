@@ -5,7 +5,7 @@ import { attachJevPlayer, collectState, applyOrders, maintainCommand, refreshPla
 import { buildBrief, formSquads, unitCard } from '../src/player/werhd-jev-commander.mjs';
 import { commanderSchema, buildCommanderRequest, parseCommanderResponse, COMMAND_TOOL } from '../src/openai.mjs';
 import { createBackground } from '../src/background-core.mjs';
-import { DEFAULTS, validateSettings, publicSettings, activeProvider, prepareBrief } from '../src/shared.mjs';
+import { DEFAULTS, validateSettings, publicSettings, activeProvider, prepareBrief, BRIEF_MAX_BYTES } from '../src/shared.mjs';
 import { eventEntry, commandEntry, logStats } from '../src/logbook.mjs';
 
 import { catalog, T, u, house, infantry, world, home, road, civilians, brief, scene } from './commander-world.mjs';
@@ -70,7 +70,10 @@ test('commander schema enums come from the legal lists; invalid orders are refus
   assert.deepEqual(wrapped.orders.squads, [{ squad: 'S1', action: 'retreat', reason: '' }]);
   assert.throws(() => parseCommanderResponse({ choices: [{ message: { content: 'I would garrison the house.' } }] }, legal), /无法解析/);
   assert.throws(() => prepareBrief({ mode: 'commander', brief: [] }), /指挥请求/);
-  assert.throws(() => prepareBrief({ mode: 'commander', brief: { pad: 'x'.repeat(200001) } }), /指挥请求/);
+  assert.throws(() => prepareBrief({ mode: 'commander', brief: { pad: 'x'.repeat(BRIEF_MAX_BYTES + 1) } }), /指挥请求/);
+  // Counted in UTF-8 bytes, so the same brief written in Chinese is refused well before that many characters.
+  assert.throws(() => prepareBrief({ mode: 'commander', brief: { pad: '中'.repeat(BRIEF_MAX_BYTES) } }), /指挥请求/);
+  assert.doesNotThrow(() => prepareBrief({ mode: 'commander', brief: { pad: 'x'.repeat(1000) } }));
 });
 
 // ---- Background ----

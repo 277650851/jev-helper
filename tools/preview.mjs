@@ -44,9 +44,12 @@ window.chrome={tabs:{create:o=>window.open(o.url,'_blank'),query:async()=>[{id:1
 }}};`;
 const allowed=new Set(['popup.html','popup.css','popup.js','help.html','help.css','help.js','content.js','dashboard.html','dashboard.css','dashboard.js']);
 http.createServer(async(req,res)=>{
- const name=new URL(req.url,'http://localhost').pathname.slice(1)||'popup.html';
+ // Parsed inside the guard: '//' and '/\' are protocol-relative URLs that new URL() rejects, and in an
+ // async listener that rejection is unhandled, which would take the whole preview server down.
+ let url;try{url=new URL(req.url,'http://localhost');}catch{res.writeHead(400);res.end();return;}
+ const name=url.pathname.slice(1)||'popup.html';
  if(name==='preview-mock.js'){res.setHeader('Content-Type','text/javascript');res.end(mock);return;}
  if(!allowed.has(name)){res.writeHead(404);res.end();return;}
  try{let body=await fs.readFile(new URL('../dist/'+name,import.meta.url));if(name==='dashboard.html')body=body.toString().replace('<script type="module"','<script src="preview-mock.js"></script><script type="module"');
- if(name==='popup.html'){body=body.toString().replace('<script type="module"','<script src="preview-mock.js"></script><script type="module"');if(new URL(req.url,'http://localhost').searchParams.has('overlay'))body=body.replace('</body>','<script src="content.js"></script></body>');}res.setHeader('Content-Type',name.endsWith('.html')?'text/html; charset=utf-8':name.endsWith('.css')?'text/css':'text/javascript');res.setHeader('Cache-Control','no-store');res.end(body);}catch{res.writeHead(404);res.end();}
-}).listen(4318,'127.0.0.1',()=>console.log('UI fixtures only: http://127.0.0.1:4318/ (populated), /?empty (lobby). No model or game connection.'));
+ if(name==='popup.html'){body=body.toString().replace('<script type="module"','<script src="preview-mock.js"></script><script type="module"');if(url.searchParams.has('overlay'))body=body.replace('</body>','<script src="content.js"></script></body>');}res.setHeader('Content-Type',name.endsWith('.html')?'text/html; charset=utf-8':name.endsWith('.css')?'text/css':'text/javascript');res.setHeader('Cache-Control','no-store');res.end(body);}catch{res.writeHead(404);res.end();}
+}).listen(4318,'127.0.0.1',()=>console.log('UI fixtures only: http://127.0.0.1:4318/ (populated), /?empty (lobby). Build dist/ first (npm run build). No model or game connection.'));

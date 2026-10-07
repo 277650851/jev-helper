@@ -1,15 +1,19 @@
-import {DEFAULTS, supportedGame, apiEndpoint, originPattern, validateSettings, publicSettings, privateSettings, prepareQuestions, prepareBrief, validateAnswer, httpError, activeProvider, authHeaders, hostAllowed, normalizeHost, sanitizeAllowedHosts, providerEndpoint, serviceUrl, PROVIDER_FIELDS} from './shared.mjs';
+import {DEFAULTS, supportedGame, apiEndpoint, originPattern, validateSettings, publicSettings, privateSettings, prepareQuestions, prepareBrief, validateAnswer, httpError, activeProvider, authHeaders, hostAllowed, normalizeHost, sanitizeAllowedHosts, providerEndpoint, serviceUrl, PROVIDER_FIELDS, BODY_MAX_BYTES, BRIEF_MAX_BYTES, jsonBytes, textBytes} from './shared.mjs';
 import {buildChatRequest, parseChatResponse, buildCommanderRequest, parseCommanderResponse, modelIds, serviceError, refusesForcedTool} from './openai.mjs';
 import {summarize,recordObservation} from './telemetry.mjs';
-import {LOG_KEY,appendEntries,decisionEntry,commandEntry,eventEntry,logStats} from './logbook.mjs';
+import {LOG_KEY,appendEntries,trimMatchEntries,decisionEntry,commandEntry,eventEntry,logStats} from './logbook.mjs';
 
 export function createBackground(c, {fetchImpl = fetch, now = Date.now, uuid = () => crypto.randomUUID()} = {}) {
   const inflight = new Map(), controlLocks = new Map(), stateLocks = new Map();
   let probing=false;
-  const ready = Promise.all([
-    c.storage.local.setAccessLevel({accessLevel:'TRUSTED_CONTEXTS'}),
-    c.storage.session.setAccessLevel({accessLevel:'TRUSTED_CONTEXTS'}),
-  ]);
+  // storage.setAccessLevel is Chromium 118+, and the storage.local variant is missing on some
+  // Edge builds (absent on Edge 130). This runs at top level, so an unguarded call throws during
+  // service worker registration: the worker never starts, every message goes unanswered, and the
+  // popup shows an empty form that cannot be saved. Fall back to the default access level instead.
+  const restrict = area => typeof area?.setAccessLevel === 'function'
+    ? area.setAccessLevel({accessLevel:'TRUSTED_CONTEXTS'})
+    : Promise.resolve();
+  const ready = Promise.all([restrict(c.storage.local), restrict(c.storage.session)]);
   const key = tabId => `session:${tabId}`;
   // Chat models answer in seconds rather than milliseconds (reasoning models 10–25 s), so they get
   // a longer budget; the page is told to wait a little longer than the background does.
@@ -21,7 +25,11 @@ export function createBackground(c, {fetchImpl = fetch, now = Date.now, uuid = (
   const autoToolChoice=new Set();
   async function callModel(provider,{state,questions,brief},signal){
     const openai=provider.id==='openai',endpoint=providerEndpoint(provider),route=`${endpoint} ${provider.model}`;
-    const send=body=>fetchImpl(endpoint,{method:'POST',headers:authHeaders(provider),body:JSON.stringify(body),signal,redirect:'error',credentials:'omit',referrerPolicy:'no-referrer'});
+    // Measured in UTF-8 bytes of the serialized body, because that is what Content-Length carries
+    // and what the far end compares against its own limit. A character count would pass a body
+    // that the server then rejects with 413, which reads as a model outage rather than a limit.
+    const maxBytes=openai?BRIEF_MAX_BYTES:BODY_MAX_BYTES;
+    const send=body=>{const text=JSON.stringify(body);if(jsonBytes(body)>maxBytes)throw new Error(`${provider.name} 请求过大（上限 ${Math.round(maxBytes/1024)} KB），已放弃本次请求。`);return fetchImpl(endpoint,{method:'POST',headers:authHeaders(provider),body:text,signal,redirect:'error',credentials:'omit',referrerPolicy:'no-referrer'});};
     // Commander turns go through the same transport, refusal and retry handling as choice questions.
     const build=(toolChoice,mode=provider.mode)=>brief?buildCommanderRequest({model:provider.model,brief,toolChoice,mode}):buildChatRequest({model:provider.model,mode,state,questions,toolChoice});
     const parse=body=>brief?parseCommanderResponse(body,brief.legal,provider.name):parseChatResponse(body,questions,provider.name);
@@ -32,7 +40,10 @@ export function createBackground(c, {fetchImpl = fetch, now = Date.now, uuid = (
       autoToolChoice.add(route);response=await send(chat('auto'));raw=await response.text();
     }
     if(!response.ok){const detail=openai?serviceError(raw):'';const error=new Error(httpError(response.status,provider.name)+(detail?` ${detail}`:''));error.status=response.status;throw error;}
-    if(raw.length>(openai?512000:256000))throw new Error(`${provider.name} 响应过大，已拒绝处理。`);
+    // Byte length of the raw response text. A cheap character check runs first so an enormous
+    // body is never handed to the encoder: no character encodes to more than 4 UTF-8 bytes.
+    const maxRaw=openai?512000:256000;
+    if(raw.length>maxRaw*4||textBytes(raw)>maxRaw)throw new Error(`${provider.name} 响应过大，已拒绝处理。`);
     let parsed;try{parsed=JSON.parse(raw);}catch{throw new Error(`${provider.name} 返回的内容无法解析。`);}
     if(!openai)return validateAnswer(parsed,questions,provider.name);
     try{return parse(parsed);}
@@ -84,6 +95,9 @@ export function createBackground(c, {fetchImpl = fetch, now = Date.now, uuid = (
     const s=await getSession(tabId);
     if(!s || s.matchRecorded || !s.startedAt)return;
     const at=now(),entries=await readLog(),window=entries.filter(e=>e.at>=s.startedAt && e.at<=at),stats=logStats(window);
+    // Statistics cover the whole match, but only a bounded tail is kept per match: the copy is
+    // stored for every one of the 100 records and written into the battle report.
+    const kept=trimMatchEntries(window);
     const history=(s.history??[]).map(({at,gameSeconds,credits,freeCredits,decisions,ownUnits,ownBuildings,enemyUnits,enemyBuildings,ownBuilt,ownLost,enemyDestroyed})=>({at,gameSeconds,credits,freeCredits,decisions,ownUnits,ownBuildings,enemyUnits,enemyBuildings,ownBuilt,ownLost,enemyDestroyed}));
     const ledger=s.observation?.ledger??null;
     const credits=history.map(p=>p.credits).filter(Number.isFinite),seconds=history.map(p=>p.gameSeconds).filter(Number.isFinite);
@@ -94,11 +108,11 @@ export function createBackground(c, {fetchImpl = fetch, now = Date.now, uuid = (
       credits:{start:credits[0]??null,end:credits.at(-1)??null,max:credits.length?Math.max(...credits):null,min:credits.length?Math.min(...credits):null},armyMax:s.armyMax??null,
       produced:stats.actions.acceptedProduce,actionsByType:stats.actions.byType,skippedReasons:stats.actions.skippedReasons,
       groups:Object.fromEntries(Object.entries(stats.groups).map(([id,g])=>[id,{asked:g.asked,waitRate:g.waitRate,top:Object.keys(g.choices)[0]??''}])),history};
-    record.meta=s.meta??null;record.label='';record.notes='';record.logEntries=window.length;
-    record.reportFile=await saveReport(record,window,settings);
+    record.meta=s.meta??null;record.label='';record.notes='';record.logEntries=window.length;record.logKept=kept.length;
+    record.reportFile=await saveReport(record,kept,settings);
     await serial(stateLocks,'matches',async()=>{
       const list=await readMatches(),next=[...list.filter(m=>m.id!==record.id),record],dropped=next.slice(0,Math.max(0,next.length-MATCHES_MAX));
-      await c.storage.local.set({matches:next.slice(-MATCHES_MAX),[logKey(record.id)]:window});
+      await c.storage.local.set({matches:next.slice(-MATCHES_MAX),[logKey(record.id)]:kept});
       if(dropped.length)await c.storage.local.remove(dropped.map(m=>logKey(m.id)));
     }).catch(()=>{});
     await patch(tabId,current=>current?.startedAt===s.startedAt?{...current,matchRecorded:true,reportFile:record.reportFile}:current);
@@ -136,7 +150,10 @@ export function createBackground(c, {fetchImpl = fetch, now = Date.now, uuid = (
         return p[method](value);
       },args:[method,value],
     });
-    return r?.result;
+    // A page-side function that throws comes back as a result with `error` set and no `result`.
+    // Carrying the message through gives the popup the real reason instead of a generic failure;
+    // `running`/`available` stay falsy, so every existing check behaves as before.
+    return r?.result ?? (r?.error ? {running:false,available:false,error:String(r.error).slice(0,240)} : undefined);
   };
   async function stop(tabId, reason='manual') {
     inflight.get(tabId)?.abort();
@@ -179,12 +196,18 @@ export function createBackground(c, {fetchImpl = fetch, now = Date.now, uuid = (
     const status=await pageCall(tabId,'status',null,documentId);
     if(!status?.available)throw new Error(status?.error || '请先进入一场正在运行的对局，再开启托管。');
     const session={tabId,token:uuid(),documentId,origin:new URL(tab.url).origin,provider:provider.id,providerName:provider.name,providerKind:provider.kind,endpoint:providerEndpoint(provider),configuredModel:provider.model,model:provider.model,callMode:provider.mode??'',strategyMode:provider.strategy??'choices',running:true,startedAt:now(),updatedAt:now(),requests:0,decisions:0,failures:0,inputTokens:0,outputTokens:0,busyUntil:0,events:[],reason:'',error:'',maxDecisions:config.maxDecisions};
-    await patch(tabId,()=>session);
+    // startedAt is held back until the page confirms it is running. A match record and a battle
+    // report are only written for a session that actually played, so a failed start must not
+    // leave one behind: `startedAt` is what finishMatch() treats as "this was a real match".
+    await patch(tabId,()=>({...session,startedAt:null}));
     try {
       await c.tabs.sendMessage(tabId,{type:'BIND_SESSION',token:session.token},{documentId});
       const commander=provider.strategy==='commander';
       const result=await pageCall(tabId,'start',{token:session.token,maxDecisions:config.maxDecisions,autoCamera:config.autoCamera,objective:config.objective,...(provider.id==='openai'?{maxStaleTicks:900,requestTimeoutMs:timeoutFor(provider,commander)+5000}:{}),...(commander?{commander:true}:{})},documentId);
       if(!result?.running)throw new Error(result?.error || '托管未能启动。');
+      // Only if it is still running: a page-side stop can land between here and the patch above,
+      // and a session that already stopped must not gain a startedAt afterwards.
+      await patch(tabId,s=>s?.running&&s.token===session.token?{...s,startedAt:session.startedAt,updatedAt:now()}:s);
       await badge(tabId,'ON');
       logAppend({at:now(),kind:'session',event:'start',tabId,provider:provider.id,providerKind:provider.kind,model:provider.model,endpoint:session.endpoint,callMode:session.callMode,strategyMode:session.strategyMode,maxDecisions:config.maxDecisions});
       await notifyOverlay(await getSession(tabId));
@@ -301,10 +324,14 @@ export function createBackground(c, {fetchImpl = fetch, now = Date.now, uuid = (
       // Settings go out without credentials; entries never contained any.
       return {exportedAt:new Date(now()).toISOString(),version:c.runtime.getManifest?.()?.version??'',settings:publicSettings(await getSettings()),stats:logStats(entries),entries};
     }
-    if(message.type==='LOG_CLEAR'){pending=[];clearTimeout(flushTimer);flushTimer=undefined;await c.storage.local.remove(LOG_KEY);return {entries:0};}
+    // Under the same 'log' lock flushLog() takes: a flush already awaiting inside that lock has
+    // captured its batch, and writing it after the remove would resurrect cleared entries.
+    if(message.type==='LOG_CLEAR'){pending=[];clearTimeout(flushTimer);flushTimer=undefined;await serial(stateLocks,'log',async()=>{await c.storage.local.remove(LOG_KEY);});return {entries:0};}
     if(message.type==='MATCHES_LIST'){const list=await readMatches();return {matches:list.map(({history,...m})=>({...m,samples:history?.length??0})).reverse()};}
     if(message.type==='MATCH_GET'){const m=(await readMatches()).find(m=>m.id===message.id);if(!m)throw new Error('未找到该场战绩。');return m;}
-    if(message.type==='MATCHES_CLEAR'){const list=await readMatches();await c.storage.local.remove(['matches',...list.map(m=>logKey(m.id))]);return {matches:0};}
+    // Under the same 'matches' lock finishMatch() takes, so a match ending now cannot be written
+    // back over the clear, and no matchlog:<id> is left behind in storage.local.
+    if(message.type==='MATCHES_CLEAR'){await serial(stateLocks,'matches',async()=>{const list=await readMatches();await c.storage.local.remove(['matches',...list.map(m=>logKey(m.id))]);});return {matches:0};}
     if(message.type==='MATCH_LOG_GET'){const entries=(await c.storage.local.get(logKey(message.id)))[logKey(message.id)];return {id:message.id,entries:Array.isArray(entries)?entries:[]};}
     if(message.type==='MATCH_UPDATE'){
       let updated;await serial(stateLocks,'matches',async()=>{const list=await readMatches();updated=list.find(m=>m.id===message.id);if(!updated)return;
@@ -387,8 +414,10 @@ export function createBackground(c, {fetchImpl = fetch, now = Date.now, uuid = (
       const origin=value=>new URL(apiEndpoint(value)).origin;
       if(input.apiBase && origin(input.apiBase)!==origin(prior.apiBase) && (!apiKey || apiKey===prior.apiKey))throw new Error('更换 API 服务时，请重新输入该服务的密钥。');
       if(input.openaiBase && prior.openaiKey && origin(input.openaiBase)!==origin(prior.openaiBase??DEFAULTS.openaiBase) && openaiKey===prior.openaiKey)throw new Error('更换 API 服务时，请重新输入该服务的密钥。');
-      // The remembered model list belongs to the base it came from; the popup sends the list it loaded.
-      const openaiModels=Array.isArray(input.openaiModels)?input.openaiModels:input.openaiBase && input.openaiBase.trim()!==String(prior.openaiBase??DEFAULTS.openaiBase).trim()?[]:prior.openaiModels;
+      // The model list belongs to the service it was fetched from. The popup drops it as soon as
+      // the address is edited and sends whatever it currently shows, so that is what gets stored;
+      // a request without the field keeps the stored list.
+      const openaiModels=Array.isArray(input.openaiModels)?input.openaiModels:prior.openaiModels;
       const config=validateSettings({...input,apiKey,localKey,openaiKey,openaiModels},prior);
       const before=activeProvider(prior),after=activeProvider(config);
       if(before.id!==after.id || after.apiKey!==before.apiKey || after.apiBase!==before.apiBase || after.model!==before.model || after.mode!==before.mode || after.strategy!==before.strategy){for(const s of Object.values(await c.storage.session.get(null)))if(s?.running)await stop(s.tabId,'settings_changed');}
@@ -432,7 +461,23 @@ export function createBackground(c, {fetchImpl = fetch, now = Date.now, uuid = (
     throw new Error('未知插件操作。');
   }
   c.runtime.onMessage.addListener((message,sender,respond)=>{handle(message,sender).then(value=>respond({ok:true,value}),e=>respond({ok:false,error:e.message}));return true;});
-  c.tabs.onRemoved.addListener(tabId=>{inflight.get(tabId)?.abort();patch(tabId,()=>undefined).catch(()=>{});});
-  c.tabs.onUpdated.addListener((tabId,change)=>{if(change.status==='loading'){inflight.get(tabId)?.abort();patch(tabId,()=>undefined).catch(()=>{});badge(tabId,'');}});
+  // A closed or navigating tab ends the session for good, but the match still happened. Recording
+  // it here means the record no longer depends on the page-side stop event racing the teardown.
+  // Not inside serial(stateLocks, tabId): patch() takes that same lock, so wrapping it would
+  // wait on a task that is waiting on this one.
+  const abandon = async (tabId, reason) => {
+    inflight.get(tabId)?.abort();
+    const s=await patch(tabId,cur=>{
+      if(!cur)return undefined;
+      if(!cur.running)return undefined;
+      return {...cur,running:false,busyUntil:0,reason,updatedAt:now()};
+    });
+    if(!s)return;
+    logAppend({at:now(),kind:'session',event:'stop',tabId,reason,decisions:s.decisions,failures:s.failures});
+    await flushLog();await finishMatch(tabId,reason);
+  };
+  // Listeners are synchronous; the recording continues in the background and must never reject here.
+  c.tabs.onRemoved.addListener(tabId=>{abandon(tabId,'tab_closed').catch(()=>{});});
+  c.tabs.onUpdated.addListener((tabId,change)=>{if(change.status==='loading'){abandon(tabId,'page_navigated').catch(()=>{});badge(tabId,'');}});
   return {handle,ready,getSession};
 }

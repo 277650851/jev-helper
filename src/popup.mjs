@@ -1,4 +1,4 @@
-import {DEFAULTS,validateSettings,originPattern,hotkeyFromEvent,fieldErrors,errorField,plaintextPublic,normalizeHost,PROVIDER_FIELDS} from './shared.mjs';
+import {DEFAULTS,validateSettings,originPattern,hostPattern,hotkeyFromEvent,fieldErrors,errorField,plaintextPublic,normalizeHost,PROVIDER_FIELDS} from './shared.mjs';
 import {importSettings} from './import-settings.mjs';
 import {t,errorText,messages,officialWebsiteUrl} from './i18n.mjs';
 import {drawChart,drawPositions} from './charts.mjs';
@@ -54,7 +54,9 @@ async function allowHost(){
  let host;try{host=normalizeHost(input.value);}catch(e){slot.textContent=errorText(config.language,e.message);slot.hidden=false;input.classList.add('invalid');input.focus();return;}
  $('allow-host-add').disabled=true;
  try{
-  try{await chrome.permissions.request({origins:[`*://${host}/*`]});}catch{}
+  // The exact origin the app will use, not a scheme-wide wildcard: normalizeHost strips IPv6
+  // brackets, which a match pattern needs back, and *:// would hold a scheme the app never uses.
+  try{await chrome.permissions.request({origins:[hostPattern(host)]});}catch{slot.textContent=errorText(config.language,'无法为该地址申请访问权。');slot.hidden=false;input.classList.add('invalid');}
   config={...config,...await rpc({type:'ALLOW_HOST',host})};input.value='';renderAllowedHosts();notify('hostAllowed',true,{host});
   clearFieldError('localBase');clearFieldError('apiBase');clearFieldError('openaiBase');
  }catch(e){notice(e.message);}finally{$('allow-host-add').disabled=false;}
@@ -201,7 +203,10 @@ $('auto-report').addEventListener('change',async()=>{
  try{const result=await rpc({type:'SET_AUTO_REPORT',autoReport:input.checked});config.autoReport=result.autoReport;notify(config.autoReport?'autoReportOn':'autoReportOff',true);}
  catch(e){input.checked=config.autoReport!==false;notice(e.message);}finally{input.disabled=false;}
 });
-$('settings').addEventListener('input',e=>{if(e.target.id==='api-base'||e.target.id==='local-base')renderPlaintextWarnings();if(e.target.id==='show-overlay'||e.target.id==='auto-report')return;dirty=true;if(testState.state!=='idle')showTest('idle');const field=Object.keys(FIELD_IDS).find(f=>FIELD_IDS[f]===e.target.id);if(field)clearFieldError(field);if(lastStatus)displayStatus(lastStatus);});
+$('settings').addEventListener('input',e=>{if(e.target.id==='api-base'||e.target.id==='local-base'||e.target.id==='openai-base')renderPlaintextWarnings();if(e.target.id==='show-overlay'||e.target.id==='auto-report')return;
+ // A model list belongs to the service it was fetched from. Editing the address invalidates it,
+ // so the stale ids are dropped here rather than sent to the new host on save.
+ if(e.target.id==='openai-base'&&models.length){models=[];renderModels($('openai-model').value);$('models-hint').textContent=tr('modelPlaceholder');dirty=true;if(testState.state!=='idle')showTest('idle');}dirty=true;if(testState.state!=='idle')showTest('idle');const field=Object.keys(FIELD_IDS).find(f=>FIELD_IDS[f]===e.target.id);if(field)clearFieldError(field);if(lastStatus)displayStatus(lastStatus);});
 for(const eye of document.querySelectorAll('[data-reveal]'))eye.addEventListener('click',()=>{const input=$(eye.dataset.reveal),show=input.type==='password';input.type=show?'text':'password';eye.setAttribute('aria-pressed',String(show));eye.title=tr(show?'hideKey':'showKey');eye.setAttribute('aria-label',eye.title);input.focus();});
 $('hotkey').addEventListener('keydown',e=>{if(e.key==='Tab')return;e.preventDefault();const value=hotkeyFromEvent(e);if(value){$('hotkey').value=value;dirty=true;clearFieldError('hotkey');if(testState.state!=='idle')showTest('idle');$('start').disabled=true;notify('hotkeyChanged',true);}});
 $('settings').addEventListener('submit',async e=>{

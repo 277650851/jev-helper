@@ -5,3 +5,6 @@ artifacts/
 .DS_Store
 .env*
 __pycache__/
+# Local Laya decision logs (npm run laya -- --log laya.jsonl)
+*.jsonl
+*.ndjson

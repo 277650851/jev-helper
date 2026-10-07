@@ -32,14 +32,7 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Run tests (builds dist/ first)
-        run: npm test
-
-      - name: Package extension ZIP
-        run: npm run package
-
-      - name: Read version and checksum
-        id: meta
+      - name: Check the version matches the manifest
         run: |
           version="$(node -p "require('./package.json').version")"
           manifest="$(node -p "require('./public/manifest.json').version")"
@@ -47,6 +40,15 @@ jobs:
             echo "package.json ($version) and manifest.json ($manifest) versions differ" >&2
             exit 1
           fi
+
+      # Builds dist/, writes the ZIP and runs the suite, so it runs once instead of twice.
+      - name: Build, package and test
+        run: npm test
+
+      - name: Read version and checksum
+        id: meta
+        run: |
+          version="$(node -p "require('./package.json').version")"
           zip="artifacts/werhd-jev-extension-${version}.zip"
           test -f "$zip"
           echo "version=$version" >> "$GITHUB_OUTPUT"

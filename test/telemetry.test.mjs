@@ -41,4 +41,10 @@ test('all popup/help text keys have both languages; English brand and settings p
  assert.match(t('en','brand'),/WannaFire/);assert.equal(t('en','rangeWarning',{n:2}),'Threats beyond base defensive coverage: 2.');
  const settings=validateSettings({language:'en',apiKey:'test-secret'});assert.equal(publicSettings(settings).language,'en');assert.equal(publicSettings(settings).apiKey,undefined);
  assert.match(errorText('en','Jev 返回 HTTP 402，请检查账户额度或计费状态。'),/billing/);
+ // A message that happens to equal an Object.prototype key is not a translation, and must not
+ // throw when the lookup falls through to it.
+ for(const name of ['constructor','toString','hasOwnProperty','__proto__']){
+  assert.doesNotThrow(()=>errorText('en',name),name);
+  assert.equal(errorText('en',name),name,name);
+ }
 });

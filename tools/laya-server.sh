@@ -13,7 +13,9 @@ if [ -x "$python" ]; then
   exec "$python" "$here/tools/laya-server.py" --repo "$repo" "$@"
 fi
 if command -v uv >/dev/null 2>&1; then
-  exec uv run --project "$repo" python "$here/tools/laya-server.py" --repo "$repo" "$@"
+  # `--extra demo` as well: plain `uv run` re-syncs the venv against the default dependency set and
+  # would drop the MLX packages the server needs.
+  exec uv run --project "$repo" --extra demo python "$here/tools/laya-server.py" --repo "$repo" "$@"
 fi
 echo "No Python environment found. Run 'uv sync' inside $repo first." >&2
 exit 1

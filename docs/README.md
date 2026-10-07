@@ -6,8 +6,9 @@
 - [完整类型声明](../werhd-player-api.d.ts)：`PlayerConsolePublicApi`、查询结果、命令类型、公开枚举和 `Window.werhd`。
 - [基础玩家脚本](examples/werhd-user-script.mjs)：文档中链接的独立接入示例。
 - [希望游戏开放的接口](game-api-requests.md)：扩展这边整理的接口需求草案（生命周期、战役目标与提示、事件、命令回执、观察数据），供与作者沟通。
+- [指挥官模式设计](commander-design.md)：指挥模式（`strategyMode = commander`）的取舍与规则来源，属于本仓库的设计文档，不来自上游。
 
-这三份文件按上游原始路径与内容保存，不参与扩展打包。运行时 `window.werhd` 仍由游戏提供，扩展的策略和传输实现继续维护在 `src/`。
+其中 API 文档、类型声明和基础示例这三份按上游原始路径与内容保存，不参与扩展打包。运行时 `window.werhd` 仍由游戏提供，扩展的策略和传输实现继续维护在 `src/`。
 
 ## 使用类型
 
@@ -40,4 +41,4 @@ if (window.werhd) readCredits(window.werhd);
 | `docs/player-console-api.md` | `43ec1de588eb587a40876fd371a77b3eab361b5ac3c4760665ce3df646ebf0b7` |
 | `docs/examples/werhd-user-script.mjs` | `d05d282a0ac585cdbdb5a271d2c0a762ea8784e69c6c9deb3c25df6333decfe6` |
 
-这是一份固定版本快照，不会自动追踪线上变化。后续同步时，从来源仓库同一提交复制这三份文件，保留原始内容，并更新本页的提交、日期和校验值。API 实现由游戏工程维护；此项目使用声明与文档对接公开接口。
+下表三行按 LF 换行计算（Windows 上 checkout 为 CRLF，校验值会不同）。这是一份固定版本快照，不会自动追踪线上变化。后续同步时，从来源仓库同一提交复制这三份文件，保留原始内容，并更新本页的提交、日期和校验值。API 实现由游戏工程维护；此项目使用声明与文档对接公开接口。

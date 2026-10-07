@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {apiEndpoint,originPattern,validateSettings,publicSettings,normalizeHotkey,hotkeyFromEvent,prepareQuestions,validateAnswer,supportedGame,activeProvider,authHeaders,httpError,fieldErrors,errorField,plaintextPublic,hostAllowed,normalizeHost,sanitizeAllowedHosts} from '../src/shared.mjs';
+import {apiEndpoint,originPattern,hostPattern,validateSettings,publicSettings,normalizeHotkey,hotkeyFromEvent,prepareQuestions,prepareBrief,validateAnswer,supportedGame,GAME_HOSTS,activeProvider,authHeaders,httpError,fieldErrors,errorField,plaintextPublic,hostAllowed,normalizeHost,sanitizeAllowedHosts,BODY_MAX_BYTES,BRIEF_MAX_BYTES,jsonBytes} from '../src/shared.mjs';
+import {choiceSchema} from '../src/openai.mjs';
 test('API configuration accepts a base/full endpoint, confines plaintext to loopback and strips no secret into public settings',()=>{
   assert.equal(apiEndpoint('https://api.typesafe.ai/v1/'),'https://api.typesafe.ai/v1/systemone');
   assert.equal(apiEndpoint('https://example.test/proxy/systemone'),'https://example.test/proxy/systemone');
@@ -12,6 +13,28 @@ test('API configuration accepts a base/full endpoint, confines plaintext to loop
   for(const bad of ['ftp://example.com/v1','https://secret@example.com/v1','https://example.com/?key=secret','file:///tmp/api','https://example.com/#x','not a url'])assert.throws(()=>apiEndpoint(bad),bad);
   assert.equal('apiKey' in publicSettings(validateSettings({apiKey:'test-only-secret'})),false);
   assert.equal(supportedGame('https://ra2web.github.io/'),true);assert.equal(supportedGame('https://ra2web.github.io.evil.test/'),false);
+});
+test('every game host is accepted over https only, and the manifest asks for exactly those',async()=>{
+  const fs=await import('node:fs/promises');
+  const manifest=JSON.parse(await fs.readFile('public/manifest.json','utf8'));
+  const expected=['ra2web.github.io','staging.wangerhuoda.com','wangerhuoda.com','www.wangerhuoda.com','gonghui.k0s.cn','game.ra2web.com','wan.youlidefuchou.com'];
+  assert.deepEqual([...GAME_HOSTS].sort(),[...expected].sort());
+  for(const host of GAME_HOSTS){
+    assert.equal(supportedGame(`https://${host}/`),true,host);
+    assert.equal(supportedGame(`https://${host}/battle/1`),true,host);
+    // A look-alike suffix, a subdomain and plain http must all stay unsupported.
+    assert.equal(supportedGame(`https://${host}.evil.test/`),false,host);
+    assert.equal(supportedGame(`https://x.${host}/`),false,host);
+    assert.equal(supportedGame(`http://${host}/`),false,host);
+    // Content script and host permissions have to cover it, or the page never sees the extension.
+    assert.ok(manifest.content_scripts[0].matches.includes(`https://${host}/*`),`content script matches ${host}`);
+    assert.ok(manifest.host_permissions.includes(`https://${host}/*`),`host permission for ${host}`);
+  }
+  // GAME_HOSTS is the single source of truth for the game's origins: nothing else is requested.
+  // `expected` above is exact, so removing a host here retires it from both files at once.
+  const gameOrigins=manifest.host_permissions.filter(p=>!p.includes('api.typesafe.ai'));
+  assert.deepEqual(gameOrigins.sort(),GAME_HOSTS.map(h=>`https://${h}/*`).sort());
+  assert.equal(gameOrigins.length,manifest.content_scripts[0].matches.length);
 });
 test('custom keyboard chord uses physical keys and exact modifiers',()=>{
   assert.equal(normalizeHotkey('alt+SHIFT+j'),'Alt+Shift+J');
@@ -27,6 +50,34 @@ test('Jev results are constrained to the submitted candidate set',()=>{
   assert.deepEqual(Object.keys(result.answers),['tactics']);assert.equal('apiKey' in result,false);
   assert.throws(()=>prepareQuestions({state:{},groups:Object.fromEntries(Array.from({length:9},(_,i)=>['x'+i,{}]))}));
 });
+test('decision group ids that would land on the prototype are refused, so the emitted schema stays self-consistent',()=>{
+  // __proto__ passes the id pattern but would hit the prototype setter instead of creating an own
+  // key, leaving `required` naming a member that `properties` does not define.
+  for(const id of ['__proto__','constructor','prototype']){
+    const forged=JSON.parse('{"state":{"tick":1},"groups":{"'+id+'":{"instructions":"Select","criteria":{"wait":"Wait"}}}}');
+    assert.throws(()=>prepareQuestions(forged),/决策候选无效/,id);
+    // And the rejection happens before anything is built from the id.
+    assert.throws(()=>choiceSchema(prepareQuestions(forged)),/决策候选无效/,id);
+  }
+  const schema=choiceSchema(prepareQuestions({state:{tick:1},groups:{tactics:{instructions:'Select',criteria:{wait:'Wait'}}}}));
+  for(const id of schema.required)assert.ok(Object.hasOwn(schema.properties,id));
+  assert.ok(Object.hasOwn(schema.properties,'tactics'));
+});
+test('request size limits are counted in UTF-8 bytes, so Chinese state cannot exceed the server bound',()=>{
+  const chinese='中文战况描述';
+  const group=(n)=>({tactics:{instructions:chinese.repeat(n),criteria:{wait:'等待',attack:'进攻'}}});
+  // Well under the limit as characters, well over it as bytes: the byte count is the one that counts,
+  // because that is what Content-Length carries and what tools/laya-server.py compares.
+  const state={tick:1,notes:chinese.repeat(25000)};
+  assert.ok(JSON.stringify({state,groups:group(1)}).length<BODY_MAX_BYTES);
+  assert.ok(jsonBytes({state,groups:group(1)})>BODY_MAX_BYTES);
+  assert.throws(()=>prepareQuestions({state,groups:group(1)}),/大小无效/);
+  // A small request is unaffected, and an ASCII one gets the full character budget.
+  const small=prepareQuestions({state:{tick:1,notes:'x'.repeat(1000)},groups:group(1)});
+  assert.equal(small.tactics.criteria.wait,'等待');
+  assert.throws(()=>prepareQuestions({state:{notes:'x'.repeat(BODY_MAX_BYTES)},groups:group(1)}),/大小无效/);
+  assert.throws(()=>prepareBrief({mode:'commander',brief:{notes:'x'.repeat(BRIEF_MAX_BYTES)}}),/格式或大小无效/);
+});
 test('two model sources keep separate endpoints and keys; the local source needs no key and never leaks it',()=>{
   const jev=validateSettings({apiKey:'jev-secret',localKey:'local-secret'});
   assert.equal(activeProvider(jev).id,'jev');assert.equal(activeProvider(jev).apiBase,'https://api.typesafe.ai/v1');assert.equal(activeProvider(jev).apiKey,'jev-secret');assert.equal(activeProvider(jev).requiresKey,true);
@@ -34,6 +85,11 @@ test('two model sources keep separate endpoints and keys; the local source needs
   const p=activeProvider(local);assert.equal(p.id,'local');assert.equal(p.name,'Laya');assert.equal(p.requiresKey,false);assert.equal(p.apiKey,'');assert.equal(apiEndpoint(p.apiBase),'http://127.0.0.1:8742/v1/systemone');
   assert.deepEqual(authHeaders(p),{'Content-Type':'application/json'});assert.equal(authHeaders(activeProvider(jev)).Authorization,'Bearer jev-secret');
   assert.equal(validateSettings({provider:'anything-else'}).provider,'jev');
+  // The pattern asked for at save time has to be one Chrome accepts: a bare host over both schemes,
+  // and IPv6 literals with the brackets normalizeHost strips.
+  assert.equal(hostPattern('vps.example'),'*://vps.example/*');
+  assert.equal(hostPattern('FD7A:115C:A1E0::1'),'*://[fd7a:115c:a1e0::1]/*');
+  for(const pattern of [hostPattern('vps.example'),hostPattern('10.0.0.5'),hostPattern('fd7a:115c:a1e0::1')])assert.match(pattern,/^(\*|https?):\/\/(\[[0-9a-f:.]+\]|[a-z0-9.-]+)\/\*$/,pattern);
   const padded=validateSettings({apiBase:'  https://api.typesafe.ai/v1  ',apiKey:'  padded-key\t',localBase:' http://127.0.0.1:8742/v1 ',localKey:' t ',model:' jev-latest '});
   assert.equal(padded.apiBase,'https://api.typesafe.ai/v1');assert.equal(padded.apiKey,'padded-key');assert.equal(padded.localBase,'http://127.0.0.1:8742/v1');assert.equal(padded.localKey,'t');assert.equal(padded.model,'jev-latest');
   const raw=activeProvider({provider:'local',localBase:' http://127.0.0.1:8742/v1 ',localKey:' tok '});assert.equal(raw.apiBase,'http://127.0.0.1:8742/v1');assert.equal(authHeaders(raw).Authorization,'Bearer tok');

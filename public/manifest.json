@@ -16,7 +16,10 @@
     "https://ra2web.github.io/*",
     "https://staging.wangerhuoda.com/*",
     "https://wangerhuoda.com/*",
-    "https://www.wangerhuoda.com/*"
+    "https://www.wangerhuoda.com/*",
+    "https://gonghui.k0s.cn/*",
+    "https://game.ra2web.com/*",
+    "https://wan.youlidefuchou.com/*"
   ],
   "optional_host_permissions": [
     "https://*/*",
@@ -46,7 +49,10 @@
         "https://ra2web.github.io/*",
         "https://staging.wangerhuoda.com/*",
         "https://wangerhuoda.com/*",
-        "https://www.wangerhuoda.com/*"
+        "https://www.wangerhuoda.com/*",
+        "https://gonghui.k0s.cn/*",
+        "https://game.ra2web.com/*",
+        "https://wan.youlidefuchou.com/*"
       ],
       "js": [
         "content.js"

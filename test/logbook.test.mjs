@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {decisionEntry,eventEntry,appendEntries,logStats,stateSummary,LOG_MAX_ENTRIES,LOG_MAX_CHARS} from '../src/logbook.mjs';
+import {decisionEntry,eventEntry,appendEntries,trimMatchEntries,logStats,stateSummary,LOG_MAX_ENTRIES,LOG_MAX_CHARS,MATCH_LOG_MAX_CHARS} from '../src/logbook.mjs';
 
 const state={tick:5400,gameSeconds:360,self:{credits:8450,power:{total:500,drain:375}},uncommittedCredits:6650,committedCredits:1800,ownArmyCount:18,mobileTankCount:8,antiAirCount:4,harvesters:3,averageArmyHealth:.86,visibleEnemyCount:9,nearbyEnemyCount:3,baseUnderAttack:true,queues:[{type:0,items:[{name:'GATECH',quantity:1}]}],inventory:{MTNK:{count:8,name:'灰熊坦克'}},army:Array.from({length:24},(_,i)=>({id:i,tile:{rx:i,ry:i}})),visibleEnemies:[{id:1,tile:{rx:1,ry:1}}],strategy:{investment:{category:'construction',name:'GATECH'}}};
 const questions={construction:{type:'choice',instructions:'x'.repeat(1000),criteria:{wait:'Wait only if unnecessary.',produce_GAPOWR:'y'.repeat(500)}},tactics:{type:'choice',instructions:'Keep a mission',criteria:{wait:'Wait',attack_enemy_base:'Attack'}}};
@@ -17,6 +17,11 @@ test('decision entries keep the question, the answer and a numeric state summary
 test('player events are reduced to typed records and observations are dropped',()=>{
   const a=eventEntry({kind:'action',tick:10,question:'vehicles',choice:'produce_MTNK',accepted:true,action:{type:'produce',name:'MTNK',cost:700},confidence:.8,latencyMs:150,ageTicks:2},5);
   assert.deepEqual(a,{at:5,kind:'action',tick:10,question:'vehicles',choice:'produce_MTNK',accepted:true,reason:'',actionType:'produce',actionName:'MTNK',cost:700,confidence:.8,latencyMs:150,ageTicks:2});
+  // The page marks a fallback the extension executed on its own; it has to survive into the log,
+  // because tools/analyze-log.mjs counts those and the data panel lists them.
+  const auto=eventEntry({kind:'action',tick:12,question:'scouting',choice:'explore',accepted:true,auto:true,reason:'auto_explore',action:{type:'move'}},6);
+  assert.equal(auto.auto,true);assert.equal(auto.reason,'auto_explore');
+  assert.equal('auto' in eventEntry({kind:'action',choice:'wait',accepted:true,reason:'wait',action:{type:'wait'}},1),false,'no flag on a normal action');
   assert.equal(eventEntry({kind:'action',choice:'wait',accepted:false,reason:'wait',action:{type:'wait'}},1).reason,'wait');
   assert.equal(eventEntry({kind:'observation',state:{}},1),null);assert.equal(eventEntry({kind:'stop',reason:'battle_ended'},1).reason,'battle_ended');
   assert.equal(eventEntry({kind:'error',message:'m'.repeat(500)},1).message.length,240);assert.equal(eventEntry({kind:'place',name:'GAPOWR',purpose:'base_development'},1).text,'base_development');
@@ -26,6 +31,18 @@ test('the log is bounded by entry count and by serialized size',()=>{
   assert.equal(many.length,LOG_MAX_ENTRIES);assert.equal(many[0].at,50);
   const big=appendEntries([],Array.from({length:400},(_,i)=>({at:i,kind:'decision',pad:'x'.repeat(20000)})));
   assert.ok(JSON.stringify(big).length<=LOG_MAX_CHARS);assert.ok(big.length<400);assert.equal(big.at(-1).at,399);
+});
+test("one match's own log gets a far smaller budget, because 100 of them are stored side by side",()=>{
+  assert.ok(MATCH_LOG_MAX_CHARS<LOG_MAX_CHARS);
+  const entries=Array.from({length:400},(_,i)=>({at:i,kind:'decision',pad:'x'.repeat(20000)}));
+  // The shared log keeps far more of this than the per-match copy does.
+  assert.ok(trimMatchEntries(entries).length<appendEntries([],entries).length);
+  const kept=trimMatchEntries(entries);
+  assert.ok(JSON.stringify(kept).length<=MATCH_LOG_MAX_CHARS,`${JSON.stringify(kept).length} <= ${MATCH_LOG_MAX_CHARS}`);
+  assert.equal(kept.at(-1).at,399,'the newest entries are the ones kept');
+  assert.ok(trimMatchEntries([]).length===0);
+  // 100 matches at the per-match bound stay within what unlimitedStorage is meant to cover.
+  assert.ok(100*MATCH_LOG_MAX_CHARS<100_000_000);
 });
 test('statistics count decisions, wait rates per group, accepted and skipped actions and failures',()=>{
   const entries=[

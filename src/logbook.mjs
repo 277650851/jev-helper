@@ -71,7 +71,9 @@ export function commandEntry({ at, tick, provider, model, latencyMs, usage, brie
 export function eventEntry(e, at) {
   const kind = short(e?.kind, 24);
   const base = { at, kind, tick: number(e?.tick) };
-  if (kind === 'action') return { ...base, question: short(e.question, 40), choice: short(e.choice, 60), accepted: e.accepted === true, reason: short(e.reason, 40), actionType: short(e.action?.type, 24), actionName: short(e.action?.name ?? e.action?.mode, 40), cost: number(e.action?.cost), confidence: number(e.confidence), latencyMs: number(e.latencyMs), ageTicks: number(e.ageTicks) };
+  // `auto` marks an action the extension executed without a usable answer (the page emits it when
+  // the model declines repeatedly). Kept so the fallback is visible in the panel and to analyze-log.
+  if (kind === 'action') return { ...base, question: short(e.question, 40), choice: short(e.choice, 60), accepted: e.accepted === true, reason: short(e.reason, 40), actionType: short(e.action?.type, 24), actionName: short(e.action?.name ?? e.action?.mode, 40), cost: number(e.action?.cost), confidence: number(e.confidence), latencyMs: number(e.latencyMs), ageTicks: number(e.ageTicks), ...(e.auto ? { auto: true } : {}) };
   // The page's side of a commander turn: what was executed and why not. `executed` tells it apart
   // from the background's entry for the same turn.
   if (kind === 'command') return { ...base, executed: true, sourceTick: number(e.sourceTick), note: short(e.note, 400), orders: orderLines(e.results), rejected: orderLines(e.rejected), auto: orderLines(e.auto) };
@@ -88,11 +90,23 @@ export function eventEntry(e, at) {
   return null; // observations are sampled by telemetry already; everything else is noise
 }
 
-export function appendEntries(entries, additions) {
-  let next = [...(entries ?? []), ...additions].slice(-LOG_MAX_ENTRIES);
+// One match's own log is stored under its own key and kept for all 100 matches, so it gets a much
+// smaller budget than the shared log. Without this, 100 matches each holding a near-maximum window
+// would mean hundreds of megabytes in storage.local, which is what unlimitedStorage was masking.
+export const MATCH_LOG_MAX_CHARS = 500_000;
+// Trims oldest-first until both the entry count and the size bound hold; the newest entry is kept.
+const trim = (entries, maxChars) => {
+  let next = entries.slice(-LOG_MAX_ENTRIES);
   let size = JSON.stringify(next).length;
-  while (next.length > 1 && size > LOG_MAX_CHARS) { const dropped = next.splice(0, Math.max(1, Math.ceil(next.length * 0.1))); size -= JSON.stringify(dropped).length - 2; }
+  while (next.length > 1 && size > maxChars) { const dropped = next.splice(0, Math.max(1, Math.ceil(next.length * 0.1))); size -= JSON.stringify(dropped).length - 2; }
   return next;
+};
+export function appendEntries(entries, additions) {
+  return trim([...(entries ?? []), ...additions], LOG_MAX_CHARS);
+}
+// The same bound applied to one match's slice of the log.
+export function trimMatchEntries(entries) {
+  return trim(entries, MATCH_LOG_MAX_CHARS);
 }
 
 const inc = (map, key, by = 1) => { map[key] = (map[key] ?? 0) + by; };
