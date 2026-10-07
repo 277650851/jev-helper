@@ -6,7 +6,7 @@
   "description": "王二火大 Jev 浏览器托管扩展",
   "scripts": {
     "build": "node tools/build.mjs",
-    "test": "npm run package && node --test \"test/*.test.mjs\"",
+    "test": "npm run package && node --test --test-concurrency=1 \"test/*.test.mjs\"",
     "package": "npm run build && node tools/package.mjs",
     "laya": "sh tools/laya-server.sh",
     "laya:py": "python tools/laya-server.py"

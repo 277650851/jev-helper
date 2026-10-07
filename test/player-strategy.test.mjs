@@ -96,6 +96,28 @@ assert.ok(groups.vehicles.actions.recover_MCV);
 assert.ok(!Object.values(groups.salvage.actions).some(a=>a.objectId===40),'preserve the prerequisite needed to produce the MCV');
 console.log('Pressure strategy: early counter-fire, directional placement, shared budget, airfield/lab progression and query-only planning passed');
 
+// Three turrets go around the base, not onto one side: three even sectors make a triangle. Requested
+// as "以基地为中心三角放置".
+{
+  const savedOwn=own, savedMe=api.me;
+  api.me=()=>({credits:10000,power:{total:400,drain:100}});
+  const angle=(p)=>Math.atan2(p.y-30,p.x-30);
+  const apart=(a,b)=>{let d=Math.abs(a-b);return d>Math.PI?2*Math.PI-d:d;};
+  own=[u(1,'YARD',2,30,30)];
+  const s1=chooseBuildingSite(api,catalog,'GUN',own,{},200);
+  assert.ok(s1,'a turret site is found');
+  own.push(u(90,'GUN',2,s1.x,s1.y));
+  const s2=chooseBuildingSite(api,catalog,'GUN',own,{},200);
+  own.push(u(91,'GUN',2,s2.x,s2.y));
+  const s3=chooseBuildingSite(api,catalog,'GUN',own,{},200);
+  const a1=angle(s1),a2=angle(s2),a3=angle(s3);
+  assert.ok(apart(a1,a2)>Math.PI/3,`the second turret takes another sector, not the first one's (${Math.round(apart(a1,a2)*180/Math.PI)} deg apart)`);
+  assert.ok(apart(a1,a3)>Math.PI/3 && apart(a2,a3)>Math.PI/3,'the three turrets end up spread around the base, not clustered');
+  for(const s of [s1,s2,s3]) assert.ok(Math.hypot(s.x-30,s.y-30)>=4,'each turret stands off the base, covering an approach');
+  own=savedOwn; api.me=savedMe;
+  console.log('Defense layout: turrets spread around the base in a triangle');
+}
+
 // The opening follows the game's own AI: power, then barracks, then refinery. A barracks early turns
 // the first credits into something that can defend; a refinery only widens income.
 {

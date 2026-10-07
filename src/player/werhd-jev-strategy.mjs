@@ -7,6 +7,8 @@ export const ATTACK_AA_ESCORTS = 2;
 // Base defenses to hold once a barracks exists, before the army is large enough to matter. Both
 // sides open by raiding, and a bare base loses its miners and its build orders to the first raid.
 export const MIN_BASE_DEFENSES = 3;
+// Turrets are laid out in this many even sectors around the base, i.e. a triangle for three guns.
+export const DEFENSE_SECTORS = 3;
 
 // Planning and the model share this eligibility set, even before starting cash arrives.
 export function vehicleOptions(api, catalog, state) {
@@ -190,10 +192,32 @@ export function chooseBuildingSite(api, catalog, name, own, memory, limit = 200,
   if (!base) return undefined;
   const r = catalog[name] ?? {}, approach = memory.strategy?.approach;
   const defense = r.isBaseDefense || r.wall;
-  const vector = approach ? { x: approach.rx - base.tile.rx, y: approach.ry - base.tile.ry } : { x: 1, y: 1 };
-  const length = Math.hypot(vector.x, vector.y) || 1;
-  const offset = defense ? Math.min(6, length * 0.5) : -4;
-  const desired = { rx: base.tile.rx + vector.x / length * offset, ry: base.tile.ry + vector.y / length * offset };
+  // A turret is placed around the base, not piled onto whichever side the first one took. Three
+  // even sectors a third of a turn apart make a triangle, so the base is covered all round; the
+  // sector holding the observed approach is filled first. Walls keep the approach-facing rule.
+  const turret = r.isBaseDefense && !r.wall;
+  let desired;
+  if (turret) {
+    const sectorOf = (p) => {
+      const a = Math.atan2(p.ry - base.tile.ry, p.rx - base.tile.rx);
+      return Math.floor(((a + Math.PI) / (Math.PI * 2)) * DEFENSE_SECTORS) % DEFENSE_SECTORS;
+    };
+    const counts = new Array(DEFENSE_SECTORS).fill(0);
+    for (const u of buildings) if (catalog[u.name]?.isBaseDefense && !catalog[u.name]?.wall) counts[sectorOf(u.tile)]++;
+    const fewest = Math.min(...counts);
+    const open = counts.map((c, i) => [c, i]).filter(([c]) => c === fewest).map(([, i]) => i);
+    const approachSector = approach ? sectorOf(approach) : -1;
+    const sector = open.includes(approachSector) ? approachSector : open[0];
+    const angle = ((sector + 0.5) / DEFENSE_SECTORS) * Math.PI * 2 - Math.PI;
+    // Stand off far enough to fire across an approach but close enough to cover the base itself.
+    const radius = Math.max(4, Math.min(10, (r.weapon?.range ?? 5) * 0.7));
+    desired = { rx: base.tile.rx + Math.cos(angle) * radius, ry: base.tile.ry + Math.sin(angle) * radius };
+  } else {
+    const vector = approach ? { x: approach.rx - base.tile.rx, y: approach.ry - base.tile.ry } : { x: 1, y: 1 };
+    const length = Math.hypot(vector.x, vector.y) || 1;
+    const offset = defense ? Math.min(6, length * 0.5) : -4;
+    desired = { rx: base.tile.rx + vector.x / length * offset, ry: base.tile.ry + vector.y / length * offset };
+  }
   const candidates = new Map();
   for (const anchor of buildings.slice(0, 12)) for (let dx = -10; dx <= 10; dx++) for (let dy = -10; dy <= 10; dy++) {
     const x = anchor.tile.rx + dx, y = anchor.tile.ry + dy;
