@@ -5,6 +5,7 @@ import {
   collectState,
   candidateGroups,
   attachJevPlayer,
+  MAX_STALE_TICKS,
 } from "../src/player/werhd-jev-player.mjs";
 
 const calls = [];
@@ -324,6 +325,39 @@ stalePlayer.stop();
 assert.equal(stalePlayer.status.rejected, 1);
 assert.equal(stalePlayer.status.accepted, 0);
 assert.deepEqual(calls, [["produce", "TANK"]], "stale snapshots must not issue commands");
+
+// Report jev-report-20261008-023829: 102 decisions, 103 discarded. The game ran at ~60 ticks/s and a
+// local CPU model answered in 1.4-3.9 s, i.e. 244 ticks, while the budget was the 180-tick default
+// — so the smallest age ever observed was still past it and the model had no say in the match. A
+// budget fixed in ticks cannot work: the same number is 3 s on a fast game and 12 s on a slow one.
+// So the page widens it from what it actually measures, whatever the provider is called.
+{
+  let tick = 0;
+  api.tick = () => tick;
+  const events = [];
+  const ages = [244, 250, 240, 245];
+  let n = 0;
+  calls.length = 0;
+  own = [ { id: 1, name: 'TANK', type: 7, tile: { rx: 10, ry: 10 }, hitPoints: 100, maxHitPoints: 100, primaryWeapon: { damage: 50, range: 5 } } ];
+  const player = await attachJevPlayer(api, {
+    catalog, intervalMs: 10, disableMicro: true,
+    // Every reply is ~244 ticks old, exactly as in the report: the first is discarded, and the budget
+    // the rejection reports must then be wide enough for the next one to be accepted.
+    requestDecision: async () => { const age = ages[Math.min(n++, ages.length - 1)]; tick += age; return { answers: { construction: { choice: 'produce_TANK' } } }; },
+    onEvent: e => { events.push(e); if (e.kind === 'stale') tick += 1; },
+  });
+  const settled = new Promise(resolve => { const check = () => (player.status.accepted > 0 || events.length > 6) ? resolve() : setTimeout(check, 15); check(); });
+  await settled;
+  player.stop('manual');
+  const stale = events.filter(e => e.kind === 'stale');
+  assert.ok(stale.length >= 1, 'the first reply is still discarded');
+  assert.equal(stale[0].budgetTicks, 488, 'the rejection states the measured age doubled, not a guess');
+  assert.ok(player.status.accepted > 0, 'the next reply is accepted: the loop is not starving the model');
+  // And it stays bounded: a source that answers inside the budget must not keep the widened one.
+  const grown = events.filter(e => e.kind === 'stale').at(-1)?.budgetTicks ?? 0;
+  assert.ok(grown <= MAX_STALE_TICKS, `the budget never exceeds the ceiling: ${grown}`);
+  console.log(`Staleness: a 244-tick reply on a 180 budget is discarded once, then accepted (rejections ${stale.length}, accepted ${player.status.accepted})`);
+}
 
 let ended = false, endedResolve;
 const endEvents = [];

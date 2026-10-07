@@ -130,6 +130,13 @@ export const RICH_INFANTRY_CREDITS = 3000, RICH_INFANTRY_CAP = 40, RICH_INFANTRY
 export const RICH_SPEND = 5000, RICH_ARMY_CAP = 40;
 // Capture objectives: the column pushes with this many units, to a point this far short of the target.
 export const CAPTURE_PUSH_UNITS = 6, CAPTURE_STAGE_TILES = 4;
+// How old an answer may be before it is thrown away, in game ticks. The starting point only: the
+// budget adapts to the latency actually observed (see attachJevPlayer), because the same number of
+// ticks is 3 s on a fast game and 12 s on a slow one.
+export const DEFAULT_STALE_TICKS = 180;
+// Ceiling for that adaptation. At 60 ticks/s this is a minute, past which an answer describes a world
+// that has moved on too far to act on.
+export const MAX_STALE_TICKS = 3600;
 // Recent answers per decision group, with the loss / kill totals at the time, so a repeated choice
 // that produced nothing can be shown back to the model and demoted.
 export const RECENT_LIMIT = 8, STALE_REPEATS = 4, STALE_REMOVE = 6;
@@ -954,9 +961,24 @@ export function candidateGroups(api, catalog, snapshot, memory) {
   // Money piling up while the model keeps answering "wait": 0.7.2 (Battle Lab mission) was offered a
   // Rhino tank 251 times, credits rose to 14,000 and the army shrank from 19 to 6. Above this much
   // money the first combat unit on offer is trained automatically after two declines.
+  // With no miners or refineries the strategy layer offers nothing to build at all, and tagging an
+  // option that does not exist does nothing: on 2026-10-08 credits reached 21,065 with 24 idle units
+  // and nothing was ever built. So an affordable combat unit is put on offer here when none is.
   if (state.self.credits >= RICH_SPEND && allArmy.length < RICH_ARMY_CAP) for (const id of ["vehicles", "infantry"]) {
-    const entry = Object.entries(groups[id]?.actions ?? {}).find(([k, a]) => k !== "wait" && a?.type === "produce" && !catalog[a.name]?.harvester && !catalog[a.name]?.engineer && (catalog[a.name]?.weapon?.damage ?? 0) > 0);
-    if (entry && !Number.isFinite(entry[1].auto)) entry[1].auto = 2;
+    const g = groups[id]; if (!g) continue;
+    const combat = a => a?.type === "produce" && !catalog[a.name]?.harvester && !catalog[a.name]?.engineer && (catalog[a.name]?.weapon?.damage ?? 0) > 0;
+    const entry = Object.entries(g.actions).find(([k, a]) => k !== "wait" && combat(a));
+    if (entry) { if (!Number.isFinite(entry[1].auto)) entry[1].auto = 2; continue; }
+    if (id === "vehicles" && !state.strategy?.recovery && !Object.values(g.actions).some(a => a?.type === "produce")) {
+      const queue = api.QueueType.Vehicles, queued = state.queues?.find(q => q.type === queue)?.size ?? 0;
+      const name = api.production.available(queue).find(i => combat({ type: "produce", name: i.name }) &&
+        state.self.credits >= Math.min(500, catalog[i.name]?.cost ?? Infinity))?.name;
+      if (name && !queued) {
+        const key = `auto_produce_${name}`;
+        g.criteria[key] = `MONEY IS IDLE: ${catalog[name]?.label ?? name} costs ${catalog[name]?.cost}, we hold ${state.self.credits} and the army is below ${RICH_ARMY_CAP} units. Build it now instead of waiting; the queue is empty and nothing else is proposed.`;
+        g.actions[key] = { type: "produce", name, queue, cost: catalog[name]?.cost, minCredits: Math.min(500, catalog[name]?.cost ?? 0), auto: 2 };
+      }
+    }
   }
   historyHints(groups, memory, state, assessment);
   return groups;
@@ -1540,6 +1562,11 @@ export function orderSquad(api, catalog, memory, squad, intent, first = false) {
     }
     case "defend_base": {
       const own = api.units("self"), buildings = own.filter((u) => u.type === api.ObjectType.Building);
+      // Nothing left to defend. baseRaiders() needs buildings to compute a threat and the rally site
+      // needs a building to sit around, so both come back empty and the turn would issue no order at
+      // all — while reporting success, which locks the squad into a mission that never does anything.
+      // Refusing here releases the units for a squad order that can actually move them.
+      if (!buildings.length) return done(false, "no_base");
       const threats = baseRaiders(api, catalog, buildings, api.units("enemy"));
       if (threats.length) {
         // Each defender takes a raider it can hurt, one in range first, else the closest.
@@ -1555,7 +1582,8 @@ export function orderSquad(api, catalog, memory, squad, intent, first = false) {
       }
       const site = stableRallySite(api, catalog, own, buildings.find((u) => catalog[u.name]?.yard) ?? buildings[0], memory);
       const list = site ? fresh.filter((u) => far(u, site.x, site.y, 5)) : [];
-      if (list.length) api.move(ids(list), site.x, site.y);
+      if (!list.length) return done(false, "nothing_to_rally");
+      api.move(ids(list), site.x, site.y);
       mark(list);
       return done(true, "", { units: list.length, idle: true });
     }
@@ -1798,8 +1826,26 @@ export async function attachJevPlayer(api, options = {}) {
   const catalog = options.catalog ?? {};
   if (!options.catalog && !api.rules) throw new Error("This player requires werhd.rules() from the current player API.");
   refreshCatalog(api, catalog);
-  const maxDecisions = options.maxDecisions ?? 600,
-    maxStaleTicks = options.maxStaleTicks ?? 180;
+  const maxDecisions = options.maxDecisions ?? 600;
+  // Answers arrive with a budget expressed in game ticks, but how old an answer is depends on the
+  // game's speed: 180 ticks is 3 s at 60 ticks/s and 12 s at 15. On 2026-10-08 a local CPU Laya
+  // answered in 1.4-3.9 s, so every reply aged past 180 ticks and was discarded (jev-report
+  // 023829: 102 decisions, 103 discarded — the model had no say in that match at all). Judging the
+  // budget by provider name cannot fix it either: a fast relay is "openai", a slow one is too.
+  // So the budget starts at what the source was told and adapts to what is actually observed: a
+  // rejected answer states exactly how old it was, and answers that come back comfortably inside the
+  // budget shrink it again.
+  let staleTicks = options.maxStaleTicks ?? DEFAULT_STALE_TICKS;
+  const baseStaleTicks = staleTicks;
+  const observeStaleness = (ageTicks) => {
+    if (ageTicks > staleTicks) {
+      const measured = Math.ceil(ageTicks * 2);
+      staleTicks = Math.min(MAX_STALE_TICKS, Math.max(staleTicks + DEFAULT_STALE_TICKS, measured));
+      return true;
+    }
+    if (ageTicks * 2 < staleTicks && staleTicks > baseStaleTicks) staleTicks = Math.max(baseStaleTicks, Math.ceil(staleTicks / 2));
+    return false;
+  };
   // Commander mode: the model plans from a brief (OpenAI-compatible sources only; the background decides).
   const commander = options.commander === true;
   const memory = {
@@ -1984,13 +2030,14 @@ export async function attachJevPlayer(api, options = {}) {
       status.last = { tick, ...result };
       if (!status.running) return;
       const ageTicks = api.tick() - tick;
-      if (ageTicks > maxStaleTicks) {
+      if (observeStaleness(ageTicks)) {
         status.rejected++;
         emit({
           kind: "stale",
           tick,
           currentTick: api.tick(),
           latencyMs: result.latencyMs,
+          budgetTicks: staleTicks,
         });
         return;
       }

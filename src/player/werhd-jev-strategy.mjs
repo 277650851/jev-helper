@@ -463,6 +463,9 @@ function recoveryGroups(api, catalog, snapshot, groups) {
     if (!rule || rule.unsellable || rule.yard || rule.refinery || rule.power>0 || rule.factory==='UnitType' || r.prerequisite?.includes(b.name) || b.garrison?.count) continue;
     const key=`recover_sell_${b.id}`;
     g.criteria[key]=`Sell expendable ${rule.label} #${b.id} to finance ${candidate.name}; original cost ${rule.cost}.`;
-    g.actions[key]={type:'sell',objectId:b.id};
+    // Same automatic fallback as the rebuild this pays for. With income already at zero the sell is
+    // the only way back, so leaving it entirely to a model that answers "wait" at near-zero
+    // confidence is how a match is lost with money unspent and units idle.
+    g.actions[key]={type:'sell',objectId:b.id,auto:2};
   }
 }

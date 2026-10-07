@@ -32,6 +32,33 @@ export function refreshInfrastructure(api, memory, base) {
   return memory.infrastructure;
 }
 
+// A landing point on the far shore, for maps the ground cannot cross. The enemy base is unknown
+// there by definition (that is why the transport is being used), so the target is the farthest land
+// that still hides something — on a two-island map that is the other island. Scanned coarsely and
+// cached: it is a destination for a ferry, not a path.
+export const FAR_SHORE_CACHE_TICKS = 600;
+export function farShorePoint(api, base, memory) {
+  const tick = api.tick();
+  if (memory.farShore && tick - (memory.farShoreAt ?? -10000) < FAR_SHORE_CACHE_TICKS) return memory.farShore;
+  const size = api.map.size(), water = api.LandType?.Water ?? 7, from = base?.tile ?? { rx: size.width / 2, ry: size.height / 2 };
+  let best;
+  for (let x = 2; x < size.width; x += 2) for (let y = 2; y < size.height; y += 2) {
+    const tile = api.map.tile(x, y);
+    if (!tile || tile.landType === water) continue;
+    const d = Math.hypot(x - from.rx, y - from.ry);
+    if (d < 20) continue; // still our own side of the water
+    // Prefer hidden ground: a landing spot with nothing known under it is where scouting pays.
+    const fog = [[6, 0], [-6, 0], [0, 6], [0, -6]].some(([dx, dy]) => x + dx >= 0 && y + dy >= 0 && x + dx < size.width && y + dy < size.height && !api.map.visible(x + dx, y + dy));
+    if (!fog) continue;
+    const score = d + (api.map.visible(x, y) ? 0 : 6);
+    // rx/ry as well as x/y: distance() in this module takes tiles in that shape.
+    if (!best || score > best.score) best = { rx: x, ry: y, x, y, score };
+  }
+  memory.farShore = best ?? undefined;
+  memory.farShoreAt = tick;
+  return memory.farShore;
+}
+
 export function specialGroups(api, catalog, snapshot, memory, groups) {
   const { units, enemies, buildings, base } = snapshot.raw;
   if (!api.order || !api.QueueType || !base) return;
@@ -135,7 +162,9 @@ export function specialGroups(api, catalog, snapshot, memory, groups) {
             order: { type: api.OrderType.Occupy, target: { objectId: building.id } }, purpose: forward ? 'forward' : 'base' });
     }
   }
-  const transport = group('transport', 'Use spare infantry to crew empty transports or IFVs when it improves the current mission. Keep anti-air escorts free when enemy aircraft are present. Unload near combat on safe land; never unload infantry into water.');
+  const transport = group('transport', 'Use spare infantry to crew empty transports or IFVs when it improves the current mission. Keep anti-air escorts free when enemy aircraft are present. Unload near combat on safe land; never unload infantry into water. When the enemy base has never been found on a map split by water, ferry the passengers across and land them to look for it.');
+  // The far shore only matters while the enemy base is unknown; once it is found the ferry aims there.
+  const shore = !memory.enemyBuildings?.size ? farShorePoint(api, base, memory) : undefined;
   for (const vehicle of units.filter((u) => u.transport && idle(u, memory, tick))) {
     const r = catalog[vehicle.name];
     if (!r) continue;
@@ -143,21 +172,40 @@ export function specialGroups(api, catalog, snapshot, memory, groups) {
       const passenger = infantry.find((u) => idle(u, memory, tick) && u.id !== memory.scoutId && distance(u.tile, vehicle.tile) < 8
         && (catalog[u.name]?.size ?? 1) <= r.sizeLimit && (catalog[u.name]?.size ?? 1) <= vehicle.transport.capacity);
       if (passenger)
-        transport(`load_${vehicle.id}`, `Load infantry #${passenger.id} into ${r.label} #${vehicle.id}${r.gunner ? ' to use its infantry weapon mode' : ' for protected transport'}.`,
+        transport(`load_${vehicle.id}`, shore && !memory.enemyBuildings?.size && !r.gunner
+          ? `Load infantry #${passenger.id} into ${r.label} #${vehicle.id} to cross the water and search the far shore (${shore.x},${shore.y}); the enemy base has never been found.`
+          : `Load infantry #${passenger.id} into ${r.label} #${vehicle.id}${r.gunner ? ' to use its infantry weapon mode' : ' for protected transport'}.`,
           { type: 'special', kind: 'load', ids: [passenger.id], targetId: vehicle.id,
             order: { type: api.OrderType.EnterTransport, target: { objectId: vehicle.id } } });
     }
-    if (vehicle.transport.occupied && (!r?.gunner || snapshot.state.airThreatCount > 0) && vehicle.zone !== (api.ZoneType?.Water ?? 2) && enemies.some((e) => distance(e.tile, vehicle.tile) < 14))
-      transport(`unload_${vehicle.id}`, `Unload transport #${vehicle.id} on land near the battle.`,
+    // Landing to fight needs enemies nearby and the transport on land; landing to LOOK needs the
+    // enemy base to be unknown and the ferry to have arrived at the far shore. Without the second
+    // case an occupied transport on a naval map loaded infantry and then sat still forever: nothing
+    // to sail to, nothing to land for. A boat sits on water next to the shore and DeploySelected
+    // puts the passengers on the adjacent land, so the reconnaissance landing is allowed there while
+    // the original "never unload infantry into water" rule still covers every combat landing.
+    const atFarShore = shore && distance(vehicle.tile, shore) < 10;
+    const fighting = enemies.some((e) => distance(e.tile, vehicle.tile) < 14);
+    const recon = atFarShore && !memory.enemyBuildings?.size && !fighting;
+    if (vehicle.transport.occupied && (!r?.gunner || snapshot.state.airThreatCount > 0)
+      && (fighting ? vehicle.zone !== (api.ZoneType?.Water ?? 2) : recon))
+      transport(`unload_${vehicle.id}`, fighting
+        ? `Unload transport #${vehicle.id} on land near the battle.`
+        : `Unload transport #${vehicle.id} at the far shore (${shore.x},${shore.y}) and scout with the passengers: the enemy base is still unknown.`,
         { type: 'special', kind: 'unload', ids: [vehicle.id], order: { type: api.OrderType.DeploySelected } });
   }
   for (const vehicle of units.filter(u => u.transport?.occupied && !catalog[u.name]?.gunner && idle(u, memory, tick))) {
     const destination = enemies.find(e => e.type === api.ObjectType.Building && distance(e.tile, vehicle.tile) >= 12)
       ?? [...(memory.enemyBuildings?.values() ?? [])].find(e => distance(e.tile ?? {rx:e.x,ry:e.y},vehicle.tile) >= 12);
     const tile = destination?.tile ?? (destination && { rx: destination.x, ry: destination.y });
-    if (tile && api.map.tile(tile.rx, tile.ry))
-      transport(`ferry_${vehicle.id}`, `Transport ${vehicle.transport.occupied} occupied slots toward the known enemy shore (${tile.rx},${tile.ry}); unload after reaching safe land.`,
-        { type: 'special', kind: 'transport_move', ids: [vehicle.id], order: { type: api.OrderType.Move, target: { x: tile.rx, y: tile.ry } } });
+    // No known enemy building yet: sail for the far shore instead of giving up. This is the whole
+    // amphibious reconnaissance loop — without it a transport on a naval map can never cross.
+    const goal = tile ?? (base && shore && memory.enemyBuildings?.size ? undefined : shore);
+    if (goal && api.map.tile(goal.rx ?? goal.x, goal.ry ?? goal.y))
+      transport(`ferry_${vehicle.id}`, tile
+        ? `Transport ${vehicle.transport.occupied} occupied slots toward the known enemy shore (${tile.rx},${tile.ry}); unload after reaching safe land.`
+        : `Transport ${vehicle.transport.occupied} occupied slots to the far shore (${goal.x},${goal.y}); the enemy base has never been found, so cross the water and unload to look for it.`,
+        { type: 'special', kind: 'transport_move', ids: [vehicle.id], order: { type: api.OrderType.Move, target: { x: goal.rx ?? goal.x, y: goal.ry ?? goal.y } } });
   }
   if (water.length > 20 && infantry.length >= 4 && !units.some(u => u.transport?.capacity > 1) && snapshot.state.self.credits > 3000) {
     const carrier = available.find(item => catalog[item.name]?.passengers > 1 && !catalog[item.name]?.gunner && afford(catalog[item.name], 1500));
@@ -294,7 +342,11 @@ export function specialGroups(api, catalog, snapshot, memory, groups) {
       const points = memory.infrastructure.seaFrontiers ?? [];
       const p = [...points].sort((a, b) => distance(base.tile, {rx:b.x,ry:b.y}) - distance(base.tile, {rx:a.x,ry:a.y}))[0];
       if (p) add('sea_scout', `Explore revealed water frontier (${p.x},${p.y}) with ${ready.length} ships.`,
-        { type: 'special', kind: 'naval_scout', ids: ready.map((u) => u.id), order: { type: api.OrderType.Move, target: p } });
+        // Same automatic fallback as the ground explore options. On 2026-10-08 this was offered 207
+        // times on a naval map and the model answered "produce a submarine" every time, so the enemy
+        // base was never found even with the ships standing there.
+        { type: 'special', kind: 'naval_scout', ids: ready.map((u) => u.id), order: { type: api.OrderType.Move, target: p },
+          ...(!memory.enemyBuildings?.size && !enemies.length ? { auto: 3 } : {}) });
     }
     for (const target of enemies.slice(0, 8)) {
       const ids = ready.filter((u) => api.weaponVs ? !!api.weaponVs(u.id, target.id, 'current') : target.zone === 1 ? catalog[u.name]?.weapon?.aa : catalog[u.name]?.weapon?.ag !== false).map((u) => u.id);

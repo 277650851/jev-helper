@@ -110,6 +110,55 @@ assert.equal(refreshed.JET.weapon.verses[5], 0.2);
 assert.equal(refreshed.JET.aircraft, true);
 console.log('Jev special action coverage, stale-state guards, friendly bridge safety, and live rules passed');
 
+// Report jev-report-20261008-023829 (naval map, defeat): with the enemy base never found, the transport
+// group offered load_* and nothing else. ferry_* needed a known enemy building and unload_* needed
+// enemies within 14 tiles, so infantry were loaded 14 times and the transport never crossed the water.
+// The whole amphibious loop — load, sail to the far shore, land to look — has to exist while the base
+// is unknown, and the sea scout needs the same automatic fallback the ground explore already has.
+{
+  const W = 7, size = 60;
+  // Two islands: ours in one corner, the far shore beyond a wide channel. Fog everywhere except home.
+  const seaApi = {
+    ...api,
+    tick: () => 5000,
+    map: {
+      size: () => ({ width: size, height: size }),
+      visible: (x, y) => x < 20 && y < 20,
+      tile: (x, y) => (x >= 0 && y >= 0 && x < size && y < size) ? { rx: x, ry: y, landType: (x < 20 && y < 20) || (x > 40 && y > 40) ? 0 : W } : undefined,
+    },
+  };
+  const home = unit(1, 'YARD', 2, { tile: { rx: 6, ry: 6 } });
+  const ferryBoat = unit(70, 'APC', 7, { tile: { rx: 8, ry: 8 }, zone: 2, transport: { occupied: 2, capacity: 5, unitIds: [11, 12] } });
+  const boatOwn = [home, ...Array.from({ length: 4 }, (_, i) => unit(10 + i, 'GI', 3, { tile: { rx: 8 + i, ry: 8 } })), ferryBoat];
+  const seaSnapshot = {
+    raw: { units: boatOwn, buildings: [home], army: boatOwn.filter((u) => u.type === 3), enemies: [], base: home },
+    state: { self: { credits: 5000 }, harvesters: 2, economy: { factories: 1 }, airThreatCount: 0, nearbyEnemyCount: 0, baseUnderAttack: false },
+  };
+  const seaMemory = { enemyBuildings: new Map() };
+  const seaGroups = {};
+  specialGroups(seaApi, catalog, seaSnapshot, seaMemory, seaGroups);
+  const t = seaGroups.transport;
+  assert.ok(t, 'the transport group exists');
+  const keys = Object.keys(t.actions);
+  assert.ok(keys.some((k) => k.startsWith('ferry_')), `an unknown enemy base must still give the ferry a destination: ${keys}`);
+  const shore = seaMemory.farShore;
+  assert.ok(shore && shore.x > 40 && shore.y > 40, `the far shore is across the water, not next door: ${JSON.stringify(shore)}`);
+  // Landing is only for a boat that has actually crossed; at home the offer is the crossing itself.
+  assert.ok(!keys.some((k) => k.startsWith('unload_')), `no landing while the boat is still at home: ${keys}`);
+  ferryBoat.tile = { rx: shore.x, ry: shore.y };
+  const arrived = {};
+  specialGroups(seaApi, catalog, seaSnapshot, seaMemory, arrived);
+  assert.ok(Object.values(arrived.transport.actions).some((a) => a.kind === 'unload'), 'landing is offered once it has crossed');
+  // And the ferry aims at the far shore while the base is unknown, then at the base once it is known.
+  const ferry = Object.values(arrived.transport.actions).find((a) => a.kind === 'transport_move');
+  assert.equal(ferry.order.target.x, shore.x, 'the crossing targets the far shore');
+  seaMemory.enemyBuildings.set(9, { x: 50, y: 50, name: 'NAYARD' });
+  const known = {};
+  specialGroups(seaApi, catalog, seaSnapshot, seaMemory, known);
+  assert.ok(!Object.values(known.transport.actions).some((a) => a.kind === 'unload'), 'a known enemy base restores the fight-first landing rule');
+  console.log('Amphibious reconnaissance: an unknown enemy base gives the ferry a far-shore destination, landing is offered on arrival, and a known base restores the old rule');
+}
+
 // Entering a building is a composed task: wait for actual undeployment before ordering entry.
 building.garrison.count = 0;
 let tick = 2000;

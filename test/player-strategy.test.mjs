@@ -132,6 +132,49 @@ assert.notEqual(snap.state.strategy.investment?.name,'MINER','stop expanding onc
 assert.equal(snap.state.decisionReadiness.vehicles.waitingSupported,false,'completed economy must release the army budget');
 console.log('Economic priority: two-miner expansion protected, combat prompt preserved, third miner releases army budget');
 
+// Report jev-report-20261008-021015: the money-piling fallback only tagged produce options that the
+// strategy layer had already put on offer. With the last miner gone, forcePlan is gated on a miner
+// count and nothing is proposed at all, so the fallback had nothing to tag and the base held 21,065
+// credits with 24 idle units for 1,574 s. The fallback has to put a unit on offer itself.
+{
+  const savedOwn = own, savedEnemies = enemies, savedCredits = credits, savedOffered = offered;
+  // Intact refinery and factory, no miner left, army well past the force target: no economy plan
+  // (the refinery cannot be fed) and no reinforcement plan (that needs miners), so vehicles is empty.
+  own = [u(1,'YARD',2),u(2,'POWER',2,26,30),u(3,'REF',2,30,35),u(5,'BARRACKS',2),u(6,'FACTORY',2),
+    ...Array.from({length:24},(_,i)=>u(70+i,'TANK',7))];
+  enemies = []; credits = 21065;
+  offered = { 0: ['POWER'], 1: ['PILL'], 2: [], 3: ['TANK'], 4: [], 5: [] };
+  snap = collectState(api, catalog); groups = candidateGroups(api, catalog, snap, {});
+  assert.equal(snap.state.strategy.recovery, undefined, 'a refinery with no miner is not a recovery case');
+  const auto = Object.entries(groups.vehicles?.actions ?? {}).find(([k, a]) => k.startsWith('auto_produce_'));
+  assert.ok(auto, 'rich, idle and offered nothing: the fallback puts a combat vehicle on offer');
+  assert.equal(auto[1].name, 'TANK'); assert.equal(auto[1].type, 'produce');
+  assert.equal(auto[1].auto, 2, 'and it runs automatically after two declined turns');
+  assert.ok(auto[1].minCredits <= 500, 'same affordability floor as every other production option');
+  // A busy factory queue must not be doubled up on.
+  api.production.queues = () => idleQueues().map(q => q.type === 3 ? { ...q, size: 1, items: [{ name: 'TANK', quantity: 1, creditsEach: 750, creditsSpent: 0 }] } : q);
+  snap = collectState(api, catalog); groups = candidateGroups(api, catalog, snap, {});
+  assert.ok(!Object.keys(groups.vehicles?.actions ?? {}).some(k => k.startsWith('auto_produce_')), 'a busy factory queue is left alone');
+  api.production.queues = idleQueues;
+  // Recovery keeps its own budget: while income is broken the fallback must not spend it on tanks.
+  own = own.filter(x => x.name !== 'REF');
+  offered = { 0: ['POWER','REF'], 1: ['PILL'], 2: [], 3: ['TANK','MINER'], 4: [], 5: [] };
+  catalog.REF.cost = 2000;
+  snap = collectState(api, catalog); groups = candidateGroups(api, catalog, snap, {});
+  assert.equal(snap.state.strategy.recovery, true, 'no refinery at all is a recovery case');
+  assert.ok(!Object.values(groups.vehicles?.actions ?? {}).some(a => a?.type === 'produce'), 'recovery money is not spent on armor');
+  assert.equal(groups.construction.actions.recover_REF?.auto, 2, 'an affordable rebuild is still automatic');
+  // With no money at all the rebuild cannot be offered, so the only way back is selling something.
+  credits = 0;
+  snap = collectState(api, catalog); groups = candidateGroups(api, catalog, snap, {});
+  assert.ok(!groups.construction.actions.recover_REF, 'an unaffordable rebuild is not offered');
+  const sell = Object.entries(groups.salvage?.actions ?? {}).find(([k, a]) => k.startsWith('recover_sell_'));
+  assert.ok(sell, 'the only way back is selling a building');
+  assert.equal(sell[1].auto, 2, 'selling to fund recovery runs automatically after two declined turns');
+  own = savedOwn; enemies = savedEnemies; credits = savedCredits; offered = savedOffered;
+  console.log('Idle money and broken income: a combat unit is offered when nothing is, a busy queue is left alone, and the sell that funds recovery is automatic');
+}
+
 // Battle 28: repeated static spending left no mobile response to enemies flanking the base.
 own=[u(1,'YARD',2),u(2,'POWER',2,26,30),u(3,'REF',2,30,35),u(5,'BARRACKS',2),u(6,'FACTORY',2),
   u(60,'MINER',7),u(61,'MINER',7),u(62,'MINER',7),u(70,'PILL',2,22,22),u(71,'PILL',2,23,22)];

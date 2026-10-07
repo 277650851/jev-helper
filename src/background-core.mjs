@@ -19,7 +19,21 @@ export function createBackground(c, {fetchImpl = fetch, now = Date.now, uuid = (
   // a longer budget; the page is told to wait a little longer than the background does.
   // A commander turn reads a brief of several thousand tokens and plans the whole army: 30–50 s is normal.
   const COMMAND_TIMEOUT=90000;
-  const timeoutFor = (provider,commander=false) => commander?COMMAND_TIMEOUT:provider.id==='openai'?30000:8000;
+  // A local CPU model is the slow case that used to be judged by its name instead: measured at
+  // 1.4–3.9 s per decision on a shared CPU (jev-report 20261008-023829), and 5.2 s at worst, so the
+  // 8 s Jev budget left no room for a second tab and for a slower machine. The consecutive-failure
+  // guard, not a tight timeout, is what protects against a genuinely dead server.
+  const LOCAL_TIMEOUT=18000;
+  const timeoutFor = (provider,commander=false) => commander?COMMAND_TIMEOUT
+    : provider.id==='openai'?30000
+    : provider.id==='local'?LOCAL_TIMEOUT
+    : 8000;
+  // Starting staleness budget in game ticks, only a starting point: the page widens it from the
+  // latency it actually observes (werhd-jev-player.mjs). It is set generously for the sources that
+  // are slow in seconds rather than milliseconds, because a reply that arrives too old is thrown
+  // away entirely and the match then runs on the extension's instincts alone.
+  const STALE_TICKS = { openai: 900, local: 1200 };
+  const staleTicksFor = provider => STALE_TICKS[provider.id] ?? 0;
   // One decision request to whichever provider is selected, returned in Jev's answer shape.
   // Services (by endpoint and model) that refused a forced function call; they get tool_choice "auto" from then on.
   const autoToolChoice=new Set();
@@ -82,14 +96,18 @@ export function createBackground(c, {fetchImpl = fetch, now = Date.now, uuid = (
   // Text → base64 data URL for chrome.downloads; service workers have no object URLs.
   const dataUrl=text=>{const bytes=new TextEncoder().encode(text);let bin='';for(let i=0;i<bytes.length;i+=0x8000)bin+=String.fromCharCode(...bytes.subarray(i,i+0x8000));return 'data:application/json;base64,'+btoa(bin);};
   const stamp=at=>{const d=new Date(at),p=n=>String(n).padStart(2,'0');return `${d.getFullYear()}${p(d.getMonth()+1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;};
-  // Automatic battle report: the match record plus every log entry of that session, saved under
+  // Automatic battle report: the match record plus that session's log, saved under
   // Downloads/jev-reports without a prompt. Failures never affect the record itself.
-  async function saveReport(record,entries,settings){
+  // `stats` is passed in already computed over the WHOLE match, while `entries` may be a bounded
+  // tail. Deriving the stats from `entries` here would quietly understate a long match — a 2000
+  // entry session truncated to 1000 reports half the decisions and zero produces — and the
+  // report's own match.* fields would then contradict its stats.
+  async function saveReport(record,stats,entries,settings){
     if(settings.autoReport===false || !c.downloads?.download)return '';
     const file=`jev-reports/jev-report-${stamp(record.startedAt)}.json`;
-    const bundle={version:c.runtime.getManifest?.()?.version??'',exportedAt:new Date(now()).toISOString(),settings:publicSettings(settings),match:record,stats:logStats(entries),entries};
+    const bundle={version:c.runtime.getManifest?.()?.version??'',exportedAt:new Date(now()).toISOString(),settings:publicSettings(settings),match:record,stats,entries,logTruncated:entries.length<record.logEntries};
     try{await c.downloads.download({url:dataUrl(JSON.stringify(bundle,null,1)),filename:file,conflictAction:'uniquify',saveAs:false});return file;}
-    catch{return '';}
+    catch{return ''};
   }
   async function finishMatch(tabId,reason){
     const s=await getSession(tabId);
@@ -109,7 +127,7 @@ export function createBackground(c, {fetchImpl = fetch, now = Date.now, uuid = (
       produced:stats.actions.acceptedProduce,actionsByType:stats.actions.byType,skippedReasons:stats.actions.skippedReasons,
       groups:Object.fromEntries(Object.entries(stats.groups).map(([id,g])=>[id,{asked:g.asked,waitRate:g.waitRate,top:Object.keys(g.choices)[0]??''}])),history};
     record.meta=s.meta??null;record.label='';record.notes='';record.logEntries=window.length;record.logKept=kept.length;
-    record.reportFile=await saveReport(record,kept,settings);
+    record.reportFile=await saveReport(record,stats,kept,settings);
     await serial(stateLocks,'matches',async()=>{
       const list=await readMatches(),next=[...list.filter(m=>m.id!==record.id),record],dropped=next.slice(0,Math.max(0,next.length-MATCHES_MAX));
       await c.storage.local.set({matches:next.slice(-MATCHES_MAX),[logKey(record.id)]:kept});
@@ -203,7 +221,7 @@ export function createBackground(c, {fetchImpl = fetch, now = Date.now, uuid = (
     try {
       await c.tabs.sendMessage(tabId,{type:'BIND_SESSION',token:session.token},{documentId});
       const commander=provider.strategy==='commander';
-      const result=await pageCall(tabId,'start',{token:session.token,maxDecisions:config.maxDecisions,autoCamera:config.autoCamera,objective:config.objective,...(provider.id==='openai'?{maxStaleTicks:900,requestTimeoutMs:timeoutFor(provider,commander)+5000}:{}),...(commander?{commander:true}:{})},documentId);
+      const result=await pageCall(tabId,'start',{token:session.token,maxDecisions:config.maxDecisions,autoCamera:config.autoCamera,objective:config.objective,...(staleTicksFor(provider)?{maxStaleTicks:staleTicksFor(provider)}:{}),...(provider.id!=='jev'?{requestTimeoutMs:timeoutFor(provider,commander)+5000}:{}),...(commander?{commander:true}:{})},documentId);
       if(!result?.running)throw new Error(result?.error || '托管未能启动。');
       // Only if it is still running: a page-side stop can land between here and the patch above,
       // and a session that already stopped must not gain a startedAt afterwards.

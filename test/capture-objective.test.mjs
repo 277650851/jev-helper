@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { collectState, candidateGroups, executeCandidate, maintainBattle, RICH_SPEND, CAPTURE_PUSH_UNITS, CAPTURE_STAGE_TILES } from '../src/player/werhd-jev-player.mjs';
+import { collectState, candidateGroups, executeCandidate, orderSquad, maintainBattle, RICH_SPEND, CAPTURE_PUSH_UNITS, CAPTURE_STAGE_TILES } from '../src/player/werhd-jev-player.mjs';
 import { rememberSpecial, maintainSpecial, ESCORT_ARRIVE_TILES } from '../src/player/werhd-jev-special.mjs';
 import { parseObjective, matchesCapture, isGuardedByObjective } from '../src/player/werhd-jev-objective.mjs';
 import { catalog, T, u, infantry, world, home, brief } from './commander-world.mjs';
@@ -130,6 +130,26 @@ test('capture mission: with six units the column pushes beside the lab instead o
   assert.ok(!x.calls.some((c) => c[0] === 'attack' && c[2] === 1470));
   const few = world({ own: [...home(), ...tanks(10, CAPTURE_PUSH_UNITS - 2), engineer()], enemies: labBase(), credits: 2000 });
   assert.equal(groupsOf(few).groups.tactics.actions.objective_1470?.auto, undefined, 'four units: offered but not automatic');
+});
+
+// Not from jev-report-20261008-021015 after all: the 21 accepted "defend_base" there were mission
+// actions, and executeCandidate already refuses a defend mission with no threats — those turns still
+// had buildings. The squad path is the one that could report success while issuing no order at all:
+// baseRaiders() needs buildings to find a threat and the rally site needs a building to sit at.
+test('a squad told to defend a base that no longer exists is refused, not silently accepted', () => {
+  const bare = world({ own: tanks(70, 6), enemies: [], credits: 42 });
+  const squad = { id: 'S1', members: bare.api.units('self') };
+  const intent = { action: 'defend_base', members: new Set(), arrived: new Set(), x: 0, y: 0 };
+  const run = orderSquad(bare.api, catalog, bare.memory, squad, intent, true);
+  assert.equal(run.accepted, false, 'a base that is gone cannot be defended');
+  assert.equal(run.reason, 'no_base');
+  assert.equal(bare.calls.filter((c) => c[0] === 'move' || c[0] === 'attack').length, 0, 'and no order is issued while pretending to succeed');
+  assert.equal(intent.members.size, 0, 'no unit is locked into the mission');
+
+  // With buildings present the same order is still accepted, so the refusal is specific to the loss.
+  const alive = world({ own: [...home(), ...tanks(70, 6)], enemies: [], credits: 2000 });
+  const kept = orderSquad(alive.api, catalog, alive.memory, { id: 'S1', members: alive.api.units('self').filter((u) => u.type === T.Vehicle) }, { action: 'defend_base', members: new Set(), arrived: new Set() }, true);
+  assert.equal(kept.accepted, true, `an intact base still rallies its defenders: ${kept.reason ?? ''}`);
 });
 
 test('escorted capture: the engineer trails the column and goes in when the column arrives', () => {

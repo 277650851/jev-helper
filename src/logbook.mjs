@@ -77,7 +77,7 @@ export function eventEntry(e, at) {
   // The page's side of a commander turn: what was executed and why not. `executed` tells it apart
   // from the background's entry for the same turn.
   if (kind === 'command') return { ...base, executed: true, sourceTick: number(e.sourceTick), note: short(e.note, 400), orders: orderLines(e.results), rejected: orderLines(e.rejected), auto: orderLines(e.auto) };
-  if (kind === 'stale') return { ...base, currentTick: number(e.currentTick), latencyMs: number(e.latencyMs) };
+  if (kind === 'stale') return { ...base, currentTick: number(e.currentTick), latencyMs: number(e.latencyMs), budgetTicks: number(e.budgetTicks) };
   if (kind === 'start') return { ...base, maxDecisions: number(e.maxDecisions), policy: short(e.policy, 40) };
   if (kind === 'stop') return { ...base, reason: short(e.reason, 40) };
   if (kind === 'outcome') return { ...base, result: short(e.result, 24),

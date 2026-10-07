@@ -222,6 +222,18 @@ test('a slow chat model gets a longer timeout and more stale-tick room than Jev'
   const jevApp = createBackground(jev.c, {fetchImpl:async () => new Response('{}')}); await jevApp.ready; await jevApp.handle({type:'START', tabId:7}, extension);
   const jevStart = jevScripts.find(x => x.args?.[0] === 'start').args[1];
   assert.equal(jevStart.maxStaleTicks, undefined); assert.equal(jevStart.requestTimeoutMs, undefined);
+
+  // A local CPU model is slow in seconds too, and it used to be judged by its name instead: on
+  // 2026-10-08 it answered in 1.4-3.9 s at ~60 ticks/s, which is 244 ticks — past the 180 the page
+  // defaults to, so every reply was discarded (jev-report 023829: 102 decisions, 103 discarded).
+  const local = mockChrome({...openaiSettings, provider:'local', localBase:'http://127.0.0.1:8742/v1', localModel:'laya', localKey:''});
+  const localScripts = []; const lexec = local.c.scripting.executeScript;
+  local.c.scripting.executeScript = async x => { localScripts.push(x); return lexec(x); };
+  const localApp = createBackground(local.c, {fetchImpl:async () => new Response(JSON.stringify({answers:{tactics:{type:'choice',choice:'wait'}}, usage:{input_tokens:1, output_tokens:1}}))});
+  await localApp.ready; await localApp.handle({type:'START', tabId:7}, extension);
+  const localStart = localScripts.find(x => x.args?.[0] === 'start').args[1];
+  assert.equal(localStart.maxStaleTicks, 1200, 'a local CPU model gets room for a reply measured in seconds');
+  assert.equal(localStart.requestTimeoutMs, 23000, 'and the request is not aborted before the budget it was given');
 });
 
 test('a service that refuses a forced function call is retried once with tool_choice auto and remembered', async () => {
