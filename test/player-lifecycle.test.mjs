@@ -6,6 +6,8 @@ import {
   candidateGroups,
   attachJevPlayer,
   MAX_STALE_TICKS,
+  spreadInfantry,
+  splashOf,
 } from "../src/player/werhd-jev-player.mjs";
 
 const calls = [];
@@ -383,3 +385,34 @@ const oreApi = { map: { size: () => ({ width: 5, height: 5 }),
 assert.deepEqual(findVisibleOre(oreApi, { rx: 2, ry: 2 }), { rx: 3, ry: 2, landType: 9 });
 assert.equal(findVisibleOre({ map: { ...oreApi.map, tile: () => undefined } }, { rx: 2, ry: 2 }), undefined,
   'unrevealed ore cannot become a gather target');
+
+// V3 rockets and prism tanks hit everything around the target, so a clump of idle infantry is one
+// shot away from being wiped together. Idle infantry inside an enemy's blast reach step apart; the
+// one nearest the threat holds its ground.
+{
+  const moves = [];
+  const self = [10, 11, 12].map((id) => ({ id, name: 'GI', type: 3, isIdle: true, isDeployed: false, tile: { rx: 30, ry: 30 } }));
+  const enemies = [{ id: 70, name: 'V3', type: 7, tile: { rx: 34, ry: 30 } }];
+  const catalog = { GI: {}, V3: { weapon: { damage: 200, range: 8, ag: true, cellSpread: 2 } } };
+  const api = {
+    tick: () => 1000, ObjectType: { Infantry: 3, Vehicle: 7, Building: 2 },
+    units: (r) => r === 'enemy' ? enemies : self,
+    map: { tile: (x, y) => (x >= 0 && y >= 0 && x < 80 && y < 80 ? { rx: x, ry: y } : undefined) },
+    move: (ids, x, y) => moves.push([ids[0], x, y]),
+  };
+  assert.equal(splashOf(catalog.V3.weapon), 2, 'the blast radius is read from the rule');
+  assert.equal(splashOf({ range: 5 }), 0, 'a plain weapon has no blast');
+  const memory = {}, events = [];
+  const moved = spreadInfantry(api, catalog, memory, (e) => events.push(e));
+  assert.equal(moved.length, 2, 'the two that do not hold step apart from the clump');
+  assert.equal(events[0]?.kind, 'micro');
+  assert.equal(events[0]?.reply, 'spread');
+  const targets = moves.map(([, x, y]) => `${x},${y}`);
+  assert.equal(new Set(targets).size, targets.length, 'and they step to different tiles, not the same one');
+  assert.ok(moves.every(([, x, y]) => Math.hypot(x - 30, y - 30) >= 2), 'far enough that one blast cannot take both');
+  assert.deepEqual(spreadInfantry(api, catalog, memory, () => {}), [], 'the spread is not repeated every micro pass');
+  // Idle infantry out of reach, or already fighting, are left where they are.
+  enemies[0].tile = { rx: 90, ry: 90 };
+  assert.deepEqual(spreadInfantry(api, catalog, { lastSpread: -Infinity }, () => {}), [], 'no threat in reach, no move');
+  console.log('Splash spread: clustered idle infantry step apart inside an enemy blast radius');
+}

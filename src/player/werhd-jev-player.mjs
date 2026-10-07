@@ -1236,6 +1236,72 @@ export function findVisibleOre(api, origin) {
 // with nearby comrades, when it can hurt it, or steps out of its range when it cannot.
 export const THREAT_REPLY_TICKS = 60, THREAT_SQUAD_RADIUS = 6, THREAT_UNITS_PER_PASS = 32, THREAT_CANDIDATES = 6,
   THREAT_REPORT_TICKS = 150, FALL_BACK_TICKS = 450, DEFENSE_RUSH_SQUAD = 8, SIEGE_WANTED_TICKS = 1800;
+// Idle infantry closer than this to each other, inside an enemy's reach, are spread apart so one
+// rocket or prism shot cannot take the group. At most once per this many ticks.
+export const SPLASH_SPREAD_TILES = 2, SPLASH_SPREAD_TICKS = 30;
+// A blast weapon reaches beyond the unit it aims at: a V3 rocket, a prism tank, a Kirov's bombs.
+// The rules name that radius differently between builds, so several names are probed; when none is
+// found the caller still spreads idle infantry near any ground weapon rather than doing nothing.
+export const splashOf = (w) => {
+  if (!w) return 0;
+  for (const k of ['cellSpread', 'area', 'splash', 'spread', 'blast', 'blastRadius', 'areaRange']) {
+    const v = w[k];
+    if (Number.isFinite(v) && v > 0) return v;
+  }
+  return 0;
+};
+// Idle infantry standing within a couple of tiles of each other are one rocket away from being
+// wiped together. The one nearest the threat holds; the rest step out and apart. Units that are
+// fighting are left alone — they are not `isIdle`, and the assault layer owns them.
+export function spreadInfantry(api, catalog, memory, emit) {
+  // Best-effort micro: a game call that refuses while the battle is closing down must not end the
+  // autopilot, so any failure here is dropped instead of thrown.
+  try {
+  const tick = api.tick();
+  if (tick - (memory.lastSpread ?? -Infinity) < SPLASH_SPREAD_TICKS) return [];
+  const threats = (api.units('enemy') ?? []).map((e) => {
+    const r = catalog[e.name] ?? {};
+    const w = [r.weapon, r.secondary].find((x) => x && (x.damage ?? 0) > 0 && x.ag !== false);
+    return w ? { e, reach: (w.range ?? 0) + (splashOf(w) || 4) } : undefined;
+  }).filter(Boolean);
+  if (!threats.length) return [];
+  const squad = (api.units('self') ?? []).filter((u) =>
+    u.type === api.ObjectType.Infantry && u.isIdle && !u.isDeployed && !catalog[u.name]?.engineer);
+  if (squad.length < 2) return [];
+  const threatAt = (p) => threats.find((t) => Math.hypot(p.rx - t.e.tile.rx, p.ry - t.e.tile.ry) <= t.reach);
+  const clustered = squad.filter((u) => threatAt(u.tile) &&
+    squad.some((o) => o !== u && Math.hypot(o.tile.rx - u.tile.rx, o.tile.ry - u.tile.ry) < SPLASH_SPREAD_TILES));
+  if (!clustered.length) return [];
+  const seen = new Set(), moved = [];
+  for (const u of clustered) {
+    if (seen.has(u.id)) continue;
+    const group = [u, ...clustered.filter((o) => o !== u && !seen.has(o.id) &&
+      Math.hypot(o.tile.rx - u.tile.rx, o.tile.ry - u.tile.ry) < SPLASH_SPREAD_TILES)];
+    const t = threatAt(u.tile);
+    const hold = group.slice().sort((a, b) =>
+      Math.hypot(a.tile.rx - t.e.tile.rx, a.tile.ry - t.e.tile.ry) -
+      Math.hypot(b.tile.rx - t.e.tile.rx, b.tile.ry - t.e.tile.ry))[0];
+    // Fan the rest out around the one holding, on distinct bearings pointed away from the threat:
+    // stepping them all straight back would land them on the same tile and change nothing.
+    const away = Math.atan2(hold.tile.ry - t.e.tile.ry, hold.tile.rx - t.e.tile.rx);
+    const movers = group.filter((o) => o !== hold);
+    movers.forEach((o, i) => {
+      seen.add(o.id);
+      const a = away + (i - (movers.length - 1) / 2) * (Math.PI / 4);
+      const x = Math.round(hold.tile.rx + Math.cos(a) * SPLASH_SPREAD_TILES);
+      const y = Math.round(hold.tile.ry + Math.sin(a) * SPLASH_SPREAD_TILES);
+      if (!api.map.tile?.(x, y)) return;
+      api.move([o.id], x, y);
+      moved.push(o.id);
+    });
+    for (const o of group) seen.add(o.id);
+  }
+  if (!moved.length) return [];
+  memory.lastSpread = tick;
+  emit({ kind: 'micro', tick, description: `步兵散开：${moved.length} 个单位拉开间距，避免范围伤害`, ids: moved, reply: 'spread' });
+  return moved;
+  } catch { return []; }
+}
 export function respondToThreats(api, catalog, memory, emit, mobile, enemies, skip = new Set()) {
   const tick = api.tick(), Air = api.ZoneType?.Air ?? 1;
   memory.threatReplies ??= new Map(); memory.lastHealth ??= new Map(); memory.orders ??= new Map(); memory.fallBack ??= new Map();
@@ -1967,6 +2033,7 @@ export async function attachJevPlayer(api, options = {}) {
       accepted: status.accepted,
     });
   };
+  // A blast weapon reaches beyond the unit it aims at: a V3 rocket, a prism tank, a Kirov's bombs.
   const micro = () => {
     if (!status.running) return;
     lastMicroAt = performance.now();
@@ -2010,6 +2077,7 @@ export async function attachJevPlayer(api, options = {}) {
         emit({ kind: "error", tick: api.tick(), message: `指挥维持出错：${String(e?.message ?? e).slice(0, 200)}` });
       }
       maintainBattle(api, catalog, memory, emit);
+      spreadInfantry(api, catalog, memory, emit);
       placeReadyBuilding(api, catalog, memory, emit);
       updateCamera(api, catalog, memory, emit);
       if (api.tick() - lastObservationTick >= 60) {
