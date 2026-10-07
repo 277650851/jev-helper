@@ -76,6 +76,11 @@ test('the objective is offered whatever the force size, and a threatened base is
   groups = candidateGroups(raided.api, catalog, collectState(raided.api, catalog), raided.memory);
   assert.deepEqual(choices(groups.tactics).slice(0, 2), ['defend_base', 'objective_990']);
   assert.equal(groups.tactics.actions.objective_990.auto, undefined, 'not automatic while the base is under attack');
+  // ...but the assault options stay on offer behind it. Gating them on an unthreatened base meant a
+  // match under constant raids never attacked: jev-report-20261008-063613 chose "defend_base" 69
+  // times, never an assault, and lost the grind.
+  assert.ok(choices(groups.tactics).some(k => k.startsWith('assault_')),
+    'a ready force can still be sent at the enemy while the base is raided');
 });
 
 test('an English objective matches too; the target is remembered in the fog and dropped once destroyed', () => {

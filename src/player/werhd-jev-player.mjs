@@ -577,7 +577,11 @@ export function candidateGroups(api, catalog, snapshot, memory) {
   const scoutUnits=army.filter(u=>u.type===api.ObjectType.Infantry).sort((a,b)=>scoutScore(catalog[b.name])-scoutScore(catalog[a.name]));
   const bestScout=scoutUnits[0];
   if(bestScout)memory.scoutId=bestScout.id;
-  const needsScout=(!memory.enemyBuildings.size||memory.lastReady===false)&&!state.baseUnderAttack&&preferredScout&&
+  // A cheap fast scout is wanted while the enemy base is unknown or the force is not ready. A raid
+  // does not cancel it: the dog costs 200 and running it out is how the enemy base gets found at all.
+  // jev-report-20261008-063613 was answered "defend_base" 69 times and never trained a dog, because
+  // the constant attacks kept this false.
+  const needsScout=(!memory.enemyBuildings.size||memory.lastReady===false)&&preferredScout&&
     !scoutUnits.some(u=>u.name===preferredScout.name)&&!state.queues.some(q=>q.items.some(i=>i.name===preferredScout.name));
   const roles={antiInfantry:0,antiArmor:0};
   for(const u of scoutUnits)if(u.id!==memory.scoutId&&catalog[u.name]?.weapon?.range>=3)roles[infantryProfile(catalog[u.name],api).role]++;
@@ -865,7 +869,11 @@ export function candidateGroups(api, catalog, snapshot, memory) {
     if (captureMission) offered.sort((a, b) => Number(guardsObjective(b) && hitsGround(b)) - Number(guardsObjective(a) && hitsGround(a)));
     const unitRange = (u) => Math.max(0, ...[catalog[u.name]?.weapon, catalog[u.name]?.secondary]
       .filter((w) => w && w.ag !== false).map((w) => w.range ?? 0));
-    if (ready && !threatening.length)
+    // Assaults stay on offer while the base is under attack, after defend_base. Gating them on an
+    // unthreatened base meant a match under constant raids never attacked at all:
+    // jev-report-20261008-063613 answered "defend_base" 69 times and never chose an assault, then lost
+    // the grind. The micro layer intercepts base attackers on its own, so the column can push out.
+    if (ready)
       for (const enemy of offered) {
         // A standoff fortification fires first. Sending dogs or lone infantry at a Prism Tower they
         // cannot reach is a gift (jev-report-20261008-054847 fed E1/ADOG into one). The assault stays
@@ -896,7 +904,7 @@ export function candidateGroups(api, catalog, snapshot, memory) {
           },
         );
       }
-    if (!structures.length && ready && !threatening.length && memory.enemyBuildings.size && !objectiveTarget) {
+    if (!structures.length && ready && memory.enemyBuildings.size && !objectiveTarget) {
       const known = [...memory.enemyBuildings.values()][0];
       tactics(
         "assault_known_base",
