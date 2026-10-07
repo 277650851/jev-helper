@@ -118,6 +118,38 @@ assert.equal(baseThreats(api,catalog,[own[0],forwardBuilding],[distantEnemy]).le
   'the same unit approaching the actual base still triggers interception');
 console.log('Base perimeter: forward garrisons do not replace core infrastructure');
 
+// A harvester is a Vehicle, so it was never in `buildings` and an enemy shooting at one left
+// baseUnderAttack false. Harvesters are the only income and both sides open by killing them, so
+// jev-report 20261008-021015 lost its last miner with the base reported as safe for 50 decisions.
+{
+  const home=[own[0]], miners=own.filter(u=>catalog[u.name]?.harvester);
+  assert.equal(miners.length,3,'the fixture has miners to defend');
+  // Clear of the yard at (30,30) but among the miners at (32,45). The fixture raised SIEGE's range to
+  // 25 above, so 32 tiles from the yard is out of reach while 17 tiles from a miner is not.
+  const minerRaider=unit(122,'SIEGE',7,34,62);
+  const savedRaiders=enemies; enemies=[...enemies,minerRaider];
+  assert.equal(baseThreats(api,catalog,home,[minerRaider]).length,0,
+    'without the miner argument the attack is invisible, which is the bug');
+  assert.equal(baseThreats(api,catalog,home,[minerRaider],miners).length,1,
+    'an enemy shooting at a harvester near the base is a threat to the economy');
+  // A miner off working a distant field must not drag the perimeter out to the ore.
+  const farMiners=miners.map(m=>({...m,tile:{rx:70,ry:70}}));
+  assert.equal(baseThreats(api,catalog,home,[minerRaider],farMiners).length,0,
+    'a harvester at a distant field does not redefine where the base is');
+  // And the state flag the extension actually acts on follows.
+  const mineSnap=collectState(api,catalog);
+  assert.equal(mineSnap.state.baseUnderAttack,true,
+    'baseUnderAttack must report an attack on the harvesters');
+  assert.equal(collectState(api,catalog).state.harvesters,3,'miners are still counted');
+  // Same picture without any miner at all: the raider still reaches the refinery at (30,40), so the
+  // flag stays true for that reason alone. The miner contribution is what the two assertions above
+  // isolate, by passing `home` as the only defended structure.
+  const savedOwn=own; own=own.filter(u=>!catalog[u.name]?.harvester);
+  assert.equal(collectState(api,catalog).state.harvesters,0,'the miners really are gone');
+  own=savedOwn; enemies=savedRaiders;
+  console.log('Miner defense: harvesters are economic infrastructure, a distant field is not the base');
+}
+
 // Battle 25: the first armed enemy was a building on an inaccessible lowland tile.
 // Engaging mobile units must retain an object target; idle retries must not aim at occupied cells.
 const remoteBuilding=unit(130,'SHORT_TOWER',2,70,70),remoteTank=unit(131,'BASIC',7,65,70);
@@ -159,3 +191,6 @@ const escort=unit(430,'AA',7,62,70),flyer={...soft,id:303,zone:1};
 assert.equal(combatTargetScore(api,catalog,escort,soft),0,'AA-only weapons cannot target ground');
 assert.ok(combatTargetScore(api,catalog,escort,flyer)>0);
 console.log('Combat targets: armor matchups, support roles, deployment and air/ground eligibility passed');
+
+
+

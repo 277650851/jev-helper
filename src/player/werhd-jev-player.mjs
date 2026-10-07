@@ -39,6 +39,7 @@ export function collectState(api, catalog) {
     inventory[unit.name].count++;
   }
   const buildings = units.filter((u) => u.type === api.ObjectType.Building);
+  const miners = units.filter((u) => catalog[u.name]?.harvester);
   const army = units.filter(
     (u) =>
       u.type !== api.ObjectType.Building &&
@@ -88,7 +89,7 @@ export function collectState(api, catalog) {
       deployedCombatCount: army.filter((u) => u.isDeployed).length,
       antiAirCount: army.filter((u) => activeWeapons(u, catalog).some(w=>w.aa)).length,
       harvesters: units.filter((u) => catalog[u.name]?.harvester).length,
-      baseUnderAttack: baseThreats(api, catalog, buildings, enemies).length > 0,
+      baseUnderAttack: baseThreats(api, catalog, buildings, enemies, miners).length > 0,
       visibleEnemyCount: enemies.length,
       visibleEnemies: enemies.slice(0, 24).map(unitSummary),
       army: army.slice(0, 24).map(unitSummary),
@@ -740,6 +741,13 @@ export function candidateGroups(api, catalog, snapshot, memory) {
   const threatening = baseThreats(api, catalog, buildings, enemies).sort((a,b) =>
     Number(buildings.some(u=>canFireAt(api,catalog,b,u))) - Number(buildings.some(u=>canFireAt(api,catalog,a,u))) ||
     (combatWeapon(b,catalog).range??0)-(combatWeapon(a,catalog).range??0));
+  const minerThreats = baseThreats(api, catalog, buildings, enemies,
+    units.filter(u => catalog[u.name]?.harvester));
+  if (minerThreats.length && !threatening.length) {
+    // An enemy shooting at a harvester is an economic attack even though nothing near the buildings
+    // is in range: without that income the match is already lost.
+    threatening.push(...minerThreats);
+  }
   if (active.length) {
     const ids = active.map((u) => u.id);
     // The objective is offered whatever the force size: the player asked for it. It comes first,
@@ -1071,7 +1079,8 @@ export function executeCandidate(api, action, catalog) {
   if (action.type === "mission") {
     if (action.mode === "defend") {
       const own = api.units('self');
-      const threats = baseThreats(api, catalog, own.filter(u=>u.type===api.ObjectType.Building), api.units('enemy'));
+      const threats = baseThreats(api, catalog, own.filter(u=>u.type===api.ObjectType.Building), api.units('enemy'),
+        own.filter(u=>catalog[u.name]?.harvester));
       threats.sort((a,b)=>Number(b.id===action.targetId)-Number(a.id===action.targetId));
       if (!threats.length) return { accepted: false, reason: 'base_threat_changed' };
       const ids = [], undeployIds = [];
@@ -1290,7 +1299,8 @@ export function maintainBattle(api, catalog, memory, emit) {
   const living = new Set(own.map((u) => u.id));
   const mission = memory.mission;
   const defending = mission?.mode === 'defend';
-  const defenseThreats = defending ? baseThreats(api, catalog, own.filter(u=>u.type===api.ObjectType.Building), enemies) : [];
+  const defenseThreats = defending ? baseThreats(api, catalog, own.filter(u=>u.type===api.ObjectType.Building), enemies,
+    own.filter(u=>catalog[u.name]?.harvester)) : [];
   memory.deploymentStates ??= new Map();
   for (const u of mobile)
     if (typeof u.isDeployed === "boolean") {

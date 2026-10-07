@@ -122,6 +122,35 @@ snap=collectState(api,catalog);groups=candidateGroups(api,catalog,snap,{});
 assert.notEqual(snap.state.strategy.investment?.name,'MINER','a queued refinery already supplies the missing miner');
 assert.ok(!groups.vehicles.actions.produce_MINER);
 api.production.queues=idleQueues;
+
+// jev-report 20261008-021015: credits reached 0 with the vehicle queue holding HOWI/BGGY/CHAR and the
+// last miner still alive, so the miner was never queued; it died shortly after and the match could
+// not earn another credit. The old gate was `credits >= Math.min(500, cost)` — one credit short of
+// a 1400-credit miner and it would never be offered — and `!underPressure` let the miner rank below
+// the army exactly when the economy was collapsing.
+{
+  own=own.filter(u=>u.name!=='MINER');own.push(u(50,'YARD',2),u(51,'REF',2));offered[3].push('MINER');
+  enemies=[u(100,'ENEMY',7,42,30),u(101,'ENEMY',7,43,30),u(102,'ENEMY',7,43,31)];
+  credits=1399;   // one short of the miner, and nothing left over for anything else
+  let s=collectState(api,catalog);let g=candidateGroups(api,catalog,s,{});
+  assert.equal(s.state.harvesters,0,'the fixture really has lost every miner');
+  assert.equal(s.state.strategy.recovery,true,'losing every miner is an income outage, not a build choice');
+  assert.equal(s.state.strategy.reserve,1400,'the price of a replacement is held back from the army');
+  assert.ok(g.vehicles.actions.produce_MINER,'the replacement is offered, since it is the only income left');
+  assert.equal(g.vehicles.actions.produce_MINER.cost,1400,'and it is offered at its real price');
+  assert.ok(!g.vehicles.actions.produce_TANK,'no armor while the price of a miner is being held back');
+  credits=1400;
+  s=collectState(api,catalog);g=candidateGroups(api,catalog,s,{});
+  assert.ok(g.vehicles.actions.produce_MINER,
+    'with no miner at all, enough to buy one must buy one, even while the base is attacked');
+  assert.match(g.vehicles.instructions,/ECONOMY FIRST/);
+  assert.doesNotMatch(g.vehicles.criteria.produce_MINER,/Build-up deficit/,'a miner is not a combat unit');
+  // One miner present again: the outage is over and the reserve is released.
+  own.push({...u(61,'MINER',7),isIdle:false});credits=3000;
+  s=collectState(api,catalog);g=candidateGroups(api,catalog,s,{});
+  assert.notEqual(s.state.strategy.recovery,true,'a surviving miner ends the recovery state');
+  console.log('Broken income: the last miner outranks the army and is queued as soon as it is affordable');
+}
 enemies=[u(100,'ENEMY',7,42,30),u(101,'ENEMY',7,43,30),u(102,'ENEMY',7,43,31)];
 snap=collectState(api,catalog);groups=candidateGroups(api,catalog,snap,{});
 assert.notEqual(snap.state.strategy.investment?.name,'MINER','immediate pressure must retain defensive priority');

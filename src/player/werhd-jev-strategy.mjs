@@ -58,9 +58,22 @@ export function canFireAt(api, catalog, attacker, target) {
   return weapons.some(w => d <= (w.range ?? 0) && d >= (w.minRange ?? 0));
 }
 
-export function baseThreats(api, catalog, buildings, enemies) {
+// A harvester is a vehicle, not a building, so it never appeared in `buildings` and an enemy shooting
+// at one did not make `baseUnderAttack` true. That is the standard opening in Red Alert 2: the
+// harvesters are the only income and both sides open by killing them (jev-report 20261008-021015 lost
+// its last one with `baseUnderAttack` staying false for 50 of the decisions that followed). A miner
+// near the base therefore counts as core infrastructure to defend.
+const MINER_DEFENSE_RADIUS = 22;
+
+export function baseThreats(api, catalog, buildings, enemies, harvesters = []) {
   const core = buildings.filter(b => !catalog[b.name]?.wall && !catalog[b.name]?.tickTank && !b.garrison);
-  return enemies.filter(e => e.primaryWeapon && core.some(b =>
+  // Only a miner close to the base counts. A harvester working a distant field is doing its job, and
+  // treating it as the economic base would move the perimeter out to the ore and leave the base
+  // undefended (the forward-garrison rule below).
+  const home = core.length ? core[0].tile : undefined;
+  const nearMiners = harvesters.filter(h => home && dist(h.tile, home) < MINER_DEFENSE_RADIUS);
+  const defended = core.concat(nearMiners);
+  return enemies.filter(e => e.primaryWeapon && defended.some(b =>
     weaponEffectiveness(currentWeapon(e, catalog), [b], catalog, api) > 0 &&
     (dist(e.tile, b.tile) < 18 || canFireAt(api, catalog, e, b))));
 }
@@ -135,7 +148,7 @@ export function assessStrategy(api, catalog, snapshot, memory) {
   const { units, buildings, enemies, base } = snapshot.raw;
   const state = snapshot.state, tick = api.tick();
   const core = buildings.filter(b => !catalog[b.name]?.wall && !catalog[b.name]?.tickTank && !b.garrison);
-  const threats = baseThreats(api, catalog, core, enemies);
+  const threats = baseThreats(api, catalog, core, enemies, units.filter(u => catalog[u.name]?.harvester));
   const defenders = units.filter(u => u.primaryWeapon && !catalog[u.name]?.harvester && base && dist(u.tile, base.tile) < 24);
   memory.pressure ??= { since: tick, lastThreatTick: -10000 };
   const history = memory.pressure;
@@ -219,7 +232,7 @@ export function investmentGroups(api, catalog, snapshot, memory, groups) {
   // Replace generic wall-first choices with actual counter-weapons and a firing position.
   const dg = groups.defenses = { instructions: 'Counter attackers only with static weapons that can reach them from the supplied legal site. Compare enemy and friendly range: a shorter-range tower is not a counter to a standoff attacker. Use mobile interception or technology when no static counter can reach. Reserve power; walls do not solve a range disadvantage.', criteria: { wait: 'Wait when existing defenses cover the threat or when no effective defense can reach it.' }, actions: { wait: { type: 'wait' } } };
   const defenseUnits = buildings.filter(u => catalog[u.name]?.isBaseDefense && !catalog[u.name]?.wall);
-  const attackers = baseThreats(api, catalog, buildings, enemies);
+  const attackers = baseThreats(api, catalog, buildings, enemies, units.filter(u => catalog[u.name]?.harvester));
   const defenseTargets = strategy.underPressure ? attackers : [];
   const targetDefenses = strategy.underPressure ? (strategy.suppressed ? 6 : 3) : 1;
   let defensePlan, coverage = 0;
@@ -258,11 +271,23 @@ export function investmentGroups(api, catalog, snapshot, memory, groups) {
   const armorCount = units.filter(u => u.type === api.ObjectType.Vehicle && catalog[u.name]?.category === 'AFV' && !catalog[u.name]?.harvester).length;
   const incomingMiners = s.queues.reduce((n, q) => n + q.items.reduce((sum, i) => sum + (catalog[i.name]?.harvester || catalog[i.name]?.refinery ? i.quantity : 0), 0), 0);
   const economyDeficit = Math.max(0, (s.economy?.targetMiners ?? 3) - s.harvesters - incomingMiners);
-  const miner = economyDeficit && !strategy.underPressure && s.economy?.factories && free(api.QueueType.Vehicles)
+  // A missing miner outranks everything else, including fighting back: the harvesters are the only
+  // income, so without one the credits can never rise again and nothing built afterwards can be paid
+  // for. jev-report 20261008-021015 is what the alternative looks like — credits fell to 0 with
+  // HOWI/BGGY/CHAR filling the vehicle queue, and the match then ended with 21,065 credits that
+  // could not be spent and no way to earn more.
+  const minerUrgent = s.harvesters === 0 && economyDeficit > 0;
+  // While the base is contested the usual target is relaxed, but with no miner at all the economy
+  // plan is the defence: an army that cannot be paid for cannot hold anything.
+  const miner = economyDeficit && (minerUrgent || !strategy.underPressure) && s.economy?.factories && free(api.QueueType.Vehicles)
     ? api.production.available(api.QueueType.Vehicles).find(i => catalog[i.name]?.harvester) : undefined;
   const economyPlan = miner && { name: miner.name, cost: catalog[miner.name].cost, queue: api.QueueType.Vehicles };
-  if (economyPlan && s.self.credits >= Math.min(500, economyPlan.cost)) {
-    add(groups.vehicles, { ...miner, queue: api.QueueType.Vehicles }, 'ECONOMY FIRST: complete the miner target before discretionary technology and army expansion', Math.min(500, economyPlan.cost));
+  // Enough to pay for the miner is enough. The old floor of 500 was read as "save up to 500 first",
+  // which meant that a harvester costing more than the credits on hand was never queued at all.
+  if (economyPlan && s.self.credits >= economyPlan.cost) {
+    add(groups.vehicles, { ...miner, queue: api.QueueType.Vehicles },
+      `ECONOMY FIRST: ${s.harvesters} miners present against a target of ${s.economy?.targetMiners ?? 3}. Harvesters are the only income, so complete this before any other production`,
+      economyPlan.cost);
   }
   const standoff = attackers.filter(e => strategy.rangeThreats.some(t => t.id === e.id));
   const mobileCount = units.filter(u => u.type === api.ObjectType.Vehicle && u.primaryWeapon && !catalog[u.name]?.harvester && !catalog[u.name]?.naval && catalog[u.name]?.category !== 'AirPower').length;
