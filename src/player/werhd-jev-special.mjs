@@ -1,4 +1,4 @@
-import { isAirSupport } from './werhd-jev-strategy.mjs';
+import { isAirSupport, effectiveness } from './werhd-jev-strategy.mjs';
 import { isCapturable } from './werhd-jev-catalog.mjs';
 export const ATTACK_STUCK_TICKS = 2700, CAPTURE_RESENDS = 3, SIEGE_RANGE = 8, BASE_GARRISON_SPARE = 8;
 // Leaving a building once its job is done: no armed enemy within RELEASE_RADIUS for this long.
@@ -168,9 +168,21 @@ export function specialGroups(api, catalog, snapshot, memory, groups) {
   for (const vehicle of units.filter((u) => u.transport && idle(u, memory, tick))) {
     const r = catalog[vehicle.name];
     if (!r) continue;
-    if (vehicle.transport.occupied < vehicle.transport.capacity && !(r?.gunner && snapshot.state.airThreatCount) && distance(vehicle.tile, base.tile) < 14) {
-      const passenger = infantry.find((u) => idle(u, memory, tick) && u.id !== memory.scoutId && distance(u.tile, vehicle.tile) < 8
-        && (catalog[u.name]?.size ?? 1) <= r.sizeLimit && (catalog[u.name]?.size ?? 1) <= vehicle.transport.capacity);
+    // Crew an empty transport wherever it stands, not only at the base. A gunner vehicle (the
+    // multi-purpose IFV) takes its weapon from the passenger, so crewing it at the front is how its
+    // firepower, damage and range actually change; the passenger is the one that suits what is
+    // visible, not simply the first idle infantry. An armed IFV is left alone while aircraft are
+    // around: its own weapon is the anti-air one, and crewing it would trade that away.
+    const crewing = vehicle.transport.occupied < vehicle.transport.capacity
+      && !(r?.gunner && snapshot.state.airThreatCount)
+      && (distance(vehicle.tile, base.tile) < 14 || !!memory.mission);
+    if (crewing) {
+      const fits = (u) => idle(u, memory, tick) && u.id !== memory.scoutId && distance(u.tile, vehicle.tile) < 10
+        && (catalog[u.name]?.size ?? 1) <= r.sizeLimit && (catalog[u.name]?.size ?? 1) <= vehicle.transport.capacity;
+      const candidates = infantry.filter(fits);
+      const passenger = r.gunner
+        ? [...candidates].sort((a, b) => effectiveness(catalog[b.name], enemies, catalog, api) - effectiveness(catalog[a.name], enemies, catalog, api))[0]
+        : candidates[0];
       if (passenger)
         transport(`load_${vehicle.id}`, shore && !memory.enemyBuildings?.size && !r.gunner
           ? `Load infantry #${passenger.id} into ${r.label} #${vehicle.id} to cross the water and search the far shore (${shore.x},${shore.y}); the enemy base has never been found.`

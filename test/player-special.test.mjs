@@ -100,6 +100,23 @@ specialGroups(api, catalog, snapshot, memory, guarded);
 assert.ok(!Object.values(guarded.engineering.actions).some((a) => a.kind === 'demolish_bridge'), 'never demolish beneath friendlies');
 assert.ok(!Object.values(guarded.transport.actions).some((a) => a.kind === 'load' && a.targetId === 30), 'do not remove AA from escort IFVs during air attack');
 
+// A multi-purpose IFV takes its weapon from its passenger, so it is crewed with the unit that suits
+// the visible enemy and can be crewed out with the army rather than only beside the base.
+// jev-report-20261008-054847 built IFVs (produce_FV) and never put anyone in one.
+{
+  const air = snapshot.state.airThreatCount; snapshot.state.airThreatCount = 0;
+  const ifv = own.find((u) => u.id === 30), gi = own.find((u) => u.id === 10);
+  const savedIfv = { ...ifv.tile }, savedGi = { ...gi.tile }, savedEnemy = { ...enemy.tile };
+  const savedOccupied = ifv.transport.occupied; ifv.transport.occupied = 0;
+  ifv.tile = { rx: 22, ry: 22 }; gi.tile = { rx: 22, ry: 23 }; enemy.tile = { rx: 24, ry: 22 };
+  const field = {};
+  specialGroups(api, catalog, snapshot, { mission: { ids: [30], x: 24, y: 22 } }, field);
+  const load = Object.values(field.transport?.actions ?? {}).find((a) => a.kind === 'load' && a.targetId === 30);
+  assert.ok(load, 'an emptied IFV is crewed in the field, not only beside the base');
+  ifv.tile = savedIfv; gi.tile = savedGi; enemy.tile = savedEnemy;
+  ifv.transport.occupied = savedOccupied; snapshot.state.airThreatCount = air;
+}
+
 // Effective runtime rules win over a stale static catalog, including map-specific costs.
 const runtimeRule = { name: 'JET', type: 1, factory: 0, buildCat: 0, armor: 0, cost: 777,
   primary: { damage: 55, versus: { 0: 1, 5: 0.2 } }, prerequisite: [] };
