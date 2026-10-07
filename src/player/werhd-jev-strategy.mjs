@@ -144,9 +144,15 @@ export function chooseRallySite(api,catalog,own,base,preferred=base?.tile) {
     const tile=api.map.tile(p.rx,p.ry);
     if(!tile||![api.LandType?.Clear??0,api.LandType?.Road??1,api.LandType?.Rough??4].includes(tile.landType))continue;
     if(buildings.some(b=>dist(p,b.tile)<5)||!trafficClearance(p,buildings,own,catalog))continue;
-    points.push({x:p.rx,y:p.ry,score:dist(p,preferred)+dist(p,base.tile)*.1+own.filter(u=>dist(p,u.tile)<3).length});
+    let inDanger=false;
+    for(const e of api.units('enemy') ?? []){
+      const r=catalog[e.name] ?? {}, w=[r.weapon,r.secondary].find(x=>x&&(x.damage??0)>0&&x.ag!==false);
+      if(w && dist({rx:p.rx,ry:p.ry},e.tile) <= (w.range ?? 0)) inDanger=true;
+    }
+    points.push({x:p.rx,y:p.ry,score:dist(p,preferred)+dist(p,base.tile)*.1+own.filter(u=>dist(p,u.tile)<3).length,danger:inDanger});
   }
-  return points.sort((a,b)=>a.score-b.score)[0];
+  const safePoints=points.filter(p=>!p.danger);
+  return (safePoints.length?safePoints:points).sort((a,b)=>a.score-b.score)[0];
 }
 
 export function assessStrategy(api, catalog, snapshot, memory) {

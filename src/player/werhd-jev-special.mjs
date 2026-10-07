@@ -321,16 +321,19 @@ export function specialGroups(api, catalog, snapshot, memory, groups) {
         addProduction(defenses, { ...item, queue: api.QueueType.Armory }, r.wall ? 'Build a wall segment to screen a vulnerable approach, leaving a passage' : 'Build a defensive strongpoint');
     }
   }
-  // Technology is proposed in the existing construction category, keeping one queue owner.
-  if (snapshot.state.economy?.factories && snapshot.state.harvesters >= 3 && freeQueue(api.QueueType.Structures)) {
+  // Technology is proposed in the existing construction category, keeping one queue owner. The
+  // war factory is built, so technology should follow; waiting for three miners never happens in a
+  // tight game and the air field is then missed entirely. One harvester and one factory are enough
+  // to start the tech line, and the option is tagged auto so it is queued even if the model waits.
+  if (snapshot.state.economy?.factories && snapshot.state.harvesters >= 1 && freeQueue(api.QueueType.Structures)) {
     for (const item of api.production.available(api.QueueType.Structures)) {
       const r = catalog[item.name];
-      if (!r || !afford(r, 1500) || buildings.some((u) => u.name === item.name)) continue;
+      if (!r || !afford(r, 1000) || buildings.some((u) => u.name === item.name)) continue;
       if (isAirSupport(r))
-        addProduction(group('construction', ''), { ...item, queue: api.QueueType.Structures }, 'Build aircraft support to enable air strikes');
+        addProduction(group('construction', ''), { ...item, queue: api.QueueType.Structures }, 'Build aircraft support to enable air strikes', undefined, { auto: 2 });
       if (r.naval && r.factory === 'NavalUnitType' && water.length) {
         const placement = water.find((p) => api.canPlace(item.name, p.x, p.y));
-        if (placement) addProduction(group('construction', ''), { ...item, queue: api.QueueType.Structures }, 'Build a naval yard on the revealed shore', placement);
+        if (placement) addProduction(group('construction', ''), { ...item, queue: api.QueueType.Structures }, 'Build a naval yard on the revealed shore', placement, { auto: 2 });
       }
     }
   }
