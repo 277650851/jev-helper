@@ -27,7 +27,10 @@ if(window.__werhdJevExtension?.version!==VERSION){
   });
   function availability() {
     try{
-      const a=window.werhd;if(!a)return {available:false,error:'请先进入一场正在运行的对局。'};
+      // One absence, two causes the page cannot tell apart: the match has not started yet, or this
+      // game build never exposes the public API at all. Both are covered here instead of guessing,
+      // because guessing wrong would tell a lobby visitor their game version is unsupported.
+      const a=window.werhd;if(!a)return {available:false,error:'未检测到玩家 API。若尚未进入对局，请先开始一局；若已在对局中，说明该游戏版本缺少所需玩家 API。'};
       const me=a.me();a.tick();
       if(!me?.combatant || me.isObserver || me.defeated)return {available:false,error:'当前是观察者、已战败或尚未进入对局，无法托管。'};
       if(typeof a.rules!=='function' || typeof a.order!=='function')return {available:false,error:'此游戏版本缺少所需玩家 API，请使用已支持的在线版本。'};

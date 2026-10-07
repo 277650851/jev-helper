@@ -14,6 +14,52 @@ test('API configuration accepts a base/full endpoint, confines plaintext to loop
   assert.equal('apiKey' in publicSettings(validateSettings({apiKey:'test-only-secret'})),false);
   assert.equal(supportedGame('https://ra2web.github.io/'),true);assert.equal(supportedGame('https://ra2web.github.io.evil.test/'),false);
 });
+test('a missing player API explains both causes instead of blaming the match',async()=>{
+  const fs=await import('node:fs/promises');
+  const page=await fs.readFile('src/page.mjs','utf8');
+  const {errorText}=await import('../src/i18n.mjs');
+  // The page sees one state — no window.werhd — with two causes it cannot separate: the match has
+  // not started, or this build never ships the public API. So the message has to name both;
+  // telling a lobby visitor their game version is unsupported would be wrong on every site.
+  const m=/error:'([^']*玩家 API[^']*)'/.exec(page);
+  assert.ok(m,'the no-API message names the API');
+  const message=m[1];
+  assert.match(message,/尚未进入对局/,message);
+  assert.match(message,/缺少所需玩家 API/,message);
+  assert.doesNotMatch(message,/请先进入一场正在运行的对局。$/,'not the old lobby-only wording');
+  // Every message the page can return has to be translatable, or English users see Chinese.
+  for(const text of [...page.matchAll(/error:'([^']+)'/g)].map(x=>x[1])){
+    assert.ok(errorText('en',text),`missing English translation: ${text}`);
+    assert.doesNotMatch(errorText('en',text),/[\u3400-\u9fff]/,`English text still has Chinese: ${text}`);
+  }
+});
+
+test('the popup title names the selected model source instead of always saying Jev',async()=>{
+  const {messages,t}=await import('../src/i18n.mjs');
+  // Both the browser tab title and the header use this key, with the source's name substituted.
+  for(const pair of [messages.title,messages.helpTitle]){
+    const [zh,en]=pair;
+    assert.ok(zh.includes('{name}')&&en.includes('{name}'),'the name is a placeholder, not a literal');
+    assert.ok(!/Jev 对局托管|Let Jev play/.test(zh+en),'no provider name is baked into the text');
+  }
+  assert.equal(t('zh-CN','title',{name:'Laya'}),'Laya 对局托管');
+  assert.equal(t('en','title',{name:'OpenAI'}),'OpenAI Autopilot');
+  assert.equal(t('zh-CN','helpTitle',{name:'Laya'}),'把当前对局交给 Laya。');
+  // Every provider name in shared.mjs has to read naturally in the title.
+  const {activeProvider,validateSettings}=await import('../src/shared.mjs');
+  for(const provider of ['jev','local','openai']){
+    const {name}=activeProvider(validateSettings({provider}));
+    const text=t('en','title',{name});
+    assert.ok(text.endsWith(' Autopilot'),text);
+    assert.ok(!text.includes('{name}'),text);
+  }
+  // The built pages must not ship a hard-coded Jev heading any more.
+  const popup=await (await import('node:fs/promises')).readFile('dist/popup.js','utf8');
+  assert.doesNotMatch(popup,/['"`]Jev 对局托管['"`]/,'the popup builds the title from the provider');
+  const help=await (await import('node:fs/promises')).readFile('dist/help.js','utf8');
+  assert.doesNotMatch(help,/['"`]Jev 对局托管['"`]/,'the help page builds the title from the provider');
+});
+
 test('every game host is accepted over https only, and the manifest asks for exactly those',async()=>{
   const fs=await import('node:fs/promises');
   const manifest=JSON.parse(await fs.readFile('public/manifest.json','utf8'));

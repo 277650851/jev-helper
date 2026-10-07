@@ -71,9 +71,15 @@ const rpc=async message=>{const r=await chrome.runtime.sendMessage(message);if(!
 const format=n=>typeof n==='number'&&Number.isFinite(n)?Math.round(n).toLocaleString(config.language):'—';
 function notice(text,success=false,key,vars){noticeState={text,success,key,vars};$('notice').textContent=key?tr(key,vars):errorText(config.language,text);$('notice').classList.toggle('success',success);$('notice').hidden=!text&&!key;}
 const notify=(key,success=false,vars)=>notice('',success,key,vars);
+// The header names the model source that will actually play, so it follows the saved choice.
+function applyTitle(){
+ const text=tr('title',{name:providerName()});
+ document.title=text;
+ const h=document.querySelector('h1[data-i18n="title"]');if(h)h.textContent=text;
+}
 function translate(){
- document.documentElement.lang=config.language;document.title=tr('title');
- for(const e of document.querySelectorAll('[data-i18n]'))e.textContent=tr(e.dataset.i18n);
+ document.documentElement.lang=config.language;applyTitle();
+ for(const e of document.querySelectorAll('[data-i18n]'))e.textContent=e.dataset.i18n==='title'?document.title:tr(e.dataset.i18n,{name:providerName()});
  $('lang-en').setAttribute('aria-pressed',config.language==='en');$('lang-zh').setAttribute('aria-pressed',config.language!=='en');
  $('official-site').href=officialWebsiteUrl(config.language);$('official-site').title=tr('officialWebsiteHint');
  $('help-link').href=`help.html?lang=${config.language}`;
@@ -120,7 +126,7 @@ function displayConfig(){
  $('api-base').value=config.apiBase;$('model').value=config.model;$('local-base').value=config.localBase;$('local-model').value=config.localModel;
  $('openai-base').value=config.openaiBase??DEFAULTS.openaiBase;$('openai-key').value=config.openaiKey??'';$('openai-mode').value=config.openaiMode==='json'?'json':'tools';$('strategy-mode').value=config.strategyMode==='commander'?'commander':'choices';models=config.openaiModels??[];renderModels(config.openaiModel);
  // Stored keys are shown masked; the eye button reveals them on demand.
- $('api-key').value=config.apiKey??'';$('local-key').value=config.localKey??'';$('objective').value=config.objective??'';showProvider(config.provider);renderPlaintextWarnings();renderAllowedHosts();$('hotkey').value=config.hotkey;$('budget').value=config.maxDecisions;$('auto-camera').checked=config.autoCamera;$('show-overlay').checked=config.showOverlay;$('auto-report').checked=config.autoReport!==false;keyPlaceholder();
+ $('api-key').value=config.apiKey??'';$('local-key').value=config.localKey??'';$('objective').value=config.objective??'';showProvider(config.provider);renderPlaintextWarnings();renderAllowedHosts();$('hotkey').value=config.hotkey;$('budget').value=config.maxDecisions;$('auto-camera').checked=config.autoCamera;$('show-overlay').checked=config.showOverlay;$('auto-report').checked=config.autoReport!==false;keyPlaceholder();applyTitle();
 }
 function renderAwareness(s){
  const o=s.observation;$('awareness').hidden=!o;$('no-battle').hidden=!!o;
