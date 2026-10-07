@@ -299,9 +299,11 @@ assert.ok(!groups.construction.actions.produce_AIRFIELD,'six vehicles cannot be 
 credits=200;snap=collectState(api,catalog);groups=candidateGroups(api,catalog,snap,{});
 assert.equal(snap.state.strategy.investment.name,'TANK','the plan exists before enough starting cash arrives');
 assert.equal(snap.state.decisionReadiness.vehicles.waitingSupported,true);
-// 0.6.0: no enemy is in sight, so no defense question exists at all (checked positively); the protected
-// army investment itself is asserted just above.
-assert.equal(groups.defenses,undefined,'no base threat: the defense question is not asked');
+// No enemy is in sight. The defense question is still asked while the base sits below its defensive
+// floor with a barracks standing (one turret exists, three are wanted), but the protected army
+// investment is not disturbed: it is asserted just above and the turret is filtered by its reserve.
+assert.ok(groups.defenses,'a barracks below the defensive floor keeps asking for a turret');
+assert.ok(!groups.defenses.actions.produce_GUN,'the reserved tank budget is not spent on another turret');
 credits=250;snap=collectState(api,catalog);groups=candidateGroups(api,catalog,snap,{});
 assert.ok(groups.vehicles.actions.produce_TANK,'the same reserved unit becomes executable when starting cash arrives');
 assert.equal(snap.state.decisionReadiness.vehicles.waitingSupported,false);

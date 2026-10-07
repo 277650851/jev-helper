@@ -4,6 +4,9 @@ const hp = u => (u.hitPoints ?? 100) / (u.maxHitPoints || 100);
 export const isAirSupport = r => r?.factory === 'AircraftType';
 export const ATTACK_FORCE_SIZE = 8;
 export const ATTACK_AA_ESCORTS = 2;
+// Base defenses to hold once a barracks exists, before the army is large enough to matter. Both
+// sides open by raiding, and a bare base loses its miners and its build orders to the first raid.
+export const MIN_BASE_DEFENSES = 3;
 
 // Planning and the model share this eligibility set, even before starting cash arrives.
 export function vehicleOptions(api, catalog, state) {
@@ -232,10 +235,16 @@ export function investmentGroups(api, catalog, snapshot, memory, groups) {
   // Replace generic wall-first choices with actual counter-weapons and a firing position.
   const dg = groups.defenses = { instructions: 'Counter attackers only with static weapons that can reach them from the supplied legal site. Compare enemy and friendly range: a shorter-range tower is not a counter to a standoff attacker. Use mobile interception or technology when no static counter can reach. Reserve power; walls do not solve a range disadvantage.', criteria: { wait: 'Wait when existing defenses cover the threat or when no effective defense can reach it.' }, actions: { wait: { type: 'wait' } } };
   const defenseUnits = buildings.filter(u => catalog[u.name]?.isBaseDefense && !catalog[u.name]?.wall);
+  // Once a barracks stands, the base holds a floor of defences whether or not it is under attack:
+  // jev-report-20261008-054847 answered wait 82 of 83 defensive turns and built one pillbox, so the
+  // first raid met a bare base. The floor only applies while the barracks is up, so power and the
+  // opening still come first.
+  const hasBarracks = buildings.some(b => catalog[b.name]?.factory === 'InfantryType');
+  const defenseFloor = hasBarracks && defenseUnits.length < MIN_BASE_DEFENSES;
   const attackers = baseThreats(api, catalog, buildings, enemies, units.filter(u => catalog[u.name]?.harvester));
   const defenseTargets = strategy.underPressure ? attackers : [];
-  const targetDefenses = strategy.underPressure ? (strategy.suppressed ? 6 : 3) : 1;
-  let defensePlan, coverage = 0;
+  const targetDefenses = strategy.underPressure ? (strategy.suppressed ? 6 : 3) : defenseFloor ? MIN_BASE_DEFENSES : 1;
+  let defensePlan, coverage = 0, floorTagged = false;
   if (s.harvesters >= Math.min(2, s.economy?.targetMiners ?? 2, strategy.underPressure ? 1 : 2) && free(api.QueueType.Armory)) {
     const options = api.production.available(api.QueueType.Armory).filter(i => catalog[i.name]?.isBaseDefense && !catalog[i.name]?.wall)
       .map(i => ({ ...i, queue: api.QueueType.Armory, value: effectiveness(catalog[i.name], defenseTargets, catalog, api) }));
@@ -257,12 +266,17 @@ export function investmentGroups(api, catalog, snapshot, memory, groups) {
       const placement = chooseBuildingSite(api, catalog, item.name, units, memory, 200, reachableThreats);
       if (!placement || s.self.credits < Math.min(200, r.cost)) continue;
       add(dg, item, `${strategy.underPressure ? 'URGENT' : 'PREPARE'}: counter-fire at (${placement.x},${placement.y}), estimated effectiveness ${Math.round(item.value)}; enemy ranges ${reachableThreats.map(e=>currentWeapon(e,catalog).range).join(',') || 'no local target'}`, Math.min(200, r.cost), placement);
-      defensePlan ??= { name: item.name, cost: r.cost, queue: item.queue };
+      // Below the floor the first one is not a judgement call: after two waits the executor builds it.
+      // It is still not a reserved capital plan — a peacetime turret must not take the money an
+      // objective (an engineer, a miner) is holding, so only a pressured base reserves for defenses.
+      if (defenseFloor && !floorTagged) { dg.actions[`produce_${item.name}`].auto = 2; floorTagged = true; }
+      if (strategy.underPressure) defensePlan ??= { name: item.name, cost: r.cost, queue: item.queue };
     }
   }
   // Without a threat this question was answered "wait" every time and cost about a quarter of the
-  // tokens of each turn; it is only asked while the base is under pressure.
-  if (!strategy.underPressure) { delete groups.defenses; defensePlan = undefined; }
+  // tokens of each turn, so it is only asked while the base is under pressure — or while the base is
+  // still below its defensive floor and has a barracks to build from.
+  if (!strategy.underPressure && !defenseFloor) { delete groups.defenses; defensePlan = undefined; }
   const cg = group('construction', 'Restore core infrastructure, then unlock higher technology. During suppression, build a firing line and develop a counter instead of spending forever on basic tanks. Aircraft factories and higher-tech buildings unlock new options. A repair dock is not an airfield.');
   // Remove the old special-layer air-support guess and rebuild the tech options from rule categories.
   for (const [key, a] of Object.entries(cg.actions)) if (a.type === 'produce' && !catalog[a.name]?.naval && !catalog[a.name]?.refinery && !(catalog[a.name]?.power > 0) && !['InfantryType', 'UnitType', 'BuildingType'].includes(catalog[a.name]?.factory)) {

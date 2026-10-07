@@ -199,7 +199,11 @@ export function economyPlan(api, catalog, state, memory, units) {
   else if (surplus) { targetMiners = Math.max(1, miners.length); reason = `credits ${credits} and ${trend > 0 ? "rising" : "steady"} (${income >= 0 ? "+" : ""}${income} earned in the last window): money is not the bottleneck, keep ${targetMiners} miner${targetMiners === 1 ? "" : "s"}`; }
   else if (starving) { targetMiners = Math.min(3, Math.max(2, refineries * 2)); reason = `credits ${credits} and falling: expand mining toward ${targetMiners} miners`; }
   else { targetMiners = Math.min(3, Math.max(1, miners.length, refineries * 2)); reason = `income roughly covers spending (credits ${credits}, ${trend >= 0 ? "+" : ""}${trend} over the window): ${targetMiners} miner${targetMiners === 1 ? "" : "s"} for ${refineries} refiner${refineries === 1 ? "y" : "ies"}`; }
-  const targetRefineries = !refineries ? 1 : starving && miners.length >= 2 && !idleMiners ? 2 : refineries;
+  // One refinery is the plan. A second one only ever appeared while starving with two miners, and in
+  // jev-report-20261008-054847 the base spent its build orders on a duplicate instead of on the
+  // defenses and army it needed. A single refinery fed by its target miners is the opening; a second
+  // one is a late-game decision, not an automatic one.
+  const targetRefineries = 1;
   return { targetMiners, targetRefineries, incomeRate, trend, surplus, starving, idleMiners, reason };
 }
 
@@ -379,11 +383,16 @@ export function frontierPoints(api, base, memory) {
       const lateral = base
         ? Math.abs((x - base.tile.rx) * vy - (y - base.tile.ry) * vx) / norm
         : 0;
+      // Exploration reaches out rather than nibbling at the nearest fog. The enemy base is somewhere
+      // across the map, and a scout that only clears the ring around home never finds it: on
+      // jev-report-20261008-054847 the base stayed unknown while the army sat at home. So distance
+      // from the base is rewarded alongside the unexplored count, weighted toward the far side.
+      const away = base ? Math.hypot(x - base.tile.rx, y - base.tile.ry) : 0;
       points.push({
         x,
         y,
         fog,
-        score: fog * 3 + forward * 0.8 - lateral * 0.3,
+        score: fog * 2 + forward * 1.4 + away * 0.5 - lateral * 0.3,
       });
     }
   points.sort((a, b) => b.score - a.score);
@@ -516,9 +525,10 @@ export function candidateGroups(api, catalog, snapshot, memory) {
       else if (!barracks && canBarracks) need = r.factory === "InfantryType";
       else if (!refineries) need = r.refinery;
       else if (!factories) need = r.factory === "UnitType";
-      else if (refineries < state.economy.targetRefineries) need = r.refinery;
-      else if (state.economy.surplus && factories < 2 && (queueOf(api.QueueType?.Vehicles ?? 3)?.size ?? 0) > 0)
-        need = r.factory === "UnitType";
+      // One refinery and one vehicle factory. A second of either was built automatically whenever
+      // credits were surplus and the vehicle queue was busy, which spent the build orders on
+      // duplicates (jev-report-20261008-054847 chose produce_GAWEAP three times). More income comes
+      // from miners on the existing refinery, not from a second one.
       if (need && state.self.credits >= Math.min(500, r.cost))
         build(
           `produce_${item.name}`,
@@ -614,6 +624,9 @@ export function candidateGroups(api, catalog, snapshot, memory) {
           queue: infantryType,
           cost: r.cost,
           minCredits: r.cost,
+          // The scout is trained even if the model keeps answering wait: it is how the enemy base
+          // gets found at all.
+          ...(isScout ? { auto: 2 } : {}),
         };
       if(!isScout)combatTraining.push(trainAction);
       foot(
@@ -850,16 +863,31 @@ export function candidateGroups(api, catalog, snapshot, memory) {
     const offered = [...others.slice(0, Math.max(cap === MAX_ASSAULTS ? 3 : 2, cap - defenses.length)), ...defenses];
     // A capture mission is won by the engineer reaching the target: the defenses around it come first.
     if (captureMission) offered.sort((a, b) => Number(guardsObjective(b) && hitsGround(b)) - Number(guardsObjective(a) && hitsGround(a)));
+    const unitRange = (u) => Math.max(0, ...[catalog[u.name]?.weapon, catalog[u.name]?.secondary]
+      .filter((w) => w && w.ag !== false).map((w) => w.range ?? 0));
     if (ready && !threatening.length)
-      for (const enemy of offered)
+      for (const enemy of offered) {
+        // A standoff fortification fires first. Sending dogs or lone infantry at a Prism Tower they
+        // cannot reach is a gift (jev-report-20261008-054847 fed E1/ADOG into one). The assault stays
+        // on offer so the base can still be cracked, but only the units that can return fire are
+        // sent; when none can, the longest-ranged ones go and the siege plan builds the rest.
+        let assaultIds = ids;
+        if (hitsGround(enemy)) {
+          const threatRange = Math.max(0, ...activeWeapons(enemy, catalog)
+            .filter((w) => (w.damage ?? 0) > 0 && w.ag !== false).map((w) => w.range ?? 0));
+          const reach = active.filter((u) => unitRange(u) >= threatRange);
+          const best = Math.max(0, ...active.map(unitRange));
+          const chosen = reach.length ? reach : best > 0 ? active.filter((u) => unitRange(u) >= best) : active;
+          if (chosen.length) assaultIds = chosen.map((u) => u.id);
+        }
         tactics(
           `assault_${enemy.id}`,
-          `Assault visible enemy ${catalog[enemy.name]?.label ?? enemy.name} at (${enemy.tile.rx},${enemy.tile.ry}) with ${ids.length} units.`,
+          `Assault visible enemy ${catalog[enemy.name]?.label ?? enemy.name} at (${enemy.tile.rx},${enemy.tile.ry}) with ${assaultIds.length} units.`,
           {
             type: "mission",
             mode: "attack",
             label: `进攻 ${enemy.name}`,
-            ids,
+            ids: assaultIds,
             targetId: enemy.id,
             x: enemy.tile.rx,
             y: enemy.tile.ry,
@@ -867,6 +895,7 @@ export function candidateGroups(api, catalog, snapshot, memory) {
             ...(guardsObjective(enemy) && hitsGround(enemy) ? { clearsObjective: true } : {}),
           },
         );
+      }
     if (!structures.length && ready && !threatening.length && memory.enemyBuildings.size && !objectiveTarget) {
       const known = [...memory.enemyBuildings.values()][0];
       tactics(

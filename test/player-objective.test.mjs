@@ -256,10 +256,13 @@ test('engage_visible only offers enemies near the troops and says where they are
   assert.match(groups.tactics.criteria.engage_visible, /^Engage GI #700 at \(50,40\), 8 tiles from our 11 troops/);
 });
 
-test('the defense question is asked only while the base is threatened', () => {
+test('the defense question is asked while the base is threatened, and while it is below its defensive floor', () => {
   const calm = world({ own:[...home(), ...squad(4, 14, 14)], offers:{1:[{name:'SENTRY',type:2}],2:[{name:'GI',type:3}]} });
   let groups = candidateGroups(calm.api, catalog, collectState(calm.api, catalog), calm.memory);
-  assert.equal(groups.defenses, undefined);
+  // A barracks stands and no turret does: the floor asks for one before any raid arrives, so the
+  // opening does not meet the first attack with a bare base.
+  assert.ok(groups.defenses, 'a barracks below its defensive floor is asked for a turret');
+  assert.ok(groups.defenses.actions.produce_SENTRY, 'and the turret is on offer');
   const raided = world({ own:[...home(), ...squad(4, 14, 14)], enemies:[unit(700,'TANK',7,18,18)], offers:{1:[{name:'SENTRY',type:2}],2:[{name:'GI',type:3}]} });
   groups = candidateGroups(raided.api, catalog, collectState(raided.api, catalog), raided.memory);
   assert.ok(groups.defenses, 'under attack the question is back');

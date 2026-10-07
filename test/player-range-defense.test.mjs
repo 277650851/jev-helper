@@ -159,6 +159,11 @@ enemies=[remoteBuilding,remoteTank];
 m=memory();snap=collectState(api,catalog);groups=candidateGroups(api,catalog,snap,m);
 assert.equal(groups.tactics.actions.engage_visible.targetId,131,'engage mobile enemy, not first armed building');
 assert.equal(groups.tactics.actions.assault_130.targetId,130,'buildings remain explicit assault choices');
+// The tower out-ranges the BASICs (8 against 5). Once a unit that can return fire exists it is the
+// only one sent: the range-5 tanks are not walked into the tower's fire.
+own.push(unit(209,'MOBILE_COUNTER',7,54,62));   // range 14, raised earlier in this file
+snap=collectState(api,catalog);groups=candidateGroups(api,catalog,snap,m);
+assert.deepEqual(groups.tactics.actions.assault_130.ids,[209],'only the unit that can out-range the tower is sent');
 calls.length=0;m.mission={...groups.tactics.actions.assault_130,ids:[200]};
 maintainBattle(api,catalog,m,()=>{});
 assert.ok(calls.some(c=>c[0]==='attack'&&c[1].includes(200)&&c[2]===130),
