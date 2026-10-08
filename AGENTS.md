@@ -12,10 +12,10 @@ shipped together as an **offline deployment bundle**. Docs and user-facing strin
 - **`npm run build` deletes `dist/` first** (`tools/build.mjs` does `fs.rm('dist',{recursive:true})`).
   `dist/` is the shipped, loadable artifact in this offline bundle. Rebuild only when you intend
   to replace it, and check `git status` for unrelated pre-existing untracked files first.
-- **Three unrelated version numbers, all correct:**
-  `package.json` = `0.8.3` (bundle), `public/manifest.json` = `0.8.5` (Chrome extension),
-  `src/page.mjs` `VERSION` = `0.7.5` (page-script identity guard for hot-reinjection). Do not
-  "sync" them.
+- **Three version numbers, deliberately equal at `0.7.5`:** `package.json` (bundle),
+  `public/manifest.json` (Chrome extension), `src/page.mjs` `VERSION` (page-script identity guard for
+  hot-reinjection). They used to drift and were pinned together on request — keep them together when
+  bumping, and bump all three, or Chrome refuses the update and the page guard stops firing.
 - **`.cmd` files must stay ASCII-only.** `cmd.exe` reads batch in the OEM code page; UTF-8 in a
   `rem` line decodes to garbage and can split into commands that then execute (see the comment
   block in `run-baseline.cmd`). The `.ps1` scripts and console output are UTF-8 and render as

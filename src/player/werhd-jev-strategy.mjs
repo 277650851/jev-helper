@@ -509,6 +509,8 @@ export function investmentGroups(api, catalog, snapshot, memory, groups) {
 // laboratory be offered on the same turn its radar is, instead of one turn per link. Defined first
 // because `prerequisitesMet` below calls it.
   const buildableNames = new Set(available.filter(i => i.type === api.ObjectType.Building).map(i => i.name));
+  // Everything the rules expose, so `prerequisitesMet` can tell a rule name from a faction tag.
+  const knownNames = new Set(Object.keys(catalog));
   const pendingPrereqs = (name) => buildableNames.has(name) && !ownNames.has(name);
   const prerequisitesMet = (r) => {
     const need = r.prerequisite ?? [];
@@ -519,7 +521,15 @@ export function investmentGroups(api, catalog, snapshot, memory, groups) {
     const ownedOrPlanned = name => ownNames.has(name)
       || groups.construction?.actions?.[`produce_${name}`] !== undefined
       || strategy.investment?.name === name;
-    return need.every(p => ownedOrPlanned(p) || pendingPrereqs(p));
+    // A prerequisite that names nothing in the catalogue is a faction tag rather than a rule. This
+    // ruleset writes `Prerequisite=PROC,GAPILE,GACNST` for the war factory and `BARRACKS,GACNST` for
+    // every anti-air emplacement, and neither PROC nor BARRACKS is a rule -- 66 of 263 prerequisite
+    // references here are like that, 24 of them RADAR. The engine resolves those itself, so this side
+    // cannot see them and cannot judge them: only a prerequisite we can actually name can be proved
+    // unmet. Counting the unnameable ones as unmet demoted every radar, every anti-air tower and the
+    // war factory behind whatever chain happened to resolve, which is the stall this whole ordering
+    // was written to remove.
+    return need.every(p => !knownNames.has(p) || ownedOrPlanned(p) || pendingPrereqs(p));
   };
   const candidates = available.filter(i => i.type === api.ObjectType.Building && !ownNames.has(i.name))
     .filter(i => { const r = catalog[i.name]; return r && !r.naval && !r.yard && !r.refinery && !r.isBaseDefense && !r.wall && !(r.power > 0) && (isAirSupport(r) || r.buildCategory === 'Tech' && !r.factory); })
