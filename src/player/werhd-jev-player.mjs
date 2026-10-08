@@ -539,6 +539,17 @@ export function candidateGroups(api, catalog, snapshot, memory) {
             queue: constructionType,
             cost: r.cost,
             minCredits: Math.min(500, r.cost),
+            // Both preconditions are checked right here: the queue is idle (`!queueOf(...).size`) and
+            // the credits cover the down payment. There is no judgement left for the model to make,
+            // and in jev-report-20261009-055438 it did not make one: 36 consecutive construction turns
+            // offered `produce_CAREFN` against `wait` with an empty queue and 4,749 credits against a
+            // 2,000 refinery, and the model declined 35 times at 0.53-0.84 confidence. The base never
+            // got its refinery. Laya is a ~750-token multiple-choice model; it cannot be talked out of
+            // this by rewording the criterion -- measured over 39 real questions, rewriting the wait
+            // text moved the action rate from 46% to 41%, i.e. not at all. So the engine decides, and
+            // the model is told after the fact. One decline is enough: the alternative is a base that
+            // never finishes its opening.
+            auto: 1,
           },
         );
     }

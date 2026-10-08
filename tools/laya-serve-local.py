@@ -309,13 +309,21 @@ def slim_state(state, with_units=False):
     """`--slim-state`: keep only the fields a decision can act on, compressing the wordy ones.
 
     `inventory` maps kind -> {name, role, count, ...}; only `count` changes a decision, so it
-    collapses to kind -> count (measured 847 -> 670 state tokens). `queues` keeps only queues
-    that have items -- an empty queue carries no information -- and each item to
-    name/quantity/progress (670 -> 489). `with_units` additionally keeps visibleEnemies/army,
-    which compact_units() then rewrites into terse strings; that variant measures 732 tokens
-    but keeps unit positions visible. Every surviving value is byte-identical to what the page
-    sent except the two compressed fields, and a field is kept only if present -- nothing is
-    invented.
+    collapses to kind -> count (measured 847 -> 670 state tokens). `queues` keeps every queue and
+    compresses each item to name/quantity/progress (670 -> 489). `with_units` additionally keeps
+    visibleEnemies/army, which compact_units() then rewrites into terse strings; that variant
+    measures 732 tokens but keeps unit positions visible. Every surviving value is byte-identical
+    to what the page sent except the two compressed fields, and a field is kept only if present --
+    nothing is invented.
+
+    An *empty* queue used to be dropped, on the reasoning that it carries no information. It carries
+    the most information there is: an idle queue is the whole difference between "build this now" and
+    "wait for the queue to drain", and the waiting option in the construction and production groups
+    is defined in exactly those terms. Emitting `queues: []` made "every queue is idle" and "nothing
+    is known about the queues" indistinguishable, and jev-report-20261009-055438 is what that cost:
+    86 real questions of "build the refinery vs wait", the queue idle and 2,450-8,900 credits against
+    a 2,000 refinery, and wait chosen 83 times. An idle queue now survives as `{"t": 0}` -- the queue
+    type with no items, which costs a few tokens and states the fact.
 
     This mirrors the offline accounting in .preview/minimal-state.py (same whitelist, same
     compression), which is where the measured numbers come from.
@@ -332,10 +340,10 @@ def slim_state(state, with_units=False):
             out[key] = {k: (v or {}).get("count", 0) for k, v in value.items()}
         elif key == "queues" and isinstance(value, list):
             out[key] = [{"t": q.get("type"),
-                         "items": [{"n": i.get("name"), "q": i.get("quantity"),
-                                    "p": round(float(i.get("progress") or 0), 2)}
-                                   for i in (q.get("items") or [])]}
-                        for q in value if q.get("items")]
+                         **({"items": [{"n": i.get("name"), "q": i.get("quantity"),
+                                        "p": round(float(i.get("progress") or 0), 2)}
+                                       for i in q["items"]]} if q.get("items") else {})}
+                        for q in value]
         else:
             out[key] = value
     return out
