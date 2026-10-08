@@ -262,6 +262,9 @@ export function escalationAdvice(a) {
 // - nothing producible at all: attack with whatever exists
 // - force stopped growing for a long time (no factory, no money, unit cap): attack with what exists
 export const FORCE_STALL_TICKS = 2700, MIN_ATTACK_UNITS = 4, READY_HOLD = 0.75;
+// Units that stay home whatever the mission. The player's own rule: never leave the base undefended
+// against a raid. Capped rather than proportional so a large army does not hoard half its strength.
+export const HOME_GUARD_UNITS = 4;
 export const attackThreshold = (canBuildAnything, level = 0) => canBuildAnything ? Math.min(20, Math.round(ATTACK_FORCE_SIZE * (1 + 0.5 * level))) : 1;
 // Nothing to do: after this many turns of all-wait answers with no action, ask less often (saves tokens).
 export const QUIET_TURNS = 5, QUIET_INTERVAL_MS = 3000;
@@ -757,6 +760,57 @@ export function candidateGroups(api, catalog, snapshot, memory) {
   const support = army.filter(u=>u.type===api.ObjectType.Infantry&&u.id!==memory.scoutId&&
     api.tick()-(memory.specialOrders?.get(u.id)?.tick??-10000)>450);
   const active = [...tanks,...support];
+  // A home guard, kept out of every assault.
+  //
+  // The assault used to take `ids` -- every free combat unit -- and then narrow it by weapon range.
+  // With nothing held back, a raid during the walk to the enemy base met an empty base: the
+  // defenders were the same units the mission was using, twenty tiles away and out of position. In
+  // jev-report-20261009-055438 the base fell with 21 conscripts and one tank on the field, so there
+  // was nothing at home either way.
+  //
+  // The guard is drawn from armour first, because that is what actually holds a raid: a tank sitting
+  // at the refinery answers a raider in seconds, while the anti-armor infantry picked as a field escort
+  // is usually twenty tiles forward already and belongs to the column. Other units only fill the
+  // guard when there is not enough armour, so an infantry-only base still keeps something at home.
+  // It scales with the army rather than being a flat number: a base with four tanks cannot spare
+  // three, and a base with twenty can spare more than the floor.
+  const baseTile = base?.tile;
+  const groundRange = (u) => Math.max(0, ...[catalog[u.name]?.weapon, catalog[u.name]?.secondary]
+    .filter((w) => w && w.ag !== false && (w.damage ?? 0) > 0).map((w) => w.range ?? 0));
+  const homeGuardSize = Math.min(
+    active.length - MIN_ATTACK_UNITS > 0 ? Math.max(2, Math.round(active.length * 0.25)) : 0,
+    HOME_GUARD_UNITS);
+  const canShootGround = (u) => groundRange(u) > 0;
+  const isMobileAA = (u) => activeWeapons(u, catalog).some((w) => w.aa && (w.damage ?? 0) > 0);
+  const homeward = (a, b) => (baseTile ? Math.hypot(a.tile.rx - baseTile.rx, a.tile.ry - baseTile.ry) : 0)
+    - (baseTile ? Math.hypot(b.tile.rx - baseTile.rx, b.tile.ry - baseTile.ry) : 0);
+  const pool = [...tanks, ...active.filter((u) => !tanks.includes(u))].filter(canShootGround);
+  // Reach belongs to the column, but only when the army cannot spare it. A defender answers whatever
+  // raids the base and does not need to out-range anything, so the longest-ranged unit is only pushed
+  // to the back of the guard list when taking it would leave the column with nothing of comparable
+  // reach -- a lone range-14 gun has to travel, or the assault walks range-5 tanks into a Prism Tower
+  // (test/player-range-defense.test.mjs pins that). With depth behind it, a flak truck parked by the
+  // refinery is the best thing in the army to keep at home.
+  const longest = pool.length ? pool.reduce((a, b) => (groundRange(b) > groundRange(a) ? b : a)) : undefined;
+  const reachFloor = longest ? groundRange(longest) * 0.6 : 0;
+  const others = longest ? pool.filter((u) => u !== longest) : [];
+  const spareReach = others.filter((u) => groundRange(u) >= reachFloor).length >= homeGuardSize;
+  const reachKeeper = longest && !spareReach ? longest : undefined;
+  // Mobile anti-air is never left behind while aircraft are about: the column needs it (a tank column
+  // under a bomber trades badly), and ATTACK_AA_ESCORTS already treats it as a requirement rather than
+  // a preference. With no air threat the rule inverts -- then the flak cannon is the right thing to
+  // park at home, because it is exactly what a raid meets first.
+  const airThreats = (state.airThreatCount ?? 0) > 0;
+  // Ordered within each tier and then concatenated: sorting the concatenation put the mobile anti-air
+  // back into the guard, because the two closest units to the base happened to be the escorts.
+  const tier = (list) => [...list].sort((a, b) => (a === reachKeeper ? 1 : 0) - (b === reachKeeper ? 1 : 0) || homeward(a, b));
+  const homeGuard = (airThreats
+    ? [...tier(pool.filter((u) => !isMobileAA(u))), ...tier(pool.filter(isMobileAA))]
+    : tier(pool)).slice(0, homeGuardSize);
+  const homeGuardIds = new Set(homeGuard.map((u) => u.id));
+  const striking = active.filter((u) => !homeGuardIds.has(u.id));
+  state.homeGuard = homeGuard.map((u) => ({ id: u.id, name: u.name, label: catalog[u.name]?.label ?? u.name, range: groundRange(u) }));
+  state.forces = { homeGuard: state.homeGuard.length, striking: striking.length, active: active.length };
   // Where the fight is: the visible enemy structure or the last known one, for forward assets.
   const forwardTarget = enemies.find(e => e.type === api.ObjectType.Building) ?? [...memory.enemyBuildings.values()][0];
   memory.forwardPoint = forwardTarget ? { rx: forwardTarget.tile?.rx ?? forwardTarget.x, ry: forwardTarget.tile?.ry ?? forwardTarget.y } : undefined;
@@ -786,6 +840,9 @@ export function candidateGroups(api, catalog, snapshot, memory) {
     "tactics",
     `${objectiveNote}${readyNote} Choose the combat mission to win by destroying the enemy base; protect the base from nearby attackers first. Keep a useful active attack; do not oscillate between attack and retreat. When the enemy base is unknown, advance through a supplied frontier. Combat orders cost zero credits.${assessment.level ? " " + escalationAdvice(assessment) : ""}`,
   );
+  // The guard is reported as structure, not prose: the instruction budget is measured in tokens and
+  // test/player-objective.test.mjs pins it. A sentence naming the units does not change any decision
+  // the model can act on here -- it is told which ids it may use, not which ones exist.
   groups.tactics.criteria.wait = "Keep the current mission; nothing supplied is better.";
   state.combat = {
     tanks: tanks.length,
@@ -805,7 +862,8 @@ export function candidateGroups(api, catalog, snapshot, memory) {
     threatening.push(...minerThreats);
   }
   if (active.length) {
-    const ids = active.map((u) => u.id);
+    const ids = striking.map((u) => u.id);
+    if (!ids.length) ids.push(...active.map((u) => u.id));
     // The objective is offered whatever the force size: the player asked for it. It comes first,
     // except that a threatened base is defended first. It is automatic only when the force is ready
     // (or the stall rule applies): otherwise it would feed small groups in one after another.
@@ -813,14 +871,21 @@ export function candidateGroups(api, catalog, snapshot, memory) {
     // and clears its defenders while the engineer follows (special groups). Capture missions can be
     // on a clock (0.7.3: the Battle Lab fell at 32:30 both times), so the push does not wait for the
     // full attack threshold, only for CAPTURE_PUSH_UNITS.
-    const pushReady = captureMission && (ready || ids.length >= CAPTURE_PUSH_UNITS);
+    // A capture may recall the home guard. It is on a clock -- 0.7.3 lost the Battle Lab at 32:30 twice
+    // -- and unlike an ordinary assault, a capture is won by the engineer arriving, so a column held
+    // back to a fixed size is the thing that loses it. The base is covered by its guns and the
+    // engineer escort; being two tanks short at home is cheaper than being four minutes late.
+    const objectiveIds = captureMission
+      ? [...striking.map((u) => u.id), ...homeGuard.map((u) => u.id)]
+      : ids;
+    const pushReady = captureMission && (ready || objectiveIds.length >= CAPTURE_PUSH_UNITS);
     const offerCapturePush = () => {
       const c = { rx: active.reduce((n, u) => n + u.tile.rx, 0) / active.length, ry: active.reduce((n, u) => n + u.tile.ry, 0) / active.length };
       const d = Math.hypot(c.rx - objectiveTarget.x, c.ry - objectiveTarget.y) || 1, back = Math.min(CAPTURE_STAGE_TILES, d);
       const x = Math.round(objectiveTarget.x + (c.rx - objectiveTarget.x) / d * back), y = Math.round(objectiveTarget.y + (c.ry - objectiveTarget.y) / d * back);
       tactics(`objective_${objectiveTarget.id}`,
-        `OBJECTIVE PUSH: attack-move ${ids.length} units to (${x},${y}) beside ${objectiveTarget.label} #${objectiveTarget.id}, clearing its defenders so the engineer following the column can capture it. The target itself is never attacked.`,
-        { type: "mission", mode: "attack", label: `掩护占领 ${objectiveTarget.label}`, ids, x, y, objective: true, capturePush: objectiveTarget.id,
+        `OBJECTIVE PUSH: attack-move ${objectiveIds.length} units to (${x},${y}) beside ${objectiveTarget.label} #${objectiveTarget.id}, clearing its defenders so the engineer following the column can capture it. The target itself is never attacked.`,
+        { type: "mission", mode: "attack", label: `掩护占领 ${objectiveTarget.label}`, ids: objectiveIds, x, y, objective: true, capturePush: objectiveTarget.id,
           ...(threatening.length || !pushReady ? {} : { auto: 2 }) });
     };
     const offerObjective = () => objectiveTarget && (captureMission ? offerCapturePush() : tactics(
@@ -863,7 +928,9 @@ export function candidateGroups(api, catalog, snapshot, memory) {
           type: "mission",
           mode: "defend",
           label: "保卫基地",
-          ids: [...ids, ...navalDefenders],
+          // The home guard exists for exactly this: an assault that left them behind must be able to
+          // call them in, or "defend the base" is a mission with nobody standing on it.
+          ids: [...ids, ...state.homeGuard.map((u) => u.id), ...navalDefenders],
           targetId: threatening[0].id,
           x: threatening[0].tile.rx,
           y: threatening[0].tile.ry,
@@ -914,9 +981,11 @@ export function candidateGroups(api, catalog, snapshot, memory) {
         if (hitsGround(enemy)) {
           const threatRange = Math.max(0, ...activeWeapons(enemy, catalog)
             .filter((w) => (w.damage ?? 0) > 0 && w.ag !== false).map((w) => w.range ?? 0));
-          const reach = active.filter((u) => unitRange(u) >= threatRange);
-          const best = Math.max(0, ...active.map(unitRange));
-          const chosen = reach.length ? reach : best > 0 ? active.filter((u) => unitRange(u) >= best) : active;
+          // Drawn from `striking`, never from `active`: this branch rebuilt the assault from every free
+          // unit, which sent the home guard out with the column and left the base empty again.
+          const reach = striking.filter((u) => unitRange(u) >= threatRange);
+          const best = Math.max(0, ...striking.map(unitRange));
+          const chosen = reach.length ? reach : best > 0 ? striking.filter((u) => unitRange(u) >= best) : striking;
           if (chosen.length) assaultIds = chosen.map((u) => u.id);
         }
         tactics(

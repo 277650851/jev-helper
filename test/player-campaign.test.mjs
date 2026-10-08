@@ -48,7 +48,7 @@ test('without vehicle production, armed infantry count toward the force and the 
   const r=snap.state.forceReadiness;
   assert.equal(r.canBuildVehicles,false);assert.equal(r.combatUnits,ATTACK_FORCE_SIZE);assert.equal(r.ready,true);assert.match(r.reason,/vehicles cannot be produced/);
   assert.ok(groups.tactics.actions.assault_900,'infantry-only campaign forces assault the visible objective');
-  const ids=groups.tactics.actions.assault_900.ids;assert.equal(ids.length,ATTACK_FORCE_SIZE-1,'one designated scout stays out of the assault');assert.ok(!ids.includes(memory.scoutId));
+  const ids=groups.tactics.actions.assault_900.ids;assert.equal(ids.length,snap.state.forces.striking,'the assault is the army minus the scout and the home guard');assert.equal(snap.state.forces.homeGuard,2,'an infantry-only base still keeps two at home');assert.ok(!ids.includes(memory.scoutId));
   assert.match(groups.tactics.instructions,/READY/);
   const few=world({ own:[...base,unit(2,'BARRACKS',2,22,22),unit(10,'GI',3,25,25)], enemies:[pentagon], offers:{2:[{name:'GI',type:3}]} });
   const g=candidateGroups(few.api,catalog,collectState(few.api,catalog),few.memory);

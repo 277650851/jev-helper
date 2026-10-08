@@ -55,7 +55,10 @@ test('"摧毁五角大楼" becomes the first tactics option; Patriot sites are n
   assert.equal(keys[0], 'objective_990', 'the objective is listed first');
   assert.equal(t.actions.objective_990.auto, 2);
   assert.equal(t.actions.objective_990.targetId, 990); assert.equal(t.actions.objective_990.objective, true);
-  assert.equal(t.criteria.objective_990, 'OBJECTIVE: destroy Pentagon #990 at (58,45) with 11 units.', 'short enough for a 48-token option');
+  // 12 strongmen, less the home guard that is deliberately held at the base. The option stays short:
+  // the length is part of what keeps it inside the local model's 48-token budget.
+  assert.equal(t.criteria.objective_990, `OBJECTIVE: destroy Pentagon #990 at (58,45) with ${snap.state.forces.striking} units.`, 'short enough for a 48-token option');
+  assert.ok(snap.state.forces.homeGuard > 0, 'a raid must never meet an empty base');
   assert.match(t.instructions, /^MISSION OBJECTIVE: 摧毁五角大楼 Target: Pentagon #990 at \(58,45\)\. Force READY/);
   assert.ok(t.actions.assault_920, 'the pillbox shoots ground troops and is offered');
   for (const id of [910, 911, 912]) assert.ok(!t.actions[`assault_${id}`], `Patriot #${id} only shoots aircraft`);
@@ -94,7 +97,7 @@ test('an English objective matches too; the target is remembered in the fog and 
   enemies.splice(enemies.findIndex(e => e.id === 990), 1); fog = true;
   const snap = collectState(w.api, catalog);
   groups = candidateGroups(w.api, catalog, snap, w.memory);
-  assert.equal(groups.tactics.criteria.objective_990, 'OBJECTIVE: destroy Pentagon #990 last seen at (58,45) with 11 units.');
+  assert.equal(groups.tactics.criteria.objective_990, `OBJECTIVE: destroy Pentagon #990 last seen at (58,45) with ${snap.state.forces.striking} units.`);
   assert.equal(snap.state.objectiveTarget.visible, false);
   const execution = executeCandidate(w.api, groups.tactics.actions.objective_990, catalog);
   assert.equal(execution.accepted, true);
@@ -256,9 +259,10 @@ test('engage_visible only offers enemies near the troops and says where they are
   let groups = candidateGroups(far.api, catalog, collectState(far.api, catalog), far.memory);
   assert.ok(!groups.tactics.actions.engage_visible, `more than ${ENGAGE_RADIUS} tiles away`);
   const near = world({ own:[...home(), ...squad(12)], enemies:[unit(700,'EGI',3,50,40)] });
-  groups = candidateGroups(near.api, catalog, collectState(near.api, catalog), near.memory);
+  const nearSnap = collectState(near.api, catalog);
+  groups = candidateGroups(near.api, catalog, nearSnap, near.memory);
   assert.equal(groups.tactics.actions.engage_visible.targetId, 700);
-  assert.match(groups.tactics.criteria.engage_visible, /^Engage GI #700 at \(50,40\), 8 tiles from our 11 troops/);
+  assert.ok(groups.tactics.criteria.engage_visible.startsWith(`Engage GI #700 at (50,40), 8 tiles from our ${nearSnap.state.forces.striking} troops`));
 });
 
 test('the defense question is asked while the base is threatened, and while it is below its defensive floor', () => {
@@ -439,7 +443,12 @@ test('repeating the current attack reaches only new or idle units; soldiers alre
     await new Promise(r => setTimeout(r, 5));
     const first = w.calls.filter(c => c[0] === 'attack');
     assert.equal(first.length, 1); const ordered = first[0][1];
-    assert.ok(ordered.length >= 10, 'the army (minus its scout) is sent');
+    // A home guard is held back whatever the mission: with 12 soldiers, one of them the designated
+    // scout, the column is the rest minus the guard. The exact size moves with the army, so what is
+    // pinned here is that the base is never stripped bare.
+    const sent = ordered.length;
+    assert.ok(sent >= 4 && sent < army.length, `some but not all of the army attacks (sent ${sent} of ${army.length})`);
+    assert.ok(!ordered.includes(w.memory.scoutId), 'the designated scout is never sent with the column');
     // A fresh conscript joins, one soldier has gone idle, the rest are busy answering fire.
     const idle = army.find(u => ordered.includes(u.id));
     w.own.push(unit(99,'GI',3,50,50)); idle.isIdle = true;
