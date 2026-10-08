@@ -39,12 +39,21 @@ sibling `../laya-vs-jev` checkout. On this Windows bundle the real path is `laya
 (`.laya-venv` + torch CPU + `tools/laya-serve-local.py`).
 
 **Operational gotcha:** `manage-laya.cmd` (the interactive menu) takes the server down with it when
-its window closes. `tools\laya-ctl.cmd` and `run-baseline.cmd` / `run-slim.cmd` start a server that
-survives.
+its window closes. `tools\laya-ctl.cmd` and `run-slim.cmd` start a server that survives.
 
-`run-baseline.cmd` vs `run-slim.cmd` differ by exactly one flag (`--slim-state`); they are an A/B
-pair. Keep them that way — full state is the default because slim is faster but orders attacks on
-targets already out of sight.
+**Play on `run-slim.cmd` (`--slim-state`); there is no full-state mode.** The full state is ~6495
+tokens against a 1024-token context, so *every* question is truncated and `army`, `queues`,
+`economy`, `strategy`, `forceReadiness` are cut 100% of the time — the model literally cannot see
+whether the build queue is empty. `jev-report-20261009-052739` is what that costs: vehicle queue
+empty for 20.6 minutes, 4–5k credits, a 750-credit tank on offer, `wait` chosen 29 of 29 times, one
+tank built, base lost. Slim is 533 tokens / sequence 744 and keeps `queues` and `forceReadiness`
+visible. `--priority-state` and `--compact-units` do **not** substitute — measured alone they stay
+pinned at the 1024 cap; only `--slim-state` fits.
+
+**State-capture rule:** `--dump-states` only records `preparedState` when a state-shaping flag is on,
+so a capture taken without one describes the *full* arm no matter what the server was running. The
+older `.preview/states-armA-full` and `.preview/states-armB-slim` directories predate that fix and
+both describe the full arm — do not read them as an A/B. Slim captures go to `.preview/states-slim`.
 
 ## Architecture
 
