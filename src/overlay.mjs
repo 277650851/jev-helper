@@ -66,6 +66,9 @@ const QUEUE_ROWS = 2;
 // enough to see what just happened and what preceded it, and it keeps the box at a fixed 46px so the
 // sections below never move. A new record animates the row in and drops the oldest.
 const RECORD_ROWS = 2;
+// Alerts are capped at three (error, failed requests, dropped replies). The block reserves room for
+// the ones actually shown rather than for all three; see the .alerts rule.
+const ALERT_ROWS = 3;
 export function createOverlayView(){
   const host=document.createElement('div');host.id='werhd-jev-overlay';
   host.style.cssText='all:initial!important;position:fixed!important;z-index:2147483646!important;display:block!important;';
@@ -134,13 +137,17 @@ export function createOverlayView(){
     .records .what .lbl{color:#cdc09b;font-weight:600}
     .records .what .lbl.cmd{color:#9ec6d8}.records .what .lbl.dim{color:#93a6a9}.records .what .lbl.warn{color:#e3b26b}
     .records .what .lbl.bad{color:#e88a76}.records .what .lbl.ok{color:#8fd0a8}
-    .records .empty{color:#93a6a9;height:auto;line-height:1.4;padding:9px;display:block;border:1px dashed #84999b3a;border-radius:6px}
+    .records .empty{color:#93a6a9;display:flex;height:46px;padding:0 9px;align-items:center;background:transparent;animation:none}
     /* Two blocks change with what the base and the model are doing, and a panel that resizes mid-fight
        is hard to read: everything below the jump shifts. Each is reserved at its largest useful size
        instead - three alerts, and two queue rows plus the overflow line - so the height is constant
        for the whole of a match. Content that fits is padded out; only a genuinely long error message
        still grows the panel, which is the one case where the extra height earns its place. */
-.alerts{display:flex;flex-direction:column;gap:4px;min-height:90px}
+/* Up to three alerts are reserved so the panel does not jump when the second or third appears --
+       but only as many as there are. A fixed 90px reserved three rows for a panel usually showing one,
+       which pushed the metric strip 60px down for nothing. The row count is set from JS as
+       "min-height: rows * 30px + gaps", capped at the old 90px. */
+    .alerts{display:flex;flex-direction:column;gap:4px;min-height:30px}
     .alert{border-radius:9px;padding:5px 9px;font-size:10.5px;line-height:1.45;display:flex;gap:7px;align-items:flex-start}
     .alert .ic{flex:none;font-size:9.5px;line-height:1.6}
     .alert.error{background:#e07b6b1c;border:1px solid #e07b6b4d;color:#f2bcb1}
@@ -169,7 +176,7 @@ export function createOverlayView(){
     [hidden]{display:none!important}
   </style><section aria-label="Jev"><header><div class="drag" tabindex="0" role="group"><div class="brand"></div><div class="status"><i class="dot"></i><span class="status-text"></span></div></div><button type="button"></button></header><div class="details"><div class="sec" id="sec-alerts"></div><div class="alerts" id="alerts"></div><div class="strip"><div class="cell" id="cell-decisions"><b id="decisions"></b><span id="decisions-label"></span></div><div class="cell"><b id="credits"></b><span id="credits-label"></span></div><div class="cell" id="cell-latency"><b id="latency"></b><span id="latency-label"></span></div></div><div class="sec" id="sec-situation"></div><div class="threat" id="threat" hidden></div><div class="sit" id="sit"><div id="cell-army"><b id="army"></b><span id="army-label"></span></div><div id="cell-enemies"><b id="enemies"></b><span id="enemies-label"></span></div><div id="cell-nearby"><b id="nearby"></b><span id="nearby-label"></span></div><div id="cell-miners"><b id="miners"></b><span id="miners-label"></span></div><div id="cell-health"><b id="health"></b><span id="health-label"></span></div><div id="cell-power"><b id="power"></b><span id="power-label"></span></div></div><p class="hint" id="sit-hint" hidden></p><div class="sec" id="sec-records"></div><div class="hint" id="records-hint" hidden></div><ol class="records" id="records"></ol><div class="sec" id="sec-queues"></div><ol class="queues" id="queues"></ol><div class="sec" id="sec-map"><span class="sec-text"></span><span class="legend" id="map-legend"><span><i class="own"></i><span class="lg-own"></span></span><span><i class="foe"></i><span class="lg-foe"></span></span><span><i class="home"></i><span class="lg-home"></span></span></span></div><div class="map" id="map"></div><p class="hint" id="map-hint"></p><div class="foot"><span class="shortcut"></span></div><p class="warning" hidden></p></div></section>`;
   const $=selector=>root.querySelector(selector),handle=$('.drag'),button=$('button');
-  let config,lastStatus,drag,lastRecordKey='';
+  let config,lastStatus,drag,lastRecordKey=null;
   const recordsBox=$('#records');
   function layout(){
     const box=host.getBoundingClientRect();placement=clampPosition(placement,box.width,box.height,window.innerWidth,window.innerHeight);
@@ -198,6 +205,10 @@ export function createOverlayView(){
     if(status.failures)alert('warn','▲',tr2('overlayAlertsCount',{n:status.failures}));
     if(status.rejected)alert('warn','!',tr2('overlayDropped',{n:status.rejected}));
     if(!alerts.children.length)alert('none','✓',tr('overlayNoAlerts'));
+    // Reserve exactly the rows shown, up to the three-row cap. Growing to fit would make the metric
+    // strip below jump; shrinking from a fixed 90px left 60px of nothing on a normal panel.
+    const alertRows=Math.min(ALERT_ROWS,alerts.children.length);
+    alerts.style.minHeight=`${alertRows*30+(alertRows-1)*4}px`;
     for(const key of ['decisions','credits','latency'])$(`#${key}-label`).textContent=tr(key);
     $('#decisions').textContent=format(status.decisions??0);$('#credits').textContent=format(status.credits);
     // Latency is coloured because it is actionable, not decorative: past roughly three seconds of
@@ -237,8 +248,12 @@ export function createOverlayView(){
     // Rebuilding the rows on every 1.5 s poll would replay the entry animation each time and make the
     // panel look permanently mid-transition. The rows are only rebuilt when the newest entry actually
     // changes, so the animation means "a new record arrived" and nothing else.
+    //
+    // `null` is the initial key, not '': the empty state also hashes to '', so starting on '' would make
+    // the first render compare equal and skip the branch -- leaving the box blank with no message at all,
+    // which is what a fresh panel showed before this was found.
     const newest=hasRecords?`${execs[0].at}|${execs.length}`:'';
-    if(newest!==lastRecordKey){
+    if(newest!==lastRecordKey||lastRecordKey===null){
       lastRecordKey=newest;
       recordsBox.innerHTML='';
       if(!hasRecords){const li=document.createElement('li');li.className='empty';li.textContent=tr('overlayNoLog');recordsBox.append(li);}

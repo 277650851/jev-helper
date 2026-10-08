@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import {createOverlayMonitor,clampPosition} from '../src/overlay.mjs';
 
 function harness(){
@@ -52,4 +53,32 @@ test('re-enabling display waits for current status instead of showing the previo
 test('drag placement remains inside normal and small viewports',()=>{
   assert.deepEqual(clampPosition({x:900,y:-30},282,150,800,600),{x:510,y:8});
   assert.deepEqual(clampPosition({x:400,y:500},282,150,240,100),{x:8,y:8});
+});
+
+// The view is created against a closed shadow root and a real DOM, so the DOM behaviour below is
+// asserted on the source rather than by rendering it. Both regressions came from this file: a panel
+// that rendered its records box blank, and one that reserved a third of its height for alerts that
+// were not there. Reading the source is the only check available without a DOM harness.
+test('the record box shows an empty state on first render instead of staying blank',()=>{
+  const src=fs.readFileSync(new URL('../src/overlay.mjs',import.meta.url),'utf8');
+  // The empty state hashes to '', so an initial key of '' compares equal and the first render skips
+  // the branch -- the box stayed empty with no message until this was fixed.
+  assert.match(src,/lastRecordKey\s*=\s*null/, 'the initial key must be distinguishable from the empty state');
+  assert.match(src,/newest!==lastRecordKey\s*\|\|\s*lastRecordKey===null/,
+    'the first render must run the branch even when there are no records yet');
+  assert.match(src,/li\.className='empty';li\.textContent=tr\('overlayNoLog'\)/,
+    'the empty state must still be rendered when there is nothing to show');
+});
+
+test('the records box is two fixed rows and the alert block reserves only what it shows',()=>{
+  const src=fs.readFileSync(new URL('../src/overlay.mjs',import.meta.url),'utf8');
+  assert.match(src,/const RECORD_ROWS = 2/, 'two rows, per the design');
+  assert.match(src,/\.records\{[^}]*height:46px/, 'the box is pinned so the sections below never move');
+  assert.match(src,/\.records\{[^}]*overflow:hidden/, 'a two-row box does not scroll');
+  assert.match(src,/@keyframes rowIn/, 'a new record animates in');
+  assert.match(src,/@media \(prefers-reduced-motion:reduce\)\{\.records li\{animation:none\}\}/,
+    'reduced motion must switch the animation off');
+  // A fixed three-row reservation left ~60px of blank space on a panel showing one alert.
+  assert.doesNotMatch(src,/\.alerts\{[^}]*min-height:90px/, 'the alert block must size to its rows');
+  assert.match(src,/alerts\.style\.minHeight=/, 'and set that size from the row count');
 });
