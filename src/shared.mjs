@@ -1,4 +1,7 @@
-export const DEFAULTS = /* @__PURE__ */ Object.freeze({ provider: 'jev', apiBase: 'https://api.typesafe.ai/v1', model: 'jev-latest', localBase: 'http://127.0.0.1:8742/v1', localModel: 'laya', openaiBase: 'https://api.openai.com/v1', openaiModel: '', openaiMode: 'tools', openaiModels: [], strategyMode: 'choices', hotkey: 'Alt+Shift+J', autoCamera: true, showOverlay: true, maxDecisions: 2000, objective: '', autoReport: true, allowedHosts: [], language:'zh-CN' });
+// `localModel` names the multilingual Laya checkpoint. The local service treats a known checkpoint
+// name as "pin this one" and an unknown one as "auto-route"; bare 'laya' is an alias for the English
+// checkpoint, which collapses on Chinese battlefield text. This default arrived in 0.8.5.
+export const DEFAULTS = /* @__PURE__ */ Object.freeze({ provider: 'jev', apiBase: 'https://api.typesafe.ai/v1', model: 'jev-latest', localBase: 'http://127.0.0.1:8742/v1', localModel: 'laya-multilingual', openaiBase: 'https://api.openai.com/v1', openaiModel: '', openaiMode: 'tools', openaiModels: [], strategyMode: 'choices', hotkey: 'Alt+Shift+J', autoCamera: true, showOverlay: true, maxDecisions: 2000, objective: '', autoReport: true, allowedHosts: [], language:'zh-CN' });
 export const PROVIDERS = /* @__PURE__ */ Object.freeze({ jev: { id: 'jev', name: 'Jev', requiresKey: true }, local: { id: 'local', name: 'Laya', requiresKey: false }, openai: { id: 'openai', name: 'OpenAI', requiresKey: true } });
 export const strategyMode = value => value === 'commander' ? 'commander' : 'choices';
 export const providerId = value => value === 'local' || value === 'openai' ? value : 'jev';

@@ -166,3 +166,17 @@ test('inline validation reports every invalid field at once and maps background 
   assert.equal(fieldErrors({provider:'jev',apiBase:'https://api.typesafe.ai/v1',model:'m',hotkey:'Alt+J',maxDecisions:1,apiKey:'k',objective:'o'.repeat(301)}).objective,'本局目标最多 300 个字符。');assert.equal(errorField('本局目标最多 300 个字符。'),'objective');
   assert.equal(errorField('模型名称无效。','local'),'localModel');assert.equal(errorField('每局决策上限应为 1–10000。'),'maxDecisions');assert.equal(errorField('托管未能启动。'),'');
 });
+
+// Regression: merging the 0.8.5 work onto the 0.7.5 baseline kept the baseline's DEFAULTS.localModel,
+// so a fresh install asked the local service for `laya` -- an alias for the English checkpoint, which
+// collapses on Chinese battlefield text -- and a real match produced no usable answer at all. It is a
+// default nobody types by hand, so only an assertion notices.
+test('the local model default pins the multilingual checkpoint, not the English alias',async()=>{
+  const {DEFAULTS}=await import('../src/shared.mjs');
+  assert.equal(DEFAULTS.localModel,'laya-multilingual');
+  assert.notEqual(DEFAULTS.localModel,'laya');
+  // And it must survive validation, so a saved setting cannot silently fall back to the alias.
+  const {validateSettings}=await import('../src/shared.mjs');
+  const kept=validateSettings({...DEFAULTS,localModel:DEFAULTS.localModel},{requireKey:false});
+  assert.equal(kept.localModel,'laya-multilingual');
+});

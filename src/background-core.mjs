@@ -325,8 +325,40 @@ export function createBackground(c, {fetchImpl = fetch, now = Date.now, uuid = (
       const live=await pageCall(sender.tab.id,'status',null,s.documentId).catch(()=>null);
       const current=await getSession(sender.tab.id);
       if(!live?.running || !live.available || !current?.running || current.token!==s.token)return {...config,running:false};
-      const l=current.observation?.ledger;
-      return {...config,running:true,decisions:current.decisions??0,credits:current.credits,latencyMs:current.latencyMs,lastTick:current.lastTick,failures:current.failures??0,losses:l?{ownUnits:l.ownUnitsLost,ownBuildings:l.ownBuildingsLost,enemyUnits:l.enemyUnitsDestroyed,enemyBuildings:l.enemyBuildingsDestroyed}:null};
+      const l=current.observation?.ledger,o=current.observation;
+      // What the base is actually producing, with the display names resolved here rather than in the
+      // page: the queue items carry internal kinds ("E2", "HTNK"), and sending the whole inventory
+      // table across just to label them would be the larger exposure. Only queues with something in
+      // them are sent, so an idle base reads as "nothing in production" instead of seven empty rows.
+      const kinds=new Map((o?.inventory??[]).map(u=>[String(u.kind??''),String(u.label??'')]));
+      const queues=(o?.queues??[]).slice(0,8).map(q=>({type:String(q.type??'').slice(0,12),
+        items:(q.items??[]).slice(0,6).map(i=>{const kind=String(i.name??'').slice(0,24);return {kind,label:String(kinds.get(kind)||kind).slice(0,40),quantity:Number.isFinite(i.quantity)?i.quantity:1,progress:Number.isFinite(i.progress)?Math.max(0,Math.min(1,i.progress)):null};})})).filter(q=>q.items.length);
+      // Rich overlay feed: battlefield snapshot, decision trend, execution log and last error.
+      // Every field is derived, bounded and sanitized - no credentials, tokens or settings here.
+      // Session tokens, the stored endpoint and injected game objects stay behind this boundary.
+      return {...config,running:true,decisions:current.decisions??0,credits:current.credits,latencyMs:current.latencyMs,lastTick:current.lastTick,failures:current.failures??0,error:String(current.error??'').slice(0,160),acceptedActions:current.acceptedActions??0,waits:current.waits??0,
+        losses:l?{ownUnits:l.ownUnitsLost,ownBuildings:l.ownBuildingsLost,enemyUnits:l.enemyUnitsDestroyed,enemyBuildings:l.enemyBuildingsDestroyed}:null,
+        observation:o?{threat:o.threat??'clear',army:o.army,visibleEnemies:o.visibleEnemies,nearbyEnemies:o.nearbyEnemies,harvesters:o.harvesters,antiAir:o.antiAir,health:o.health,power:o.power??null,rangeThreats:(o.rangeThreats??[]).length,gameSeconds:o.gameSeconds,queues,
+          // Visible-unit samples for the tactical sketch. collectState already truncates both lists,
+          // so this stays bounded by construction; each point is a plain {x,y}.
+          ownPoints:(o.ownPoints??[]).slice(0,24),enemyPoints:(o.enemyPoints??[]).slice(0,24),base:o.base??null}:null,
+        trend:(current.history??[]).slice(-40).map(p=>({at:p.at,decisions:p.decisions})),
+        // Execution log: recorder-shaped entries only. `event()` always writes a numeric `at` and a
+        // string `kind`, so requiring both is what stops an arbitrary object pushed into `events`
+        // from becoming a channel for page-supplied content.
+        //
+        // `text` is carried because it is not a raw payload: `event()` assembles it from a whitelist
+        // (message, description, action label/name, choice, reason, kind) and slices it to 240
+        // characters. It is also the only field that gives a `micro`, `place` or `camera` entry any
+        // meaning - those kinds carry no structured detail, which is why real battles showed rows
+        // reading just "event" with nothing after them. Free-form display text already crosses this
+        // endpoint in `error` above, so this is not a new kind of exposure; it stays bounded, and
+        // control characters and newlines are collapsed so it cannot disturb the panel's layout.
+        executions:(current.events??[]).filter(e=>Number.isFinite(e?.at)&&typeof e?.kind==='string').slice(0,8).map(e=>({at:e.at,kind:String(e.kind).slice(0,40),
+          text:String(e.text??'').replace(/[\u0000-\u001f\u007f]+/g,' ').replace(/\s+/g,' ').trim().slice(0,100),
+          actionType:String(e.actionType??'').slice(0,40),choice:String(e.choice??'').slice(0,80),accepted:e.accepted===true,reason:String(e.reason??'').slice(0,60)})),
+        // Replies the page discarded, mostly for arriving after the game moved on.
+        rejected:Number(live.rejected)||0};
     }
     if(message.type==='DECIDE')return decide(message,sender);
     if(message.type==='EVENT')return event(message,sender);

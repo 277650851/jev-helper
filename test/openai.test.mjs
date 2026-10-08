@@ -147,7 +147,7 @@ test('Jev and local matches also record whether they were cloud or local, the en
   await app.handle({type:'DECIDE', token:s.token, body}, sender);
   await app.handle({type:'STOP', tabId:7}, extension);
   const [m] = (await app.handle({type:'MATCHES_LIST'}, extension)).matches;
-  assert.equal(m.providerKind, 'local'); assert.equal(m.endpoint, 'http://127.0.0.1:8742/v1/systemone'); assert.equal(m.configuredModel, 'laya');
+  assert.equal(m.providerKind, 'local'); assert.equal(m.endpoint, 'http://127.0.0.1:8742/v1/systemone'); assert.equal(m.configuredModel, 'laya-multilingual');
   assert.equal(m.inputTokens, 300); assert.equal(m.outputTokens, 0); assert.equal(m.totalTokens, 300);
 });
 

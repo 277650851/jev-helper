@@ -168,7 +168,10 @@ test('local source: no key required, no Authorization header, local endpoint, an
   assert.equal(x.s.provider,'local');assert.equal(x.s.providerName,'Laya');
   const result=await x.app.handle(x.request,sender);
   assert.equal(request.url,'http://127.0.0.1:8742/v1/systemone');assert.equal(request.options.headers.Authorization,undefined);assert.equal(request.options.redirect,'error');
-  assert.equal(JSON.parse(request.options.body).model,'laya');assert.equal(result.answers.tactics.choice,'wait');
+  // The request must carry the multilingual checkpoint name, not the bare 'laya' alias: the local
+  // service resolves that alias to the English checkpoint. Asserted rather than taken from DEFAULTS so
+  // a regression names the wrong value instead of quietly agreeing with itself.
+  assert.equal(JSON.parse(request.options.body).model,'laya-multilingual');assert.equal(result.answers.tactics.choice,'wait');
   const s=await x.app.getSession(7);assert.equal(s.decisions,1);assert.equal(s.model,'laya-multilingual-mlx');assert.equal(s.inputTokens,900);
   const status=await x.app.handle({type:'GET_STATUS',tabId:7},extension);assert.equal(status.providerName,'Laya');assert.equal(status.model,'laya-multilingual-mlx');
   const overlay=await x.app.handle({type:'OVERLAY_STATUS'},sender);assert.equal(overlay.providerName,'Laya');assert.doesNotMatch(JSON.stringify(overlay),/8742|apiBase|localBase/);
