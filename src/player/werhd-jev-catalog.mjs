@@ -19,6 +19,7 @@ export function refreshCatalog(api, catalog) {
       yard: rule.constructionYard,
       weapon: weapon(rule.primary), secondary: weapon(rule.secondary),
       aircraft: type === api.ObjectType.Aircraft,
+      attackDog: SCOUT_DOG.test(name),
     };
     if (rule.deploysInto) pending.push({ name: rule.deploysInto, type: api.ObjectType.Building });
     if (rule.undeploysInto) pending.push({ name: rule.undeploysInto, type: api.ObjectType.Vehicle });
@@ -32,6 +33,16 @@ export function refreshCatalog(api, catalog) {
 // army sent at one across a broken bridge stays stuck for the rest of the match.
 const DECORATION = /\b(flag|light ?post|lamp|pipes?|fence|sign|statue|tree|barrels?|crates?|billboard|mailbox|hydrant|bench|traffic|telephone|phone booth|debris|rubble|monument|fountain)\b/i;
 const functional = (r) => !!r && (r.power > 0 || r.refinery || r.factory || r.constructionYard || r.yard || r.isBaseDefense || r.weapon?.damage > 0 || r.canBeOccupied || r.bridgeRepairHut);
+
+// The scout dog, by rules name: ADOG (Allies) / LDOG (Soviet). The public rules expose no ability
+// flag for it, and the name is stable across the rules.ini of both sides, so this is the only handle
+// available. It matters for two decisions the player gets wrong without it: it is the cheapest thing to
+// send scouting and lose, and it is the unit that notices a Crazy Ivan before the bomb goes off --
+// which no amount of defensive gunnery replaces, because the bomb is buried and untargetable.
+// `attackDog` is deliberately about the dog, not about "fast": a rules entry for any modded unit whose
+// name ends in DOG is treated the same way.
+const SCOUT_DOG = /^(?:A|L)DOG\b/i;
+export const isAttackDog = (rule, name = rule?.name) => !!rule && SCOUT_DOG.test(String(name ?? ''));
 export const isDecoration = (rule, name = rule?.name) => !functional(rule) && DECORATION.test(`${rule?.label ?? ''} ${name ?? ''}`);
 // Buildings an engineer can actually take: the standard technology buildings plus anything with a
 // working function. Decorations and plain civilian props are left out.

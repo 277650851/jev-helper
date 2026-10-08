@@ -130,9 +130,20 @@ export function baseThreats(api, catalog, buildings, enemies, harvesters = []) {
   const home = core.length ? core[0].tile : undefined;
   const nearMiners = harvesters.filter(h => home && dist(h.tile, home) < MINER_DEFENSE_RADIUS);
   const defended = core.concat(nearMiners);
-  return enemies.filter(e => e.primaryWeapon && defended.some(b =>
-    weaponEffectiveness(currentWeapon(e, catalog), [b], catalog, api) > 0 &&
-    (dist(e.tile, b.tile) < 18 || canFireAt(api, catalog, e, b))));
+  // Aircraft were excluded here by accident rather than by decision: `weaponEffectiveness` against a
+  // building scores ground weapons only, so a transport or a bomber -- the one attacker that reaches
+  // the refinery and the factory from above -- measured zero and never counted as a threat. That is the
+  // raid that Crazy Ivan rides in on, and it is why the base could be bombed with no warning and no
+  // anti-air on the list. An enemy is a threat if it can engage *anything* defended, in its own zone.
+  return enemies.filter(e => e.primaryWeapon && defended.some(b => {
+    const air = e.zone === (api.ZoneType?.Air ?? 1);
+    const w = currentWeapon(e, catalog);
+    if (w.aa === air ? false : !w.damage) return false;
+    // Air attacks anything in range; ground has to beat the range check.
+    return air
+      ? (w.range ?? 0) > 0 && dist(e.tile, b.tile) < 18
+      : weaponEffectiveness(w, [b], catalog, api) > 0 && (dist(e.tile, b.tile) < 18 || canFireAt(api, catalog, e, b));
+  }));
 }
 
 export function weaponEffectiveness(w, targets, catalog, api) {
@@ -164,9 +175,24 @@ export function infantryProfile(rule, api) {
     role:antiArmor>antiInfantry*1.25?'antiArmor':'antiInfantry'};
 }
 
+// A scout is expendable, so the score is speed per unit of what it costs to replace. The Attack Dog
+// wins on both counts and, being a dog, is also the one unit that finds a Crazy Ivan before it goes
+// off -- losing a rifleman to one costs more than the dog did. Nothing here reads the unit's category,
+// so a caller that wants a specific scout kind still sorts by this; see `scoutPreference`.
 export function scoutScore(rule) {
   return rule && !rule.engineer && rule.category !== 'AirPower' && rule.speed > 0 && rule.cost > 0
     ? rule.speed / Math.sqrt(rule.cost) : 0;
+}
+
+// Rank for the scouting choice specifically. Speed alone sends a cheap fast rifleman out in front of
+// a dog, but a scouting unit is chosen for what survives the trip and what it can notice, not for its
+// top speed: the dog is faster in practice, detects the one threat that reaches the base unseen
+// (Crazy Ivan, which is buried and cannot be shot at), and is the cheapest thing to replace.
+// `fastScout` is a fallback for factions with no dog.
+export function scoutPreference(rule) {
+  const base = scoutScore(rule);
+  if (!base) return 0;
+  return rule?.attackDog ? base * 3 : base;
 }
 
 const segmentDistance = (p,a,b) => {
@@ -328,11 +354,33 @@ export function investmentGroups(api, catalog, snapshot, memory, groups) {
   const targetDefenses = strategy.underPressure ? (strategy.suppressed ? 6 : 3) : defenseFloor ? MIN_BASE_DEFENSES : 1;
   let defensePlan, coverage = 0, floorTagged = false;
   if (s.harvesters >= Math.min(2, s.economy?.targetMiners ?? 2, strategy.underPressure ? 1 : 2) && free(api.QueueType.Armory)) {
+    // Ground value is what the ranking below used, and it is zero for every anti-air emplacement, so the
+    // AA never entered the list and the base answered helicopter raids with pillboxes. Score each
+    // option against the zone it can actually answer: air threats raise the value of anything that can
+    // shoot at aircraft, ground threats keep the existing behaviour.
+    const airTargets = enemies.filter(e => e.zone === (api.ZoneType?.Air ?? 1) && (e.ammo === undefined || e.ammo !== 0));
     const options = api.production.available(api.QueueType.Armory).filter(i => catalog[i.name]?.isBaseDefense && !catalog[i.name]?.wall)
-      .map(i => ({ ...i, queue: api.QueueType.Armory, value: effectiveness(catalog[i.name], defenseTargets, catalog, api) }));
+      .map(i => {
+        const r = catalog[i.name];
+        const ground = effectiveness(r, defenseTargets, catalog, api);
+        const vsAir = airTargets.length ? effectiveness(r, airTargets, catalog, api) : 0;
+        // An air answer is worth more than its size suggests: transports and the bombers that carry
+        // Crazy Ivan are the one threat that reaches the refinery and the war factory directly, and a
+        // tower cannot be outrun by the aircraft it is shooting at.
+        return { ...i, queue: api.QueueType.Armory, value: ground + vsAir * 2.2, groundValue: ground, vsAir };
+      });
     coverage = defenseUnits.filter(u => defenseTargets.length
       ? defenseTargets.some(e => canFireAt(api, catalog, u, e))
       : effectiveness(catalog[u.name], [], catalog, api) > 0).length;
+    // Coverage has to count the tower that answers aircraft, not only the one that answers ground: with
+    // an air raid inbound, "two defenses can reach it" is false of both pillboxes.
+    coverage = defenseUnits.filter(u => defenseTargets.length
+      ? defenseTargets.some(e => canFireAt(api, catalog, u, e))
+      : effectiveness(catalog[u.name], [], catalog, api) > 0).length
+      + (airTargets.length ? defenseUnits.filter(u => {
+          const r = catalog[u.name] ?? {}, ws = [r.weapon, r.secondary].filter(w => (w?.damage ?? 0) > 0 && w.aa !== false);
+          return ws.length > 0;
+        }).length : 0);
     if (coverage < targetDefenses && (defenseUnits.length < 8 || strategy.underPressure && coverage < 2)) for (const item of options.sort((a, b) => b.value / Math.sqrt(catalog[b.name].cost) - a.value / Math.sqrt(catalog[a.name].cost))) {
       if (Object.keys(dg.actions).length >= 3) break;
       if (item.value <= 0) continue;
@@ -344,10 +392,18 @@ export function investmentGroups(api, catalog, snapshot, memory, groups) {
         (currentWeapon(e, catalog).range ?? 0) > (r.weapon?.range ?? 0))) continue;
       const reachableThreats = defenseTargets.filter(e => weaponEffectiveness(r.weapon, [e], catalog, api) > 0 &&
         (r.weapon?.range ?? 0) >= (currentWeapon(e, catalog).range ?? 0));
-      if (defenseTargets.length && !reachableThreats.length) continue;
-      const placement = chooseBuildingSite(api, catalog, item.name, units, memory, 200, reachableThreats);
+      // Nothing to shoot at on the ground is fine when this is the answer to aircraft; without aircraft
+      // it means the option is a wall in disguise and is dropped.
+      if (defenseTargets.length && !reachableThreats.length && item.vsAir <= 0) continue;
+      // Towers answer what is already overhead, so they go where the aircraft came from rather than in
+      // front of a ground approach.
+      const placement = chooseBuildingSite(api, catalog, item.name, units, memory, 200,
+        reachableThreats.length ? reachableThreats : airTargets);
       if (!placement || s.self.credits < Math.min(200, r.cost)) continue;
-      add(dg, item, `${strategy.underPressure ? 'URGENT' : 'PREPARE'}: counter-fire at (${placement.x},${placement.y}), estimated effectiveness ${Math.round(item.value)}; enemy ranges ${reachableThreats.map(e=>currentWeapon(e,catalog).range).join(',') || 'no local target'}`, Math.min(200, r.cost), placement);
+      const answered = item.vsAir > 0 && !reachableThreats.length
+        ? `engages ${airTargets.length} aircraft in view (anti-air)`
+        : `counter-fire at (${placement.x},${placement.y}), enemy ranges ${reachableThreats.map(e=>currentWeapon(e,catalog).range).join(',') || 'no local target'}`;
+      add(dg, item, `${strategy.underPressure ? 'URGENT' : 'PREPARE'}: ${answered}, estimated effectiveness ${Math.round(item.value)}`, Math.min(200, r.cost), placement);
       // Below the floor the first one is not a judgement call: after two waits the executor builds it.
       // It is still not a reserved capital plan — a peacetime turret must not take the money an
       // objective (an engineer, a miner) is holding, so only a pressured base reserves for defenses.
@@ -375,7 +431,13 @@ export function investmentGroups(api, catalog, snapshot, memory, groups) {
   const minerUrgent = s.harvesters === 0 && economyDeficit > 0;
   // While the base is contested the usual target is relaxed, but with no miner at all the economy
   // plan is the defence: an army that cannot be paid for cannot hold anything.
-  const miner = economyDeficit && (minerUrgent || !strategy.underPressure) && s.economy?.factories && free(api.QueueType.Vehicles)
+  // Same deadlock as the vehicle group, one layer up: this required a standing factory, so a base whose
+  // factory was destroyed never got an ECONOMY FIRST miner option either -- the single most expensive
+  // mistake in that state, because the rebuilt factory cannot earn anything without a miner. A factory
+  // that is being rebuilt counts as coming back.
+  const factoryBack = !!s.economy?.factories || api.production.available(api.QueueType.Structures)
+    .some(i => catalog[i.name]?.factory === 'UnitType' && !catalog[i.name]?.naval && !ownNames.has(i.name));
+  const miner = economyDeficit && (minerUrgent || !strategy.underPressure) && factoryBack && free(api.QueueType.Vehicles)
     ? api.production.available(api.QueueType.Vehicles).find(i => catalog[i.name]?.harvester) : undefined;
   const economyPlan = miner && { name: miner.name, cost: catalog[miner.name].cost, queue: api.QueueType.Vehicles };
   // Enough to pay for the miner is enough. The old floor of 500 was read as "save up to 500 first",
@@ -432,10 +494,61 @@ export function investmentGroups(api, catalog, snapshot, memory, groups) {
   if (!counterPlan && queuedCounter) counterPlan = { name:queuedCounter.name,
     cost:Math.max(0,queuedCounter.creditsEach*queuedCounter.quantity-queuedCounter.creditsSpent),
     queue:api.QueueType.Vehicles,category:'vehicles',purpose:strategy.underPressure?counterPurpose:'mobilize',pending:true };
-  const coreReady = !economyPlan && !forcePlan && !((mobileDefenseNeeded||forceNeeded) && counterPlan) && s.harvesters >= Math.min(2, s.economy?.targetMiners ?? 2) && s.economy?.factories > 0 && (armorCount >= 4 || strategy.suppressed && coverage >= 2 || standoff.length > 0);
-  const candidates = available.filter(i => i.type === api.ObjectType.Building && !ownNames.has(i.name))
+  // `coreReady` gated technology on a standing factory for the same reason: with the factory down, the
+// tech line could never start even though the base had the miners and the credits to rebuild it. The
+// rebuild itself is handled by the construction group; this asks whether the rest of the core holds.
+const coreReady = !economyPlan && !forcePlan && !((mobileDefenseNeeded||forceNeeded) && counterPlan) && s.harvesters >= Math.min(2, s.economy?.targetMiners ?? 2) && factoryBack && (armorCount >= 4 || strategy.suppressed && coverage >= 2 || standoff.length > 0);
+  // Technology and support buildings, ordered so the chain actually advances.
+//
+// The previous ordering was "air support first, then the highest techLevel", and only candidates[0]
+// was ever offered. A base that owned the airfield therefore never saw the laboratory, the service
+// depot or the radar, because the airfield stayed on top forever; a base that could not afford the
+// airfield saw nothing else either. `rules.prerequisite` names what a building needs, so the order
+// follows that instead: a building whose prerequisites this base already satisfies (or is about to,
+// see the item below) comes first, and among equals the cheapest is taken first because credit is the
+// real constraint -- an expensive laboratory offered at 14,000 credits that sits there unread is
+// worse than a 1,000-credit radar that gets built.
+//
+// `isAirSupport` is no longer special-cased for the Allies airfield. In the Soviet rules there is no
+// airfield at all (the radar replaces it), and forcing air support to the top is what kept a Soviet
+// base from ever reaching a building it could actually build.
+// One hop ahead: a prerequisite that is itself buildable and not yet standing. This is what lets a
+// laboratory be offered on the same turn its radar is, instead of one turn per link. Defined first
+// because `prerequisitesMet` below calls it.
+const buildableNames = new Set(available.filter(i => i.type === api.ObjectType.Building).map(i => i.name));
+const pendingPrereqs = (name) => buildableNames.has(name) && !ownNames.has(name);
+const prerequisitesMet = (r) => {
+  const need = r.prerequisite ?? [];
+  if (!need.length) return true;
+  // Prerequisites are rule names. A building this base is about to build counts: the construction group
+  // runs the same check and queues them, and treating the plan as met is what stops a chain of three
+  // buildings from looking blocked from the first link.
+  const ownedOrPlanned = name => ownNames.has(name)
+    || groups.construction?.actions?.[`produce_${name}`] !== undefined
+    || strategy.investment?.name === name;
+  return need.every(p => ownedOrPlanned(p) || pendingPrereqs(p));
+};
+const candidates = available.filter(i => i.type === api.ObjectType.Building && !ownNames.has(i.name))
     .filter(i => { const r = catalog[i.name]; return r && !r.naval && !r.yard && !r.refinery && !r.isBaseDefense && !r.wall && !(r.power > 0) && (isAirSupport(r) || r.buildCategory === 'Tech' && !r.factory); })
-    .sort((a, b) => Number(isAirSupport(catalog[b.name])) - Number(isAirSupport(catalog[a.name])) || (catalog[b.name].techLevel ?? 0) - (catalog[a.name].techLevel ?? 0));
+    .sort((a, b) => {
+      const ra = catalog[a.name], rb = catalog[b.name];
+      // 1. A building whose prerequisites this base meets (or can build next) outranks one it cannot.
+      //    This is the fix for the chain stalling: previously nothing consulted prerequisites at all.
+      const aOk = prerequisitesMet(ra) ? 0 : 1, bOk = prerequisitesMet(rb) ? 0 : 1;
+      if (aOk !== bOk) return aOk - bOk;
+      // 2. Among those, keep the original intent: air support unlocks the air wing, which nothing else
+      //    does. It is not a free-for-all on price, because a service depot is cheaper than an airfield
+      //    and would otherwise have displaced it on every base.
+      const aAir = isAirSupport(ra) ? 0 : 1, bAir = isAirSupport(rb) ? 0 : 1;
+      if (aAir !== bAir) return aAir - bAir;
+      // 3. Then the highest tier first, as before: the point of this list is the next unlock, and the
+      //    building that unlocks the most is the one worth queueing. A base without a radar should be
+      //    told about the radar before the service depot, not after it.
+      const aLevel = ra.techLevel ?? 0, bLevel = rb.techLevel ?? 0;
+      if (aLevel !== bLevel) return bLevel - aLevel;
+      // 4. Cheapest last, so the offered option is one the treasury can actually pay for.
+      return (ra.cost ?? 0) - (rb.cost ?? 0);
+    });
   let techPlan;
   if (coreReady && free(api.QueueType.Structures) && !strategy.critical) {
     const item = candidates[0];

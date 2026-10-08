@@ -89,9 +89,51 @@ export function specialGroups(api, catalog, snapshot, memory, groups) {
     });
   };
   const { bridges, water } = refreshInfrastructure(api, memory, base);
+  // Upgrade crates.
+  //
+  // `crates()` is a separate listing, not part of units(), and nothing else in this file read it -- so
+  // crates were invisible to the whole strategy layer. That is worth correcting on its own: a crate can
+  // be an MCV, and an MCV replaces the entire economy after the base is lost. The DECORATION pattern in
+  // the catalog matches "crates" too, which is exactly right for scenery and exactly wrong here, so the
+  // decision is made from the crates() listing and never from the decoration filter.
+  //
+  // Who goes depends on what is left. The normal case is the scout, because it is already walking into
+  // fog and a crate is on its way; a crate on the way is free to collect. After the base is gone there
+  // is no scout to spare, so one combat unit is detached, and only when the army can spare it -- losing
+  // a tank to pick up a box is a bad trade with 20 enemies on the field.
+  const crates = api.crates ? (api.crates() ?? []) : [];
+  if (crates.length) {
+    const pickups = group('salvage', 'Collect upgrade crates. A crate can be a Construction Vehicle, and after the base is lost that is the only way back into the match. Send the scout while it is already exploring; otherwise detach one combat unit only if the army can spare it.');
+    const seen = memory.crateSeen ??= new Map();
+    const live = crates.filter(c => c.tile && !c.water && !seen.get(c.id)?.gone);
+    for (const c of live.slice(0, 3)) seen.set(c.id, { tick });
+    // Candidates: the scout first, then the cheapest combat unit that is not the last of its kind.
+    const scout = units.find(u => u.id === memory.scoutId);
+    const dog = units.filter(u => catalog[u.name]?.attackDog && idle(u, memory, tick));
+    const combat = units.filter(u => u.type !== api.ObjectType.Building && catalog[u.name]?.weapon?.damage > 0
+      && u.id !== memory.scoutId && idle(u, memory, tick) && !catalog[u.name]?.engineer)
+      .sort((a, b) => (catalog[a.name]?.cost ?? 0) - (catalog[b.name]?.cost ?? 0));
+    // One unit is enough at a time; two sent to the same crate is one unit wasted.
+    const busy = new Set([...memory.specialOrders.values()].filter(o => o.kind === 'collect_crate').map(o => o.crateId));
+    const forCrate = scout && idle(scout, memory, tick) ? [scout]
+      : dog.length ? [dog[0]]
+      : combat.length && combat.length >= 4 ? [combat[0]] : null;
+    for (const c of live.slice(0, 3)) {
+      if (busy.has(c.id) || !forCrate) break;
+      const u = forCrate[0], isScout = u.id === memory.scoutId || !!catalog[u.name]?.attackDog;
+      pickups(`crate_${c.id}`, `${isScout ? 'While scouting' : 'Detach one combat unit'}: collect the upgrade crate at (${c.tile.rx},${c.tile.ry})${c.name ? ` (${c.name})` : ''}. A crate may be a Construction Vehicle; after losing the base it is the way back in.`, {
+        type: 'special', kind: 'collect_crate', ids: [u.id], targetId: c.id, tile: { x: c.tile.rx, y: c.tile.ry }, crateId: c.id,
+        // Automatic while the crate is close to a frontier the scout is heading for, or when the base is
+        // gone: those are the cases where the model has no better use for the turn and would wait.
+        ...(isScout || !base || units.length <= 6 ? { auto: 3 } : {}),
+      });
+    }
+  }
   snapshot.state.infrastructure = {
     visibleGarrisons: civilians.filter((u) => u.garrison).slice(0, 8).map((u) => ({ id: u.id, tile: u.tile, ...u.garrison })),
     visibleBridgePieces: bridges.length, shoreNearBase: !!water.length,
+    // Crates are a separate listing; the count is what tells the player why a unit walked off.
+    crates: crates.length,
     aircraft: units.filter((u) => catalog[u.name]?.aircraft).map((u) => ({ id: u.id, ammo: u.ammo, idle: u.isIdle })),
     transports: units.filter((u) => u.transport).map((u) => ({ id: u.id, ...u.transport })),
   };
@@ -384,6 +426,19 @@ export function executeSpecial(api, action) {
     return { accepted: true };
   }
   if (action.type !== 'special') return undefined;
+  // Crate pickup. `gather` is the only verb the public API offers for this, and it needs the tile the
+  // crate sits on rather than its id -- so the crate is re-read here instead of trusted from the plan,
+  // because a crate that was already taken (or despawned) between building the option and executing it
+  // would otherwise send a unit to an empty tile.
+  if (action.kind === 'collect_crate') {
+    const crate = (api.crates?.() ?? []).find(c => c.id === action.targetId)
+      ?? (api.crates?.() ?? []).find(c => c.tile.rx === action.tile?.x && c.tile.ry === action.tile?.y);
+    if (!crate) return { accepted: false, reason: 'crate_gone' };
+    const live = (api.units('self') ?? []).filter(u => action.ids.includes(u.id));
+    if (!live.length) return { accepted: false, reason: 'unit_gone' };
+    api.gather(live.map(u => u.id), crate.tile.rx, crate.tile.ry);
+    return { accepted: true, ids: live.map(u => u.id), targetId: crate.id, crate: crate.name };
+  }
   if (action.kind === 'demolish_bridge') {
     const tile = action.order.target;
     const bridge = api.map.tile(tile.x, tile.y)?.bridge;

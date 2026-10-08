@@ -1,6 +1,6 @@
 import { specialGroups, executeSpecial, rememberSpecial, maintainSpecial, refreshInfrastructure, SIEGE_RANGE } from "./werhd-jev-special.mjs";
 import { buildBrief, formSquads, squadUnits, sameIntent } from "./werhd-jev-commander.mjs";
-import { assessStrategy, investmentGroups, chooseBuildingSite, chooseRallySite, weaponEffectiveness, effectiveness, infantryProfile, scoutScore, currentWeapon as combatWeapon, activeWeapons, canFireAt, baseThreats, ATTACK_FORCE_SIZE, ATTACK_AA_ESCORTS, vehicleOptions } from "./werhd-jev-strategy.mjs";
+import { assessStrategy, investmentGroups, chooseBuildingSite, chooseRallySite, weaponEffectiveness, effectiveness, infantryProfile, scoutScore, scoutPreference, currentWeapon as combatWeapon, activeWeapons, canFireAt, baseThreats, ATTACK_FORCE_SIZE, ATTACK_AA_ESCORTS, vehicleOptions } from "./werhd-jev-strategy.mjs";
 import { updateCamera } from "./werhd-jev-camera.mjs";
 import { refreshCatalog, isDecoration } from "./werhd-jev-catalog.mjs";
 import { trackObjective, isGuardedByObjective } from "./werhd-jev-objective.mjs";
@@ -549,7 +549,23 @@ export function candidateGroups(api, catalog, snapshot, memory) {
     "vehicles",
     `Choose what the vehicle factory should produce next. The miner target follows the economy, not a fixed number: ${state.economy.targetMiners} now (${state.economy.reason}). Below the target, buy a miner unless the base is under attack and needs a tank; at or above it, do not buy miners. Produce effective counters while preserving the strategy investment budget.` + " Maintain 2 mobile anti-air escorts after 4 tanks, even before spotting aircraft. Use mobileAntiAirCount: deployed infantry guarding the base are not mobile escorts. URGENT: when airThreatCount is positive and mobileAntiAirCount is below 3, build mobile anti-air first; tanks cannot hit flying enemies. A completed queue should be refilled while affordable. Saving for the selected defensive or technology investment is intentional.",
   );
-  if (!queueOf(vehicleType)?.size && factories)
+  // A lost vehicle factory used to empty this group completely: the guard below was `&& factories`, so
+// with no factory standing the only option left was "wait" -- 62 vehicle turns in one match, all of
+// them waits, while the construction group separately queued a replacement. That is a deadlock, not a
+// decision: a new factory cannot earn anything until it builds miners, and no miner was ever offered
+// while the factory was down. The factory may also be on its way back (see the construction group),
+// which is exactly when the miners have to be ready to queue the moment it finishes.
+//
+// So the guard is now "can this base still produce vehicles at all", which stays true while a factory
+// is standing or one is being rebuilt, and `vehicleOptions` itself filters by what the queue offers.
+const factoryRebuilding = !factories && buildable.some((i) => catalog[i.name]?.factory === "UnitType" && !catalog[i.name]?.naval);
+  // Say why a lost factory is being rebuilt and what it unblocks, so the replacement is not one more
+  // candidate among many. This is the step that decides whether the match can still produce vehicles.
+  if (factoryRebuilding) {
+    const factory = buildable.find((i) => catalog[i.name]?.factory === "UnitType" && !catalog[i.name]?.naval);
+    if (factory) groups.construction.instructions += ` Our vehicle factory has been destroyed and the replacement (${catalog[factory.name].label}, cost ${catalog[factory.name].cost}) is the highest priority: without it no miner and no tank can be built, and income stops for the rest of the match.`;
+  }
+  if (!queueOf(vehicleType)?.size && (factories || factoryRebuilding))
     for (const item of vehicleOptions(api,catalog,state)) {
       const r = catalog[item.name], { economic, antiAir } = item;
       if (state.self.credits < Math.min(250, r.cost)) continue;
@@ -572,9 +588,13 @@ export function candidateGroups(api, catalog, snapshot, memory) {
     (u) => u.type === api.ObjectType.Infantry,
   ).length;
   const infantryOffers=api.production.available(infantryType).filter(i=>catalog[i.name]&&!catalog[i.name].engineer);
-  const preferredScout=[...infantryOffers].filter(i=>catalog[i.name].weapon?.damage>0)
-    .sort((a,b)=>scoutScore(catalog[b.name])-scoutScore(catalog[a.name]))[0];
-  const scoutUnits=army.filter(u=>u.type===api.ObjectType.Infantry).sort((a,b)=>scoutScore(catalog[b.name])-scoutScore(catalog[a.name]));
+  // `scoutPreference`, not `scoutScore`: the dog wins on both what it is worth sending out for and what
+  // it costs to replace, and it is the unit that notices a Crazy Ivan before the bomb goes off. Sorting
+  // by raw speed used to pick a cheap rifleman ahead of the dog, which is the unit the player least
+  // wants to lose to a transport drop. A dog with no weapon damage of its own is still the right scout.
+  const preferredScout=[...infantryOffers].filter(i=>catalog[i.name].weapon?.damage>0||catalog[i.name]?.attackDog)
+    .sort((a,b)=>scoutPreference(catalog[b.name])-scoutPreference(catalog[a.name]))[0];
+  const scoutUnits=army.filter(u=>u.type===api.ObjectType.Infantry).sort((a,b)=>scoutPreference(catalog[b.name])-scoutPreference(catalog[a.name]));
   const bestScout=scoutUnits[0];
   if(bestScout)memory.scoutId=bestScout.id;
   // The cheap fast scout (the dog) is wanted as soon as the barracks can produce it, whether or not
@@ -986,14 +1006,20 @@ export function candidateGroups(api, catalog, snapshot, memory) {
     }
     const mobilize = readiness.ready && !memory.enemyBuildings.size;
     if (objectiveUnseen) groups.scouting.instructions = `SEARCHING FOR THE OBJECTIVE (${memory.objectiveKeys.words.join(" / ")}): it has not been seen yet; scouting is how to find it. ` + groups.scouting.instructions;
+    // Name the scout that will be used, and say why it is that one. The instruction asks for "one
+    // expendable unit" and the executor picks by scoutPreference, so without this the model sees a
+    // generic explorer while the unit that actually moves is a dog -- and a dog is worth sending
+    // precisely because it is cheap to replace and detects a buried bomb nobody else can see.
+    const scoutIsDog = !!catalog[scout.name]?.attackDog;
     groups.scouting.criteria.wait =
       memory.enemyBuildings.size
         ? "Wait only if a scout is already moving. The force is not ready to attack, so one expendable unit should keep revealing the map for objectives and enemy positions."
         : "Wait only if a scout is already moving or the enemy base has already been discovered. With idle troops and an unknown enemy base, choose one of the frontiers.";
+    if (scoutIsDog) groups.scouting.instructions += ` The scout that will be sent is the ${catalog[scout.name].label}: it is the fastest thing on the field, the cheapest to replace if the trip goes wrong, and it is the only unit that detects a Crazy Ivan before the bomb goes off. Do not send a rifleman instead.`;
     for (const p of memory.points.slice(0, 2))
       scoutChoice(
         `explore_${p.x}_${p.y}`,
-        `${objectiveUnseen ? "Find the objective: " : ""}${mobilize ? "Advance " + tanks.length + " tanks" : "Scout with one expendable unit"} to known frontier (${p.x},${p.y}), ${p.fog} unexplored adjacent samples. Reveal the enemy base, attack any opposition.`,
+        `${objectiveUnseen ? "Find the objective: " : ""}${mobilize ? "Advance " + tanks.length + " tanks" : "Scout with one expendable unit"} to the revealed frontier tile (${p.x},${p.y}), which has ${p.fog} unexplored adjacent tiles. Reveal the enemy base, attack any opposition.`,
         {
           type: "mission",
           mode: "explore",
@@ -1020,6 +1046,20 @@ export function candidateGroups(api, catalog, snapshot, memory) {
   if (state.self.credits >= RICH_SPEND && allArmy.length < RICH_ARMY_CAP) for (const id of ["vehicles", "infantry"]) {
     const g = groups[id]; if (!g) continue;
     const combat = a => a?.type === "produce" && !catalog[a.name]?.harvester && !catalog[a.name]?.engineer && (catalog[a.name]?.weapon?.damage ?? 0) > 0;
+    // A missing miner outranks the money-idle fallback, and this used to be the other half of the same
+    // deadlock: `combat()` excludes harvesters by design, so a tank was tagged here and the branch
+    // `continue`d before the miner case could be offered. A base whose income had stopped answered
+    // "wait" with 14,000 credits and no tanks to show for it.
+    const queuedMiners = state.queues.reduce((n, q) => n + q.items.reduce((s, i) =>
+      s + (catalog[i.name]?.harvester ? i.quantity : 0), 0), 0);
+    const minersMissing = Math.max(0, (state.economy?.targetMiners ?? 0) - state.harvesters - queuedMiners);
+    const minerEntry = id === "vehicles" && minersMissing > 0
+      ? Object.entries(g.actions).find(([k, a]) => k !== "wait" && a?.type === "produce" && catalog[a.name]?.harvester)
+      : undefined;
+    if (minerEntry) {
+      if (!Number.isFinite(minerEntry[1].auto)) minerEntry[1].auto = 1;
+      continue;
+    }
     const entry = Object.entries(g.actions).find(([k, a]) => k !== "wait" && combat(a));
     if (entry) { if (!Number.isFinite(entry[1].auto)) entry[1].auto = 2; continue; }
     if (id === "vehicles" && !state.strategy?.recovery && !Object.values(g.actions).some(a => a?.type === "produce")) {
@@ -2016,7 +2056,7 @@ export async function attachJevPlayer(api, options = {}) {
     if (action.type === "produce") memory.spentCredits = (memory.spentCredits ?? 0) + (action.cost ?? 0);
     if (action.type === "special") {
       rememberSpecial(memory, action, execution, api.tick());
-      for (const unitId of execution.ids ?? []) memory.specialOrders.set(unitId, { tick: api.tick(), kind: action.kind });
+      for (const unitId of execution.ids ?? []) memory.specialOrders.set(unitId, { tick: api.tick(), kind: action.kind, crateId: action.crateId });
       if (action.targetId !== undefined) memory.specialTargets.set(`repair_${action.targetId}`, api.tick());
     }
     if (action.type === "set_deployed") for (const unitId of execution.ids ?? []) memory.postureOrders.set(unitId, api.tick());
