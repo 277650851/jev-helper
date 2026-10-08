@@ -17,6 +17,15 @@ rem
 rem Not measured: win rate. The arms were not played for comparable time (149 vs 55 minutes), and
 rem wins are too low-frequency to read from a handful of matches.
 rem
+rem -HeadMaxLen 512 is not about state size at all, it is about the instructions. Laya caps every
+rem option at 48 tokens and gives the instructions whatever budget is left, so the checkpoint default
+rem of 256 leaves the vehicle instructions (273 tokens) only 109 -- and the sentence that decides the
+rem question, "ECONOMY FIRST: ... Produce the offered miner now", sits at the end and was being cut
+rem off before the model ever saw it. Measured on 20 real captured vehicle questions against
+rem laya-multilingual: wait answered 18 of 20 at 256, 4 of 20 at 512. Costs 1052 -> 1431 ms.
+rem Raising the whole sequence to 8192 instead does almost nothing for this (mixed action rate 57% ->
+rem 63%) and costs four times the latency, so max_len stays at the checkpoint's 1024.
+rem
 rem What the full-state arm actually cost, in a real match (jev-report-20261009-052739): the vehicle
 rem queue sat empty for 20.6 minutes with 3700-5000 credits on hand and a 750-credit tank on offer,
 rem and the model answered wait 29 times out of 29, at 0.65-0.93 confidence. One tank was built and
@@ -35,7 +44,7 @@ echo.
 echo == Starting SLIM mode (--slim-state)...
 rem Dumps go to their own directory: a capture with no --slim-state carries no preparedState, so
 rem mixing the two makes every later report describe the arm the server was NOT running.
-call tools\laya-ctl.cmd start -Workers 2 -Threads 6 -DumpStates .preview\states-slim -SlimState
+call tools\laya-ctl.cmd start -Workers 2 -Threads 6 -DumpStates .preview\states-slim -SlimState -HeadMaxLen 512
 
 popd
 echo.

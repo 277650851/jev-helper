@@ -432,6 +432,14 @@ def _parse_args(argv=None):
                               "terse 'KIND x,y hp%%' form (see --compact-units). Costs ~243 more state "
                               "tokens (732 vs 489) but keeps 'where are the enemy and my units' "
                               "inside the budget; has no effect without --slim-state")
+    parser.add_argument("--max-len", type=int, default=None, metavar="N",
+                        help="token budget for the whole sequence, overriding the checkpoint's "
+                             "rl_agent_config.json max_len (1024). The encoder is a ModernBERT with "
+                             "max_position_embeddings=8192 and RoPE, so a longer budget is possible, "
+                             "but the checkpoint was trained at 1024 -- measure before trusting it")
+    parser.add_argument("--head-max-len", type=int, default=None, metavar="N",
+                        help="token budget per question group, overriding the checkpoint's "
+                             "head_max_len (256). A group whose options exceed it is refused outright")
     parser.add_argument("--dump-states", default=None, metavar="DIR",
                         help="save every request payload (the exact state and questions the extension "
                              "sent) into DIR, up to %d files, for offline tuning" % DUMP_LIMIT)
@@ -519,6 +527,10 @@ def main(argv=None) -> int:
                 state, rest = call_kwargs.pop("state", None), ()
                 questions = call_kwargs.get("questions")
             prepared = prepare_state(state, args)
+            if args.max_len is not None:
+                call_kwargs["max_len"] = args.max_len
+            if args.head_max_len is not None:
+                call_kwargs["head_max_len"] = args.head_max_len
             result = super().predict(prepared, *rest, **call_kwargs)
             if args.dump_states:
                 _write_dump(args.dump_states, state, questions, result,

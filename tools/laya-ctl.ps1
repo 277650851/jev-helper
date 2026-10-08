@@ -91,6 +91,10 @@ param(
     # opt-in on the strength of the mechanism and the matched-workload latency, not a proven win rate.
     [switch]$SlimState,
 
+    # Per-question option budget, overriding the checkpoint's head_max_len (256). See where it is
+    # added to the argument list: 512 restores the instructions the default was cutting off.
+    [int]$HeadMaxLen = 512,
+
     [string]$Token = '',
 
     [int]$TailLines = 40
@@ -183,6 +187,12 @@ function Show-Status {
         $cmdline = (Get-CimInstance Win32_Process -Filter "ProcessId=$listenerPid" -ErrorAction SilentlyContinue).CommandLine
         if ($cmdline -match '--slim-state') { Write-Ok 'state mode: slim (--slim-state)' }
         elseif ($cmdline) { Write-Ok 'state mode: full (default)' }
+        if ($cmdline -match '--head-max-len\s+(\d+)') {
+            $head = $Matches[1]
+            if ([int]$head -ge 512) { Write-Ok "option budget: $head tokens (instructions not truncated)" }
+            else { Write-Bad "option budget: $head tokens -- the vehicle instructions are cut off here" }
+        }
+        else { Write-Bad 'option budget: checkpoint default (256) -- instructions are truncated' }
     }
 
     if (Test-Path $VenvPython) { Write-Ok "python: $VenvPython" }    else {
@@ -213,6 +223,14 @@ function Start-Server {
     if ($Workers -ne 1) { $argList += @('--workers', "$Workers") }
     if ($CompactUnits) { $argList += '--compact-units' }
     if ($SlimState) { $argList += '--slim-state' }
+    # The per-question option budget. `build_sequence` caps every option at 48 tokens and gives the
+    # instructions whatever is left, so with 3 options the default 256 leaves the instructions 109
+    # tokens -- and the vehicle instructions are 273. The sentence that actually decides the question
+    # ("ECONOMY FIRST: ... Produce the offered miner now") sits at the end and was being cut off:
+    # measured on 20 real captured vehicle questions against laya-multilingual, the model answered
+    # wait 18 of 20 at 256 and 4 of 20 at 512. The cost is latency (1052 -> 1431 ms per question),
+    # not model load -- the head is a small part of the sequence.
+    if ($HeadMaxLen -gt 0) { $argList += @('--head-max-len', "$HeadMaxLen") }
     if ($Token) { $argList += @('--token', $Token) }
 
     $proc = Start-Process -FilePath $VenvPython -ArgumentList $argList -WorkingDirectory $Root `
