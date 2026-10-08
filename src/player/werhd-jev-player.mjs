@@ -577,11 +577,11 @@ export function candidateGroups(api, catalog, snapshot, memory) {
   const scoutUnits=army.filter(u=>u.type===api.ObjectType.Infantry).sort((a,b)=>scoutScore(catalog[b.name])-scoutScore(catalog[a.name]));
   const bestScout=scoutUnits[0];
   if(bestScout)memory.scoutId=bestScout.id;
-  // A cheap fast scout is wanted while the enemy base is unknown or the force is not ready. A raid
-  // does not cancel it: the dog costs 200 and running it out is how the enemy base gets found at all.
-  // jev-report-20261008-063613 was answered "defend_base" 69 times and never trained a dog, because
-  // the constant attacks kept this false.
-  const needsScout=(!memory.enemyBuildings.size||memory.lastReady===false)&&preferredScout&&
+  // The cheap fast scout (the dog) is wanted as soon as the barracks can produce it, whether or not
+  // the enemy is in view and even while the base is being raided: cycling in a 200-credit runner is
+  // how the enemy base is found at all. jev-report-20261008-063613 only ever sent E1/GGI because once
+  // any enemy building was seen, `needsScout` went false and the dog was never offered.
+  const needsScout=preferredScout&&
     !scoutUnits.some(u=>u.name===preferredScout.name)&&!state.queues.some(q=>q.items.some(i=>i.name===preferredScout.name));
   const roles={antiInfantry:0,antiArmor:0};
   for(const u of scoutUnits)if(u.id!==memory.scoutId&&catalog[u.name]?.weapon?.range>=3)roles[infantryProfile(catalog[u.name],api).role]++;
