@@ -3,6 +3,10 @@ import { isCapturable } from './werhd-jev-catalog.mjs';
 export const ATTACK_STUCK_TICKS = 2700, CAPTURE_RESENDS = 3, SIEGE_RANGE = 8, BASE_GARRISON_SPARE = 8;
 // Leaving a building once its job is done: no armed enemy within RELEASE_RADIUS for this long.
 export const ENTRY_RESENDS = 3;
+// A crate is a single tile on the ground: walking there is quick, so the resend window is short. The
+// timeout is generous on purpose -- a crate across the map behind a bridge is still worth the trip, and
+// abandoning early is how a box that held an MCV is simply left behind.
+export const CRATE_RESEND = 120, CRATE_TIMEOUT = 1800;
 export const RELEASE_RADIUS = 10, RELEASE_TICKS = { siege: 150, forward: 900, base: 2700 }, REENTER_COOLDOWN = 1800;
 // All tactical choices and spatial searches live in the ordinary player script.
 const distance = (a, b) => Math.hypot(a.rx - b.rx, a.ry - b.ry);
@@ -107,26 +111,38 @@ export function specialGroups(api, catalog, snapshot, memory, groups) {
     const seen = memory.crateSeen ??= new Map();
     const live = crates.filter(c => c.tile && !c.water && !seen.get(c.id)?.gone);
     for (const c of live.slice(0, 3)) seen.set(c.id, { tick });
-    // Candidates: the scout first, then the cheapest combat unit that is not the last of its kind.
+    // Candidates, in the order they may be spent: the scout (it is already walking into fog), then a
+    // spare dog, then the cheapest combat unit -- and only once the army can spare one.
     const scout = units.find(u => u.id === memory.scoutId);
     const dog = units.filter(u => catalog[u.name]?.attackDog && idle(u, memory, tick));
     const combat = units.filter(u => u.type !== api.ObjectType.Building && catalog[u.name]?.weapon?.damage > 0
       && u.id !== memory.scoutId && idle(u, memory, tick) && !catalog[u.name]?.engineer)
       .sort((a, b) => (catalog[a.name]?.cost ?? 0) - (catalog[b.name]?.cost ?? 0));
-    // One unit is enough at a time; two sent to the same crate is one unit wasted.
-    const busy = new Set([...memory.specialOrders.values()].filter(o => o.kind === 'collect_crate').map(o => o.crateId));
-    const forCrate = scout && idle(scout, memory, tick) ? [scout]
-      : dog.length ? [dog[0]]
-      : combat.length && combat.length >= 4 ? [combat[0]] : null;
+    const pool = [...(scout && idle(scout, memory, tick) ? [scout] : []), ...dog.filter(u => u.id !== memory.scoutId), ...combat];
+    // Detaching a tank is only free when there are enough left to hold what is already there, so below
+    // that floor a crate waits for the scout -- which costs nothing, because it was going that way anyway.
+    const canDetach = combat.length >= 4 || !base || units.length <= 6;
+    // A crate someone is already walking to. Only a live order counts: `rememberSpecial` clears the entry
+    // when the box is gone or the unit died, so a crate that was dropped mid-trip is offered again instead
+    // of being written off for the rest of the match.
+    const busy = new Set([...memory.specialOrders.values()]
+      .filter(o => o.kind === 'collect_crate' && tick - o.tick <= 450).map(o => o.crateId));
     for (const c of live.slice(0, 3)) {
-      if (busy.has(c.id) || !forCrate) break;
-      const u = forCrate[0], isScout = u.id === memory.scoutId || !!catalog[u.name]?.attackDog;
+      // Skipping one crate must not hide the others, so this skips the crate rather than leaving the loop.
+      if (busy.has(c.id)) continue;
+      const u = pool[0];
+      if (!u) break;
+      const isScout = u.id === memory.scoutId || !!catalog[u.name]?.attackDog;
+      if (!isScout && !canDetach) break;
       pickups(`crate_${c.id}`, `${isScout ? 'While scouting' : 'Detach one combat unit'}: collect the upgrade crate at (${c.tile.rx},${c.tile.ry})${c.name ? ` (${c.name})` : ''}. A crate may be a Construction Vehicle; after losing the base it is the way back in.`, {
         type: 'special', kind: 'collect_crate', ids: [u.id], targetId: c.id, tile: { x: c.tile.rx, y: c.tile.ry }, crateId: c.id,
         // Automatic while the crate is close to a frontier the scout is heading for, or when the base is
         // gone: those are the cases where the model has no better use for the turn and would wait.
         ...(isScout || !base || units.length <= 6 ? { auto: 3 } : {}),
       });
+      // One unit per crate. Handing the same id to every option meant that whichever box the model
+      // picked, the unit already under orders to a different one was redirected mid-trip.
+      pool.shift();
     }
   }
   snapshot.state.infrastructure = {
@@ -426,18 +442,22 @@ export function executeSpecial(api, action) {
     return { accepted: true };
   }
   if (action.type !== 'special') return undefined;
-  // Crate pickup. `gather` is the only verb the public API offers for this, and it needs the tile the
-  // crate sits on rather than its id -- so the crate is re-read here instead of trusted from the plan,
-  // because a crate that was already taken (or despawned) between building the option and executing it
-  // would otherwise send a unit to an empty tile.
+  // Crate pickup. A box is collected by a unit standing on it, so this is a plain `move` onto the tile.
+  // `gather` looks like the obvious verb and is the wrong one: the public API documents it as mining to
+  // a named tile ("采矿到明确地格；矿区搜索与选择由用户脚本完成"), and a mine command aimed at a crate tile
+  // is not a documented way to pick a box up.
+  //
+  // The crate is re-read here rather than trusted from the plan, because one that was looted or
+  // despawned between building the option and executing it would otherwise send a unit to empty ground.
   if (action.kind === 'collect_crate') {
-    const crate = (api.crates?.() ?? []).find(c => c.id === action.targetId)
-      ?? (api.crates?.() ?? []).find(c => c.tile.rx === action.tile?.x && c.tile.ry === action.tile?.y);
+    const crates = api.crates?.() ?? [];
+    const crate = crates.find(c => c.id === action.crateId || c.id === action.targetId)
+      ?? crates.find(c => c.tile.rx === action.tile?.x && c.tile.ry === action.tile?.y);
     if (!crate) return { accepted: false, reason: 'crate_gone' };
     const live = (api.units('self') ?? []).filter(u => action.ids.includes(u.id));
     if (!live.length) return { accepted: false, reason: 'unit_gone' };
-    api.gather(live.map(u => u.id), crate.tile.rx, crate.tile.ry);
-    return { accepted: true, ids: live.map(u => u.id), targetId: crate.id, crate: crate.name };
+    api.move(live.map(u => u.id), crate.tile.rx, crate.tile.ry);
+    return { accepted: true, ids: live.map(u => u.id), targetId: crate.id, crateId: crate.id, crate: crate.name };
   }
   if (action.kind === 'demolish_bridge') {
     const tile = action.order.target;
@@ -493,6 +513,14 @@ export function rememberSpecial(memory, action, execution, tick) {
     for (const id of [...action.ids, ...(action.kind === 'load' ? [action.targetId] : [])])
       memory.specialOrders.set(id, { tick, kind: action.kind });
   }
+  // A crate pickup is a task like any other: without this branch `executeSpecial` fires a one-shot
+  // `move`, nothing owns the order afterwards, and the `specialOrders` entry written by the caller is
+  // never deleted. That is what made the whole feature wedge -- the crate stayed marked busy for the
+  // rest of the match even after the unit had died or the crate had been looted by someone else.
+  if (action.kind === 'collect_crate' && execution.accepted) {
+    memory.specialTasks.push({ action, started: tick, submitted: tick });
+    for (const id of action.ids) memory.specialOrders.set(id, { tick, kind: action.kind, crateId: action.crateId });
+  }
 }
 
 // A multi-step player task; the engine still receives only ordinary independent commands.
@@ -535,6 +563,28 @@ export function maintainSpecial(api, memory, emit, catalog) {
   memory.specialTasks = memory.specialTasks.filter((task) => {
     const { action } = task;
     if (action.kind === 'demolish_bridge') return maintainDemolition(api, memory, task, own, tick, emit);
+    // Crate pickup. Kept out of the generic branch below because that one resolves `action.targetId`
+    // with `api.unit()`, and a crate id is not a unit id -- it came back `undefined` and the task was
+    // torn down as `incomplete` on the very next turn, one step after the unit had been ordered.
+    if (action.kind === 'collect_crate') {
+      const done = (result) => { for (const id of action.ids) memory.specialOrders.delete(id); emit({ kind: 'task', tick, task: 'collect_crate', description: `collect_crate ${result}: #${action.crateId}`, result, targetId: action.crateId }); return false; };
+      const crate = (api.crates?.() ?? []).find(c => c.id === action.crateId);
+      if (!crate) return done('collected');
+      const live = action.ids.map(id => own.get(id)).filter(Boolean);
+      if (!live.length) return done('unit_lost');
+      if (tick - task.started > CRATE_TIMEOUT) return done('timeout');
+      memory.specialOrders.set(live[0].id, { tick, kind: 'collect_crate', crateId: action.crateId });
+      // Walking onto the tile is what picks the box up; a unit that stops short of it, or is interrupted
+      // on the way, is nudged again. Re-issuing on a timer rather than every turn keeps the crate out of
+      // the command log when the unit is simply still walking.
+      if (tick - task.submitted >= CRATE_RESEND && live.some(u => u.isIdle)) {
+        const execution = executeSpecial(api, action);
+        if (!execution.accepted) return done('rejected');
+        task.submitted = tick;
+        emit({ kind: 'micro', tick, description: `collect_crate: 重新前往箱子 #${action.crateId}`, targetId: action.crateId, ids: action.ids });
+      }
+      return true;
+    }
     if (action.kind === 'capture') {
       const engineer = own.get(action.ids[0]), target = api.unit(action.targetId);
       const done = (result) => { for (const id of action.ids) memory.specialOrders.delete(id); emit({ kind: result === 'completed' ? 'observed' : 'task', tick, task: 'capture', description: `capture ${result}: #${action.targetId}`, result, targetId: action.targetId }); return false; };

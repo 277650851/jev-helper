@@ -22,8 +22,6 @@ shipped together as an **offline deployment bundle**. Docs and user-facing strin
   mojibake under a non-UTF-8 code page — that is cosmetic, not a bug.
 - **No lint, typecheck, formatter, or CI config exists.** Don't add a "fix typecheck" task; there is
   nothing to run. Node >= 20 (`.mjs` everywhere, `type: module`).
-- `ra2-api/` is a vendored `@chronodivide/game-api` install that **nothing in this repo imports**
-  and no script references. Ignore it.
 
 ## Commands
 

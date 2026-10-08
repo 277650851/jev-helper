@@ -558,7 +558,7 @@ export function candidateGroups(api, catalog, snapshot, memory) {
 //
 // So the guard is now "can this base still produce vehicles at all", which stays true while a factory
 // is standing or one is being rebuilt, and `vehicleOptions` itself filters by what the queue offers.
-const factoryRebuilding = !factories && buildable.some((i) => catalog[i.name]?.factory === "UnitType" && !catalog[i.name]?.naval);
+  const factoryRebuilding = !factories && buildable.some((i) => catalog[i.name]?.factory === "UnitType" && !catalog[i.name]?.naval);
   // Say why a lost factory is being rebuilt and what it unblocks, so the replacement is not one more
   // candidate among many. This is the step that decides whether the match can still produce vehicles.
   if (factoryRebuilding) {

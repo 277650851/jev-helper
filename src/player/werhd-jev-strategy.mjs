@@ -130,20 +130,14 @@ export function baseThreats(api, catalog, buildings, enemies, harvesters = []) {
   const home = core.length ? core[0].tile : undefined;
   const nearMiners = harvesters.filter(h => home && dist(h.tile, home) < MINER_DEFENSE_RADIUS);
   const defended = core.concat(nearMiners);
-  // Aircraft were excluded here by accident rather than by decision: `weaponEffectiveness` against a
-  // building scores ground weapons only, so a transport or a bomber -- the one attacker that reaches
-  // the refinery and the factory from above -- measured zero and never counted as a threat. That is the
-  // raid that Crazy Ivan rides in on, and it is why the base could be bombed with no warning and no
-  // anti-air on the list. An enemy is a threat if it can engage *anything* defended, in its own zone.
-  return enemies.filter(e => e.primaryWeapon && defended.some(b => {
-    const air = e.zone === (api.ZoneType?.Air ?? 1);
-    const w = currentWeapon(e, catalog);
-    if (w.aa === air ? false : !w.damage) return false;
-    // Air attacks anything in range; ground has to beat the range check.
-    return air
-      ? (w.range ?? 0) > 0 && dist(e.tile, b.tile) < 18
-      : weaponEffectiveness(w, [b], catalog, api) > 0 && (dist(e.tile, b.tile) < 18 || canFireAt(api, catalog, e, b));
-  }));
+  // `weaponEffectiveness` judges the weapon against the *target's* zone, not the shooter's: a bomber
+  // carrying bombs has `ag` set and scores against a refinery, while a pure fighter (`aa` only) scores
+  // zero and is correctly left out. So aircraft are not missing from this list by accident -- a bomber
+  // that can actually reach the base is already counted here. What the base could not answer was a
+  // bomber, and that is fixed where the answer is chosen, in `investmentGroups`.
+  return enemies.filter(e => e.primaryWeapon && defended.some(b =>
+    weaponEffectiveness(currentWeapon(e, catalog), [b], catalog, api) > 0 &&
+    (dist(e.tile, b.tile) < 18 || canFireAt(api, catalog, e, b))));
 }
 
 export function weaponEffectiveness(w, targets, catalog, api) {
@@ -369,18 +363,17 @@ export function investmentGroups(api, catalog, snapshot, memory, groups) {
         // tower cannot be outrun by the aircraft it is shooting at.
         return { ...i, queue: api.QueueType.Armory, value: ground + vsAir * 2.2, groundValue: ground, vsAir };
       });
-    coverage = defenseUnits.filter(u => defenseTargets.length
-      ? defenseTargets.some(e => canFireAt(api, catalog, u, e))
-      : effectiveness(catalog[u.name], [], catalog, api) > 0).length;
     // Coverage has to count the tower that answers aircraft, not only the one that answers ground: with
-    // an air raid inbound, "two defenses can reach it" is false of both pillboxes.
-    coverage = defenseUnits.filter(u => defenseTargets.length
+    // an air raid inbound, "two defenses can reach it" is false of both pillboxes. Counted as a set of
+    // units, not as two tallies added together -- a tower that answers both is one emplacement, and
+    // counting it twice let the base stop at fewer defenses than it looked like it had.
+    const answersAir = (u) => {
+      const r = catalog[u.name] ?? {};
+      return [r.weapon, r.secondary].some(w => (w?.damage ?? 0) > 0 && w.aa !== false);
+    };
+    coverage = defenseUnits.filter(u => (defenseTargets.length
       ? defenseTargets.some(e => canFireAt(api, catalog, u, e))
-      : effectiveness(catalog[u.name], [], catalog, api) > 0).length
-      + (airTargets.length ? defenseUnits.filter(u => {
-          const r = catalog[u.name] ?? {}, ws = [r.weapon, r.secondary].filter(w => (w?.damage ?? 0) > 0 && w.aa !== false);
-          return ws.length > 0;
-        }).length : 0);
+      : effectiveness(catalog[u.name], [], catalog, api) > 0) || (airTargets.length > 0 && answersAir(u))).length;
     if (coverage < targetDefenses && (defenseUnits.length < 8 || strategy.underPressure && coverage < 2)) for (const item of options.sort((a, b) => b.value / Math.sqrt(catalog[b.name].cost) - a.value / Math.sqrt(catalog[a.name].cost))) {
       if (Object.keys(dg.actions).length >= 3) break;
       if (item.value <= 0) continue;
@@ -497,7 +490,7 @@ export function investmentGroups(api, catalog, snapshot, memory, groups) {
   // `coreReady` gated technology on a standing factory for the same reason: with the factory down, the
 // tech line could never start even though the base had the miners and the credits to rebuild it. The
 // rebuild itself is handled by the construction group; this asks whether the rest of the core holds.
-const coreReady = !economyPlan && !forcePlan && !((mobileDefenseNeeded||forceNeeded) && counterPlan) && s.harvesters >= Math.min(2, s.economy?.targetMiners ?? 2) && factoryBack && (armorCount >= 4 || strategy.suppressed && coverage >= 2 || standoff.length > 0);
+  const coreReady = !economyPlan && !forcePlan && !((mobileDefenseNeeded||forceNeeded) && counterPlan) && s.harvesters >= Math.min(2, s.economy?.targetMiners ?? 2) && factoryBack && (armorCount >= 4 || strategy.suppressed && coverage >= 2 || standoff.length > 0);
   // Technology and support buildings, ordered so the chain actually advances.
 //
 // The previous ordering was "air support first, then the highest techLevel", and only candidates[0]
@@ -515,20 +508,20 @@ const coreReady = !economyPlan && !forcePlan && !((mobileDefenseNeeded||forceNee
 // One hop ahead: a prerequisite that is itself buildable and not yet standing. This is what lets a
 // laboratory be offered on the same turn its radar is, instead of one turn per link. Defined first
 // because `prerequisitesMet` below calls it.
-const buildableNames = new Set(available.filter(i => i.type === api.ObjectType.Building).map(i => i.name));
-const pendingPrereqs = (name) => buildableNames.has(name) && !ownNames.has(name);
-const prerequisitesMet = (r) => {
-  const need = r.prerequisite ?? [];
-  if (!need.length) return true;
-  // Prerequisites are rule names. A building this base is about to build counts: the construction group
-  // runs the same check and queues them, and treating the plan as met is what stops a chain of three
-  // buildings from looking blocked from the first link.
-  const ownedOrPlanned = name => ownNames.has(name)
-    || groups.construction?.actions?.[`produce_${name}`] !== undefined
-    || strategy.investment?.name === name;
-  return need.every(p => ownedOrPlanned(p) || pendingPrereqs(p));
-};
-const candidates = available.filter(i => i.type === api.ObjectType.Building && !ownNames.has(i.name))
+  const buildableNames = new Set(available.filter(i => i.type === api.ObjectType.Building).map(i => i.name));
+  const pendingPrereqs = (name) => buildableNames.has(name) && !ownNames.has(name);
+  const prerequisitesMet = (r) => {
+    const need = r.prerequisite ?? [];
+    if (!need.length) return true;
+    // Prerequisites are rule names. A building this base is about to build counts: the construction group
+    // runs the same check and queues them, and treating the plan as met is what stops a chain of three
+    // buildings from looking blocked from the first link.
+    const ownedOrPlanned = name => ownNames.has(name)
+      || groups.construction?.actions?.[`produce_${name}`] !== undefined
+      || strategy.investment?.name === name;
+    return need.every(p => ownedOrPlanned(p) || pendingPrereqs(p));
+  };
+  const candidates = available.filter(i => i.type === api.ObjectType.Building && !ownNames.has(i.name))
     .filter(i => { const r = catalog[i.name]; return r && !r.naval && !r.yard && !r.refinery && !r.isBaseDefense && !r.wall && !(r.power > 0) && (isAirSupport(r) || r.buildCategory === 'Tech' && !r.factory); })
     .sort((a, b) => {
       const ra = catalog[a.name], rb = catalog[b.name];
