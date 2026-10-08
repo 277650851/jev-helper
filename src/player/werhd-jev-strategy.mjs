@@ -35,6 +35,58 @@ export function vehicleOptions(api, catalog, state) {
   });
 }
 
+// Whether a deployable unit should unfold against what is in front of it right now (P0-1, ported from
+// 0.8.5).
+//
+// The rule this replaces fired whenever the base was threatened and any enemy was nearby, with no
+// comparison between the two forms -- a deployer deployed. bot3 (`Iu`) weighs the net gain of the
+// deployed form instead: its damage rate, and whether it can answer a target the mobile form cannot
+// reach at all. Unfolding is only worth it then, because a static form trades mobility away.
+//
+// Reach is judged per zone, and always by the weapon that scored the damage: an anti-air weapon
+// counts against aircraft, a ground-only one does not. Using one range number for both was a bug in
+// the 0.8.5 port -- it read an air-only deployed form as unable to answer anything and dropped the
+// option whenever the aircraft happened to be outside the (ground) range. Returns null when the unit
+// cannot deploy or nothing is in reach, which is the caller's signal to leave the option out.
+export function deployRecommendation(api, catalog, unit, enemies) {
+  const r = catalog[unit.name] ?? {};
+  const deployedRule = r.deploysInto ? catalog[r.deploysInto] : undefined;
+  if (!r.deploysInto || !deployedRule || deployedRule.yard) return null;
+  const Air = api.ZoneType?.Air ?? 1;
+  const dist = (a, b) => Math.hypot(a.rx - b.rx, a.ry - b.ry);
+  const reachOf = (w, air) => {
+    if (!w || (w.damage ?? 0) <= 0) return 0;
+    return (air ? w.aa !== false : w.ag !== false) ? (w.range || 0) : 0;
+  };
+  const inRangeOf = (weapons, target) => weapons.some((w) => {
+    const air = target.zone === Air, reach = reachOf(w, air);
+    return reach > 0 && dist(target.tile, unit.tile) <= reach;
+  });
+  const mobile = [r.weapon, r.secondary].filter(Boolean);
+  const deployed = [deployedRule.weapon, deployedRule.secondary].filter(Boolean);
+  // Effectiveness is measured per zone too, so an anti-air emplacement is not compared on its ground
+  // damage (which may be nil) and judged worthless.
+  const power = (weapons, targets) => Math.max(0, ...weapons.map((w) => weaponEffectiveness(w, targets, catalog, api)));
+  const ground = enemies.filter((e) => e.zone !== Air), air = enemies.filter((e) => e.zone === Air);
+  const mobilePower = Math.max(power(mobile, ground), power(mobile, air));
+  const deployedPower = Math.max(power(deployed, ground), power(deployed, air));
+  if (!deployedPower) return null;
+  // The strongest reason to unfold: a target the deployed form can answer and the mobile one cannot.
+  const answersUnreachable = enemies.some((e) => inRangeOf(deployed, e) && !inRangeOf(mobile, e));
+  const inReach = enemies.some((e) => inRangeOf(deployed, e) || inRangeOf(mobile, e));
+  // Nothing in reach at all: unfolding cannot change anything, so do not offer it.
+  if (!answersUnreachable && !inReach) return null;
+  const deploy = deployedPower > mobilePower && (answersUnreachable || inReach);
+  return {
+    deploy,
+    mobilePower: Math.round(mobilePower),
+    deployedPower: Math.round(deployedPower),
+    reason: deploy
+      ? (answersUnreachable ? 'deployed form answers a target out of mobile range' : 'target is already within the deployed form\'s range')
+      : 'mobile form deals at least as much here',
+  };
+}
+
 // Reversible deployment selects one slot; ordinary dual-purpose units can use both.
 export function activeWeapons(unit, catalog) {
   const rule = catalog[unit.name] ?? {};

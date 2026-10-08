@@ -97,6 +97,19 @@ export const messages = {
  helpEconomy:['经济图展示余额及余额扣除生产队列剩余花费后的估算。决策图统计有效模型回答；每个回答可包含多组动作。已受理动作不等于已完成游戏效果。','Economy charts show the balance and an estimate after remaining production costs. Decision charts count valid model replies; a reply can contain multiple selections. Accepted actions do not guarantee completed game effects.'],
  helpConfig:['配置与费用','Configuration & costs'],helpConfigText:['测试连接会发送一次无游戏动作的模型请求，可能产生少量费用。密钥只保存在本机扩展中，不同步、不注入游戏页面。更换 API 服务需重新输入密钥并授权。HTTP 401 / 402 / 403 会停止托管，请检查密钥、余额或权限。请求上限不是金额上限。','Test connection sends one model request with no game actions and may incur a small cost. Your key stays in local extension storage; it is not synced or injected into the game. Changing API services requires a new key and permission. HTTP 401 / 402 / 403 stops autopilot: check the key, balance or permissions. The request limit is not a spending limit.'],
  helpUpdate:['更新与设置生效','Updates & applying settings'],helpUpdateText:['更新后在扩展管理页重新加载，并在结束当前对局后刷新游戏页。语言立即生效；镜头和请求上限在下次开启时应用。修改密钥、API 或模型会停止当前托管。策略为实验性质，不保证获胜。','Reload the extension after updating, then refresh the game after your current match ends. Language changes apply immediately; camera and request limits apply on the next start. Changing the key, API or model stops current control. This is an experimental strategy and does not guarantee victory.'],
+  // Overlay panel (src/overlay.mjs), merged from 0.8.5. Kept separate from the blocks above because
+  // they were ported as a group with the rewritten panel; none of them changes an existing entry,
+  // which is deliberate -- the title/helpText placeholders added by 0.7.5's ef424bf stay intact.
+  overlayRecords:['执行记录','Execution log'],
+  overlayThreat:['威胁','Threat'],overlayRangeThreats:['{n} 个目标超出基地火力覆盖','{n} beyond base fire coverage'],overlayGameSeconds:['对局 {s}s','{s}s in'],
+  overlayError:['执行异常：{error}','Autopilot error: {error}'],overlayNoRecords:['暂无执行记录','No executions yet'],
+  evStart:['开始','Start'],evDecision:['决策','Decision'],evAction:['动作','Action'],evCommand:['指令','Orders'],evWait:['等待','Wait'],evError:['异常','Error'],evStop:['停止','Stop'],evEvent:['事件','Event'],
+  evAccepted:['已执行','Executed'],evDenied:['未执行','Denied'],
+  overlaySituation:['实时战场态势','Live battlefield'],overlayTrend:['决策趋势','Decision trend'],overlayLog:['实时执行记录','Live execution log'],overlayAlerts:['实时执行异常','Execution alerts'],
+  overlayNoLog:['暂无执行记录','No actions yet'],overlayNoAlerts:['暂无异常','No problems'],overlayStale:['态势数据已停止更新','Situation stopped updating'],overlayNoSituation:['等待战况数据…','Waiting for battlefield data…'],
+  overlayTrendHint:['回答 / 资金 / 已受理动作','Replies / credits / accepted actions'],overlayScrollHint:['列表自动滚动，悬停暂停','Scrolls automatically; hover to pause'],
+  overlayPower:['电力','Power'],overlayEnemies:['视野内敌军','Visible enemies'],overlayNearby:['基地附近','Near base'],overlayMiners:['采矿','Miners'],overlayMoreQueues:['另有 {n} 项在生产','{n} more in production'],
+  overlayAlertsCount:['{n} 次请求失败','{n} failed requests'],overlayDropped:['{n} 次回答因过期被丢弃','{n} replies dropped as stale'],overlayNeedSave:['设置未保存，当前来源仍是 {name}','Unsaved settings; still using {name}'],
 };
 export function t(language,key,vars={}){const pair=messages[key];let text=pair?.[language==='en'?1:0]??key;return text.replace(/\{(\w+)\}/g,(_,k)=>String(vars[k]??''));}
 // Existing executor errors remain stable for callers; presentation is translated here.

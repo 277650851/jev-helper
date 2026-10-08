@@ -38,10 +38,54 @@
 - Apple 芯片 Mac（M1 及以后），macOS 14+
 - Python 3.11+
 - [uv](https://docs.astral.sh/uv/)（Python 包管理器）
-- Node.js 22+（本仓库本身的要求，用于 `npm run laya`）
+- Node.js 20+（本仓库本身的要求，用于 `npm run laya`）
 - 约 1 GB 空闲内存；首次需要联网下载权重
 
-Intel Mac、Windows、Linux 无法运行 MLX，只能用 Jev 云端，或连接局域网内另一台已启动服务的 Mac（见 [局域网共享](#局域网共享)）。
+MLX 运行时只在 Apple 芯片上可用；Intel Mac、Linux 无法运行，Windows 请走下面的 [Windows 本地路线](#windows-本地路线torch-cpu)。也可以连接局域网内另一台已启动服务的机器（见 [局域网共享](#局域网共享)）。
+
+## Windows 本地路线（torch CPU）
+
+Windows（以及任何无 Apple 芯片的机器）走 PyPI 官方包 + torch CPU，不用 MLX。已实测：`laya` 0.3.20 自带 `laya-serve`，路由就是 Jev 协议的 `POST /v1/systemone`，扩展逐字段兼容，一行适配代码都不用写。
+
+### 一键管理
+
+```bat
+tools\laya-ctl.cmd status|start|stop|restart|test|logs|fetch
+```
+
+或 `npm run laya:win -- status`。`test` 会请求 `/health` 并跑一次真实决策（两个决策组返回合法候选即通过）。日志在 `logs/laya-server.log`。
+
+### 手动步骤（等价于上面的脚本）
+
+1. 建虚拟环境并装依赖（PyPI 源即可）：
+
+   ```bat
+   python -m venv .laya-venv
+   .laya-venv\Scripts\pip install laya torch --index-url https://download.pytorch.org/whl/cpu fastapi uvicorn
+   ```
+
+2. 下载权重到 `models\laya-multilingual\`。本机 Hugging Face 可能被 DNS 污染、hf-mirror 超时，优先从魔搭下载（`tools/laya-model-fetch.py` 已封装）：
+
+   ```bat
+   tools\laya-model-fetch.py
+   ```
+
+3. 启动服务（`tools/laya-serve-local.py` 包好 laya-serve 的加载参数）：
+
+   ```bat
+   tools\laya-ctl.cmd start
+   ```
+
+   服务监听 `http://127.0.0.1:8742/v1`，`GET /health` 返回 `{"ok":true,"model":"laya-multilingual",...}`。真实监听 PID 记录在 `.laya-server.pid`（注意：venv 的 `python.exe` 是垫片进程，PID 文件记的是真实监听进程）。
+
+### DeepSeek Harness（可选）
+
+本机管理台 `http://127.0.0.1:3080/`（DeepSeek Harness 网页，需登录）负责下载模型 / 起服务；真正对外提供推理的是 8742 的 laya-serve。扩展只连 8742，不用理会 3080 的认证。
+
+### 注意
+
+- 扩展里「本地模型名称」默认是 **`laya-multilingual`**，不要填 `laya`——Laya 的别名表里 `laya` 指向英文检查点，中文战况会崩。
+- 首次决策慢属正常（权重加载 + warm-up），之后 round trip 约 0.5 秒。
 
 ## 第一步：准备模型仓库与权重
 
@@ -76,12 +120,12 @@ uv run --extra demo hf download aac6fef/laya-multilingual-mlx \
 npm run laya
 ```
 
-`tools/laya-server.sh` 会使用 `laya-vs-jev/.venv` 里的 Python（没有时退回 `uv run --extra demo`）启动 `tools/laya-server.py`。正常输出：
+`tools/laya-server.sh` 会使用 `laya-vs-jev/.venv` 里的 Python（没有时退回 `uv run`）启动 `tools/laya-server.py`。正常输出：
 
 ```
 Loading Laya checkpoint /…/laya-vs-jev/models/hub/laya-multilingual-mlx (float16, gpu)…
 Model ready in 1.1s (warm-up answer: ok)
-Laya decision server listening on http://127.0.0.1:8742/v1/systemone  (loopback)
+Laya decision server listening on http://127.0.0.1:8742/v1/systemone
 Extension setting: model source = Local Laya, local server URL = http://127.0.0.1:8742/v1
 ```
 
@@ -121,7 +165,7 @@ curl http://127.0.0.1:8742/health
    | --- | --- |
    | 本地服务地址 | 本机：`http://127.0.0.1:8742/v1`（默认值，不用改）；局域网：服务启动时打印的地址，如 `http://10.0.25.215:8742/v1` |
    | 本地访问令牌（可选） | 本机模式留空；局域网模式填服务打印的令牌 |
-   | 本地模型名称 | 默认 `laya` 即可。服务不看这个字段，实际模型名以服务返回的为准 |
+   | 本地模型名称 | 默认 `laya-multilingual`（扩展已预置）。服务不看这个字段，实际模型名以服务返回的为准；不要填 `laya`（指向英文检查点，中文会崩） |
 
    地址写到 `/v1` 为止，扩展会自动补 `/systemone`；直接写完整的 `/v1/systemone` 也可以。
 3. 点「保存设置」，浏览器会请求访问该地址的权限，点允许。
@@ -143,8 +187,8 @@ npm run laya -- --lan
 输出会多出局域网地址和令牌：
 
 ```
-Laya decision server listening on http://127.0.0.1:8742/v1/systemone  (loopback)
-Laya decision server listening on http://10.0.25.215:8742/v1/systemone  (LAN)
+Laya decision server listening on http://127.0.0.1:8742/v1/systemone
+Laya decision server listening on http://10.0.25.215:8742/v1/systemone
 Extension setting: model source = Local Laya, local server URL = http://127.0.0.1:8742/v1, http://10.0.25.215:8742/v1
 Extension setting: local access token = <令牌>
 ```
@@ -228,7 +272,7 @@ Authorization: Bearer <令牌>        ← 仅在设置了令牌时发送
 | `questions.*.instructions` | 这一组要决定什么 |
 | `questions.*.criteria` | 候选：键为候选 ID，值为说明文字；每组 1–255 个 |
 
-整个请求体不超过 256 000 字节。这里按 UTF-8 字节计，也就是 `Content-Length` 的长度：扩展在发出请求前用同样的口径检查，所以中文战况不会因为"字符数没超、字节数超了"而在这里收到 413。
+整个请求体不超过 256 000 字节。
 
 ### 响应（HTTP 200）
 
@@ -277,11 +321,11 @@ Authorization: Bearer <令牌>        ← 仅在设置了令牌时发送
 | 401 | 需要令牌但未带或不对 | 显示原因并**停止托管** |
 | 402 / 403 | （Jev 云端的额度 / 权限问题） | 显示原因并**停止托管** |
 | 404 | 路径不对 | 记为请求失败，托管继续 |
-| 400 / 413 | 请求体为空或超过 256 000 字节（扩展会在本地先拦下，正常不会到这里） | 记为请求失败，托管继续 |
+| 400 / 413 | 请求体为空或超过 256 000 字节 | 记为请求失败，托管继续 |
 | 422 | JSON 无效、缺 `state`、`questions` 为空、缺 `instructions` | 记为请求失败，托管继续 |
 | 500 | 模型推理异常（服务本身继续运行） | 记为请求失败，托管继续 |
 
-错误体格式为 `{"error": "原因"}`。扩展单次请求超时 8 秒，拒绝重定向，请求与响应的大小上限都按 UTF-8 字节计（本地服务 256 000 字节）。`--log` 路径写不进去时只会打印一行提示，不影响这一次推理的结果。
+错误体格式为 `{"error": "原因"}`。扩展单次请求超时 8 秒，拒绝重定向，响应超过 256 000 字节也会拒绝。
 
 ## 请求日志与离线分析
 

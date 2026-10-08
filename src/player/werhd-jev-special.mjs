@@ -1,4 +1,4 @@
-import { isAirSupport, effectiveness } from './werhd-jev-strategy.mjs';
+import { isAirSupport, effectiveness, deployRecommendation } from './werhd-jev-strategy.mjs';
 import { isCapturable } from './werhd-jev-catalog.mjs';
 export const ATTACK_STUCK_TICKS = 2700, CAPTURE_RESENDS = 3, SIEGE_RANGE = 8, BASE_GARRISON_SPARE = 8;
 // Leaving a building once its job is done: no armed enemy within RELEASE_RADIUS for this long.
@@ -100,8 +100,12 @@ export function specialGroups(api, catalog, snapshot, memory, groups) {
     const r = catalog[u.name];
     if (!r || r.yard) continue;
     const deployedRule = catalog[r.deploysInto];
-    if (r.deploysInto && deployedRule && !deployedRule.yard && deployedRule.weapon?.damage > 0 && snapshot.state.baseUnderAttack && enemies.some(e => distance(e.tile,u.tile) < (deployedRule.weapon.range || 6)))
-      posture(`morph_${u.id}`, `Deploy ${r.label} #${u.id} into ${deployedRule.label} to hold the threatened approach; it will lose mobility.`,
+    // P0-1: the net-gain comparison decides whether unfolding is offered at all, instead of the old
+    // "deployer + base threatened + any enemy near -> deploy". The reason and both figures go into
+    // the option text so the model sees the trade, not just the instruction.
+    const rec = deployRecommendation(api, catalog, u, enemies);
+    if (rec?.deploy && deployedRule && !deployedRule.yard && deployedRule.weapon?.damage > 0 && snapshot.state.baseUnderAttack && enemies.some(e => distance(e.tile,u.tile) < (deployedRule.weapon.range || 6)))
+      posture(`morph_${u.id}`, `Deploy ${r.label} #${u.id} into ${deployedRule.label} to hold the threatened approach; it will lose mobility. Recommended: ${rec.reason} (deployed ${rec.deployedPower} vs mobile ${rec.mobilePower}).`,
         { type: 'special', kind: 'deploy_morph', ids: [u.id], order: { type: api.OrderType.DeploySelected } });
     if (r.tickTank && r.undeploysInto && !enemies.some(e => distance(e.tile,u.tile) < (r.weapon?.range || 6)))
       posture(`mobilize_${u.id}`, `Pack up ${r.label} #${u.id} into ${r.undeploysInto} to join the mobile force; no visible enemy is in its firing range.`,

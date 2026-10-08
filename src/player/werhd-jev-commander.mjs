@@ -19,6 +19,48 @@ function versus(rule, api) {
 const kindOf = (rule, type, api) => type === api.ObjectType.Building ? (rule?.isBaseDefense || (rule?.weapon?.damage ?? 0) > 0 ? 'defense' : 'building')
   : type === api.ObjectType.Infantry ? 'infantry' : type === api.ObjectType.Aircraft || rule?.aircraft ? 'aircraft' : rule?.naval ? 'ship' : 'vehicle';
 
+// Global force balance (P0-2, ported from 0.8.5). bot2 compares total offensive air threat against
+// total anti-air firepower and flips to defence past 1.1x; bot3 sums effective damage across the
+// army. The per-squad `underFire` in the brief says who outranges whom, but it cannot answer "should
+// we attack at all", because each side is only ever compared with itself. These numbers plus an
+// explicit air gap give the model that answer without adding a row to any unit card, which is the
+// token budget the brief is held to (docs/ai-decision-porting.md).
+//
+// Each unit is scored with `versus()` -- the same damage-per-second estimate the unit cards use --
+// summed over its weapons. Anti-air is a separate pot rather than part of the ground figure: an AA
+// gun cannot win a tank fight, and folding it in would hide the one gap that turns a winning ground
+// force into a sitting duck.
+export function globalPowerBalance(api, catalog, own, enemy) {
+  const Air = api.ZoneType?.Air ?? 1;
+  const sum = (units, kind) => units.reduce((total, u) => {
+    const r = catalog[u.name];
+    if (!r) return total;
+    const score = versus(r, api)[kind] ?? 0;
+    return total + score;
+  }, 0);
+  const aaOf = (units) => units.reduce((total, u) => {
+    const r = catalog[u.name];
+    if (!r) return total;
+    // Only a weapon that can actually engage aircraft counts, so a ground-only emplacement does not
+    // paper over the gap.
+    const weapons = [r.weapon, r.secondary].filter((w) => (w?.damage ?? 0) > 0 && w.aa !== false);
+    if (!weapons.length) return total;
+    const probe = { type: api.ObjectType.Aircraft, zone: Air, armor: api.ArmorType?.Light ?? 3 };
+    return total + Math.round(Math.max(0, ...weapons.map((w) => weaponEffectiveness(w, [probe], catalog, api))));
+  }, 0);
+  const ground = (units) => units.filter((u) => u.zone !== Air);
+  const aircraft = enemy.filter((u) => u.zone === Air);
+  const ourGround = sum(ground(own), 'armor'), theirGround = sum(ground(enemy), 'armor');
+  const theirAir = sum(aircraft, 'armor'), ourAA = aaOf(own);
+  return {
+    ourGround, theirGround, ourAntiAir: ourAA, theirAntiAir: aaOf(enemy),
+    // bot2's rule at the same 1.1x threshold: incoming air outweighing our AA means AA before tanks.
+    airGap: Math.round(1e3 * (theirAir - ourAA) / Math.max(1, theirAir)) / 1e3,
+    // A ratio, not a difference, so the number stays comparable between a 10-unit and a 100-unit fight.
+    ratio: Math.round(1e2 * ourGround / Math.max(1, theirGround)) / 1e2,
+  };
+}
+
 // One line per unit type seen this match or producible now.
 export function unitCard(name, type, catalog, api, maxHp) {
   const r = catalog[name] ?? {};
@@ -178,6 +220,11 @@ export function buildBrief(api, catalog, snapshot, memory) {
   for (const i of api.production.available()) if (!seen.has(i.name)) seen.set(i.name, i.type ?? catalog[i.name]?.type ?? api.ObjectType.Building);
   const cards = [...seen].filter(([name]) => catalog[name]).map(([name, type]) => unitCard(name, type, catalog, api, maxHp.get(name)));
   const objective = memory.objective ? { text: memory.objective, target: s.objectiveTarget ?? null } : null;
+  // Two numbers for the overview (P0-2). `squads[].underFire` is per-squad and only ever compares a
+  // squad with the things shooting at it; these compare the two armies, which is the question the
+  // model actually has to answer before it picks attack or hold.
+  const balance = globalPowerBalance(api, catalog, combat,
+    [...enemyUnits.filter((e) => e.zone !== Air), ...enemyBuildings.filter((b) => enemyIds.has(b.id) && b.zone !== Air)]);
   const legal = {
     squads: squadView.map((q) => q.id),
     // Buildings the objective says to protect or capture can never be attacked; a capture objective
@@ -191,6 +238,10 @@ export function buildBrief(api, catalog, snapshot, memory) {
   };
   return {
     tick, gameSeconds: s.gameSeconds, credits: s.self?.credits ?? 0, power: s.self?.power ?? null,
+    // Attack or hold, answered from our damage output against theirs and from the one gap that
+    // outranges a tank: incoming aircraft against our anti-air. `airGap` above ~0.1 means they have
+    // air we cannot answer and AA comes before tanks.
+    balance,
     base: base ? { at: [base.tile.rx, base.tile.ry], underAttack: !!s.baseUnderAttack } : null,
     objective, squads: squadView, engineers, ownBuildings, production: { queues: queues.map((q) => ({ type: q.type, items: q.items.map((i) => `${i.name}×${i.quantity}`) })), producible },
     enemyGroups, enemyAircraft: air.length, enemyBuildings: buildingView, rememberedBuildings: remembered,

@@ -9,7 +9,9 @@
     "test": "npm run package && node --test --test-concurrency=1 \"test/*.test.mjs\"",
     "package": "npm run build && node tools/package.mjs",
     "laya": "sh tools/laya-server.sh",
-    "laya:py": "python tools/laya-server.py"
+    "laya:py": "python tools/laya-server.py",
+    "laya:win": "powershell -NoProfile -ExecutionPolicy Bypass -File tools/laya-ctl.ps1",
+    "laya:fetch": "python tools/laya-model-fetch.py"
   },
   "devDependencies": {
     "esbuild": "0.27.7"
