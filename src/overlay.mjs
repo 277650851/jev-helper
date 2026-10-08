@@ -62,6 +62,10 @@ const THREAT_CLASS = threat => threat==='critical'?'threat-critical':threat==='s
 // its place. Two rows keep every measured state inside the budget, and anything beyond that is
 // summarised rather than listed.
 const QUEUE_ROWS = 2;
+// Execution records shown at once. Two is what the player can read while looking at the battle: it is
+// enough to see what just happened and what preceded it, and it keeps the box at a fixed 46px so the
+// sections below never move. A new record animates the row in and drops the oldest.
+const RECORD_ROWS = 2;
 export function createOverlayView(){
   const host=document.createElement('div');host.id='werhd-jev-overlay';
   host.style.cssText='all:initial!important;position:fixed!important;z-index:2147483646!important;display:block!important;';
@@ -90,6 +94,10 @@ export function createOverlayView(){
     .sec{color:#cdc09b;font-size:9px;letter-spacing:1.2px;font-weight:600;margin:9px 0 4px;display:flex;align-items:center;gap:6px}
     .sec::before{content:'';width:2px;height:9px;border-radius:1px;background:#d9b76f;flex:none}
     .sec::after{content:'';flex:1;height:1px;background:linear-gradient(90deg,#84999b33,transparent)}
+    /* The tactical section carries a legend, so its text is wrapped: the ::after rule would otherwise
+       sit between the title and the legend instead of after both. */
+    .sec .sec-text{flex:none}
+    .sec .legend{flex:none;margin-left:2px;letter-spacing:0}
     .hint{color:#7f9095;font-size:8.5px;line-height:1.35;margin:-1px 0 3px}
     #sit-hint{color:#7f9095;font-size:9px;line-height:1.4;border:1px dashed #84999b3a;border-radius:6px;padding:9px;margin:7px 0 0}
     .strip{display:grid;grid-template-columns:1fr 1fr 1fr;border:1px solid #84999b26;border-radius:9px;background:#ffffff09;overflow:hidden}
@@ -110,13 +118,14 @@ export function createOverlayView(){
     .sit b{font-size:13.5px;font-weight:600;display:block;font-variant-numeric:tabular-nums;line-height:1.15;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
     .sit span{color:#93a6a9;font-size:8.5px;line-height:1.2;display:block;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
     .sit>div.hot b{color:#e8a08d}.sit>div.warm b{color:#e3b26b}.sit>div.cool b{color:#9ec6d8}
-    /* The list height must stay an exact multiple of the row height. At 100px with ~21px rows it showed
-       four whole rows and a fifth sliced through the text, which read as a stray empty line. Rows are
-       pinned to 22px with the separator drawn as an inset shadow rather than a border, so every row
-       occupies the same space and 110px is exactly five of them. */
-.records{list-style:none;margin:0;padding:0;height:110px;overflow-y:auto;overscroll-behavior:contain;border:1px solid #84999b22;border-radius:9px;background:#ffffff08;scrollbar-width:none}
-    .records::-webkit-scrollbar{display:none}
-    .records li{display:flex;gap:7px;height:22px;padding:0 9px;font-size:9.8px;line-height:22px;align-items:baseline;white-space:nowrap}
+    /* Exactly two rows, newest first: the panel cannot grow with the match. The list is no longer
+       scrollable -- a new record pushes the older one out with a slide+fade instead, because a list
+       that shifts under the cursor during a fight is unreadable. 2 x 22px with the inset separator
+       on the second row is the 46px the box is pinned to. */
+    .records{list-style:none;margin:0;padding:0;height:46px;overflow:hidden;border:1px solid #84999b22;border-radius:9px;background:#ffffff08}
+    .records li{display:flex;gap:7px;height:22px;padding:0 9px;font-size:9.8px;line-height:22px;align-items:baseline;white-space:nowrap;animation:rowIn .28s ease-out}
+    @keyframes rowIn{from{opacity:0;transform:translateY(-9px)}to{opacity:1;transform:none}}
+    @media (prefers-reduced-motion:reduce){.records li{animation:none}}
     .records li+li{box-shadow:inset 0 1px 0 #84999b17}
     .records time{color:#7f9095;flex:none;font-variant-numeric:tabular-nums}
     .records .mark{flex:none;width:9px;text-align:center;color:#6f8489;font-size:8px}
@@ -146,16 +155,22 @@ export function createOverlayView(){
     .queues li.empty{display:block;text-align:center;color:#93a6a9;border-style:dashed}
     .queues li.q-more{height:16px;line-height:16px;border:0;background:none;justify-content:center;color:#7f9095;font-size:9px;padding:0}
     .foot{display:flex;justify-content:flex-end;gap:8px;margin-top:7px;font-size:9.5px;color:#93a6a9}
+    /* Tactical sketch: the same schematic the popup draws, scaled to the overlay's width. It answers
+       "where is the fight" without a minimap, which the page already has. */
+    .map{position:relative;border:1px solid #84999b26;border-radius:9px;background:#ffffff06;overflow:hidden}
+    .map svg{display:block;width:100%;height:auto}
+    .map .grid{stroke:#84999b1f;stroke-width:1}
+    .map .own{fill:#91cbb1}.map .foe{fill:#ed9383}.map .home{fill:#d9b76f}
+    .legend{display:flex;gap:9px;font-size:8.5px;color:#8fa3a5;white-space:nowrap}
+    .legend i{display:inline-block;width:5px;height:5px;border-radius:50%;margin-right:3px;vertical-align:1px}
+    .legend .own i{background:#91cbb1}.legend .foe i{background:#ed9383}.legend .home i{background:#d9b76f}
     .shortcut{color:#d9b76f}
     .warning{color:#e8bd8c;margin:5px 0 0;font-size:10px}
     [hidden]{display:none!important}
-  </style><section aria-label="Jev"><header><div class="drag" tabindex="0" role="group"><div class="brand"></div><div class="status"><i class="dot"></i><span class="status-text"></span></div></div><button type="button"></button></header><div class="details"><div class="sec" id="sec-alerts"></div><div class="alerts" id="alerts"></div><div class="strip"><div class="cell" id="cell-decisions"><b id="decisions"></b><span id="decisions-label"></span></div><div class="cell"><b id="credits"></b><span id="credits-label"></span></div><div class="cell" id="cell-latency"><b id="latency"></b><span id="latency-label"></span></div></div><div class="sec" id="sec-situation"></div><div class="threat" id="threat" hidden></div><div class="sit" id="sit"><div id="cell-army"><b id="army"></b><span id="army-label"></span></div><div id="cell-enemies"><b id="enemies"></b><span id="enemies-label"></span></div><div id="cell-nearby"><b id="nearby"></b><span id="nearby-label"></span></div><div id="cell-miners"><b id="miners"></b><span id="miners-label"></span></div><div id="cell-health"><b id="health"></b><span id="health-label"></span></div><div id="cell-power"><b id="power"></b><span id="power-label"></span></div></div><p class="hint" id="sit-hint" hidden></p><div class="sec" id="sec-records"></div><div class="hint" id="records-hint" hidden></div><ol class="records" id="records"></ol><div class="sec" id="sec-queues"></div><ol class="queues" id="queues"></ol><div class="foot"><span class="shortcut"></span></div><p class="warning" hidden></p></div></section>`;
+  </style><section aria-label="Jev"><header><div class="drag" tabindex="0" role="group"><div class="brand"></div><div class="status"><i class="dot"></i><span class="status-text"></span></div></div><button type="button"></button></header><div class="details"><div class="sec" id="sec-alerts"></div><div class="alerts" id="alerts"></div><div class="strip"><div class="cell" id="cell-decisions"><b id="decisions"></b><span id="decisions-label"></span></div><div class="cell"><b id="credits"></b><span id="credits-label"></span></div><div class="cell" id="cell-latency"><b id="latency"></b><span id="latency-label"></span></div></div><div class="sec" id="sec-situation"></div><div class="threat" id="threat" hidden></div><div class="sit" id="sit"><div id="cell-army"><b id="army"></b><span id="army-label"></span></div><div id="cell-enemies"><b id="enemies"></b><span id="enemies-label"></span></div><div id="cell-nearby"><b id="nearby"></b><span id="nearby-label"></span></div><div id="cell-miners"><b id="miners"></b><span id="miners-label"></span></div><div id="cell-health"><b id="health"></b><span id="health-label"></span></div><div id="cell-power"><b id="power"></b><span id="power-label"></span></div></div><p class="hint" id="sit-hint" hidden></p><div class="sec" id="sec-records"></div><div class="hint" id="records-hint" hidden></div><ol class="records" id="records"></ol><div class="sec" id="sec-queues"></div><ol class="queues" id="queues"></ol><div class="sec" id="sec-map"><span class="sec-text"></span><span class="legend" id="map-legend"><span><i class="own"></i><span class="lg-own"></span></span><span><i class="foe"></i><span class="lg-foe"></span></span><span><i class="home"></i><span class="lg-home"></span></span></span></div><div class="map" id="map"></div><p class="hint" id="map-hint"></p><div class="foot"><span class="shortcut"></span></div><p class="warning" hidden></p></div></section>`;
   const $=selector=>root.querySelector(selector),handle=$('.drag'),button=$('button');
-  let config,lastStatus,drag,recordsHovered=false,recordsPinned=false,lastExecCount=0;
+  let config,lastStatus,drag,lastRecordKey='';
   const recordsBox=$('#records');
-  recordsBox.addEventListener('mouseenter',()=>{recordsHovered=true;});
-  recordsBox.addEventListener('mouseleave',()=>{recordsHovered=false;});
-  recordsBox.addEventListener('scroll',()=>{if(recordsBox.scrollTop>2)recordsPinned=true;});
   function layout(){
     const box=host.getBoundingClientRect();placement=clampPosition(placement,box.width,box.height,window.innerWidth,window.innerHeight);
     host.style.setProperty('left',`${placement.x}px`,'important');host.style.setProperty('top',`${placement.y}px`,'important');
@@ -214,15 +229,20 @@ export function createOverlayView(){
     const powerLow=!!o?.power&&Number.isFinite(o.power.total)&&Number.isFinite(o.power.drain)&&o.power.total<o.power.drain;
     $('#cell-power').className=`${powerLow?'warm':''}`;
     $('#cell-army').className=`${count('army')>0?'cool':''}`;
-    // Execution records: structured and sanitized, newest first. Auto-scroll to the newest entry
-    // only when new records arrive and the user has not scrolled or hovered the list.
+    // Execution records: structured and sanitized, newest first, two rows only.
     $('#sec-records').textContent=tr('overlayLog');
-    const execs=status.executions??[];
+    const execs=(status.executions??[]).slice(0,RECORD_ROWS);
     const hasRecords=execs.length>0;
-    $('#records-hint').hidden=!hasRecords;$('#records-hint').textContent=tr('overlayScrollHint');
-    recordsBox.innerHTML='';
-    if(!hasRecords){const li=document.createElement('li');li.className='empty';li.textContent=tr('overlayNoLog');recordsBox.append(li);recordsPinned=false;lastExecCount=0;}
-    for(const e of execs){
+    $('#records-hint').hidden=true;
+    // Rebuilding the rows on every 1.5 s poll would replay the entry animation each time and make the
+    // panel look permanently mid-transition. The rows are only rebuilt when the newest entry actually
+    // changes, so the animation means "a new record arrived" and nothing else.
+    const newest=hasRecords?`${execs[0].at}|${execs.length}`:'';
+    if(newest!==lastRecordKey){
+      lastRecordKey=newest;
+      recordsBox.innerHTML='';
+      if(!hasRecords){const li=document.createElement('li');li.className='empty';li.textContent=tr('overlayNoLog');recordsBox.append(li);}
+      else for(const e of execs){
       const li=document.createElement('li');
       // 24-hour, fixed width: a 12-hour clock adds "AM/PM" to every row and the panel is narrow.
       const time=document.createElement('time');time.textContent=new Date(e.at).toLocaleTimeString(config.language,{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});
@@ -239,11 +259,8 @@ export function createOverlayView(){
       // The row is a fixed single line: a long report is ellipsized here and kept in the tooltip,
       // so no row can grow the panel.
       what.title=[label,...parts].join(' · ');
-      li.append(time,mark,what);recordsBox.append(li);
+      li.append(time,mark,what);recordsBox.append(li);}
     }
-    const grew=hasRecords&&execs.length>lastExecCount;
-    lastExecCount=hasRecords?execs.length:0;
-    if(hasRecords&&grew&&!recordsHovered&&!recordsPinned)recordsBox.scrollTop=0;
     // What the base is producing. This is the one block that answers "what is it actually doing",
     // and the quickest read on whether the economy keeps growing: an idle base says so in one line
     // instead of showing the handful of queues that happen to exist. Names arrive resolved from the
@@ -271,6 +288,40 @@ export function createOverlayView(){
         li.append(name,bar,value);queueBox.append(li);
       }
       if(rows.length>QUEUE_ROWS){const li=document.createElement('li');li.className='q-more';li.textContent=tr2('overlayMoreQueues',{n:rows.length-QUEUE_ROWS});queueBox.append(li);}
+    }
+    // Tactical sketch, same data and projection as the popup's: visible units on both sides plus our
+    // base, auto-scaled to fit. It is a schematic, not a map -- the caption says so, because a player
+    // who reads it as a minimap will look for units it deliberately left out.
+    $('#sec-map .sec-text').textContent=tr('tactical');
+    $('.lg-own').textContent=tr('own');$('.lg-foe').textContent=tr('enemy');$('.lg-home').textContent=tr('base');
+    const mapBox=$('#map');
+    // The legend lives inside the section header, so hiding the section hides both; the box and the
+    // caption are siblings and are hidden on their own.
+    $('#sec-map').hidden=!o;mapBox.hidden=!o;$('#map-hint').hidden=!o;
+    if(o){
+      const own=o.ownPoints??[],foe=o.enemyPoints??[],base=o.base;
+      $('#map-hint').textContent=tr('tacticalHint');
+      if(!(own.length||foe.length||base)){
+        mapBox.replaceChildren();
+      } else {
+        const all=[...own,...foe,...(base?[base]:[])];
+        const xs=all.map(p=>p.x),ys=all.map(p=>p.y);
+        const minX=Math.min(...xs),maxX=Math.max(...xs),minY=Math.min(...ys),maxY=Math.max(...ys);
+        // 340x112 in the popup; kept identical so the two read as the same drawing at different sizes.
+        const scale=Math.min(304/Math.max(12,maxX-minX),80/Math.max(12,maxY-minY));
+        const px=p=>170+(p.x-(minX+maxX)/2)*scale,py=p=>56+(p.y-(minY+maxY)/2)*scale;
+        const NS='http://www.w3.org/2000/svg';
+        const svg=document.createElementNS(NS,'svg');
+        svg.setAttribute('viewBox','0 0 340 112');svg.setAttribute('role','img');
+        svg.setAttribute('aria-label',tr('tactical'));
+        const add=(tag,attrs)=>{const n=document.createElementNS(NS,tag);for(const[k,v]of Object.entries(attrs))n.setAttribute(k,v);return n;};
+        for(let i=18;i<340;i+=38)svg.append(add('line',{x1:i,x2:i,y1:8,y2:104,class:'grid'}));
+        for(let i=18;i<112;i+=24)svg.append(add('line',{x1:12,x2:328,y1:i,y2:i,class:'grid'}));
+        for(const p of own)svg.append(add('circle',{cx:px(p),cy:py(p),r:3.3,class:'own'}));
+        for(const p of foe)svg.append(add('circle',{cx:px(p),cy:py(p),r:3.3,class:'foe'}));
+        if(base)svg.append(add('rect',{x:px(base)-4,y:py(base)-4,width:8,height:8,class:'home',transform:`rotate(45 ${px(base)} ${py(base)})`}));
+        mapBox.replaceChildren(svg);
+      }
     }
     $('.shortcut').textContent=`${config.hotkey} · ${tr('stop')}`;
     layout();

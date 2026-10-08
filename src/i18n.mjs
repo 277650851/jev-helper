@@ -107,8 +107,9 @@ export const messages = {
   evAccepted:['已执行','Executed'],evDenied:['未执行','Denied'],
   overlaySituation:['实时战场态势','Live battlefield'],overlayTrend:['决策趋势','Decision trend'],overlayLog:['实时执行记录','Live execution log'],overlayAlerts:['实时执行异常','Execution alerts'],
   overlayNoLog:['暂无执行记录','No actions yet'],overlayNoAlerts:['暂无异常','No problems'],overlayStale:['态势数据已停止更新','Situation stopped updating'],overlayNoSituation:['等待战况数据…','Waiting for battlefield data…'],
-  overlayTrendHint:['回答 / 资金 / 已受理动作','Replies / credits / accepted actions'],overlayScrollHint:['列表自动滚动，悬停暂停','Scrolls automatically; hover to pause'],
+  overlayTrendHint:['回答 / 资金 / 已受理动作','Replies / credits / accepted actions'],
   overlayPower:['电力','Power'],overlayEnemies:['视野内敌军','Visible enemies'],overlayNearby:['基地附近','Near base'],overlayMiners:['采矿','Miners'],overlayMoreQueues:['另有 {n} 项在生产','{n} more in production'],
+  tacticalHint:['当前可见样本 · 自动缩放 · 每方最多 24 个','Visible sample · auto-scaled · up to 24 per side'],
   overlayAlertsCount:['{n} 次请求失败','{n} failed requests'],overlayDropped:['{n} 次回答因过期被丢弃','{n} replies dropped as stale'],overlayNeedSave:['设置未保存，当前来源仍是 {name}','Unsaved settings; still using {name}'],
 };
 export function t(language,key,vars={}){const pair=messages[key];let text=pair?.[language==='en'?1:0]??key;return text.replace(/\{(\w+)\}/g,(_,k)=>String(vars[k]??''));}
