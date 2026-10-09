@@ -535,7 +535,11 @@ export function candidateGroups(api, catalog, snapshot, memory) {
     build(
       "deploy_base",
       "URGENT: deploy the construction vehicle so the base can start.",
-      { type: "deploy", ids: [mcv.id] },
+      // Engine-owned: the option exists only while a construction vehicle is packed, and a packed one can
+      // build nothing, so deploying is what makes the game proceed at all. The action is "deploy here" --
+      // there is no site to choose -- so the model has nothing to weigh, and `wait` would mean the base never
+      // starts. `jev-report-20261010-061242` shows it asked twice and answered `deploy_base` both times.
+      { type: "deploy", ids: [mcv.id], engineOwned: true },
     );
   const queueOf = (type) => state.queues.find((q) => q.type === type);
   const constructionType = api.QueueType?.Structures ?? 0;
