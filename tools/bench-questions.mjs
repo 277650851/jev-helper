@@ -26,7 +26,9 @@ const totals = { asked: 0, forced: 0, narrow: 0, open: 0, empty: 0 };
 const groupTotals = {};
 
 for (const name of SCENARIO_NAMES) {
-  const state = SCENARIOS[name]();
+  // Every scenario is one player's view, and which units that player can build changes the menu, so the
+  // side is stated rather than left to default.
+  const state = { side: 'allied', ...SCENARIOS[name]() };
   let questions = {};
   let failure = null;
   try {

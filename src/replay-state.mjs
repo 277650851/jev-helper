@@ -39,10 +39,13 @@ const buildingOffset = (i) => {
 const BUILDING_TYPE = 2;
 
 // Names the catalog knows as production or support buildings, used to infer a build menu. The queue ids
-// follow the game's own QueueType order, which the rest of the code reads from `api.QueueType`.
-const menuFor = (catalog, kind, suffix) => Object.keys(catalog).filter((name) => {
+// follow the game's own QueueType order, which the rest of the code reads from `api.QueueType`. `side`
+// filters the menu the way the rules' `Owner=` list does: offering both sides' units at once would
+// fabricate options no match could produce.
+const menuFor = (catalog, kind, side, suffix) => Object.keys(catalog).filter((name) => {
   const r = catalog[name];
   if (!r || r.buildCategory !== kind) return false;
+  if (side && r.side && r.side !== side) return false;
   return suffix(r);
 });
 
@@ -56,6 +59,7 @@ export function replayApi(state = {}, catalog = {}, options = {}) {
   // Fail loudly on a missing state. A silent empty replay would report "no questions and no problems",
   // which is the most flattering answer a benchmark can give and therefore the most dangerous one.
   if (!state || typeof state !== 'object') throw new Error('replayApi needs a state summary; a report archives only numbers, not units (see src/replay-state.mjs)');
+  const side = state.side ?? 'allied';
   const baseTile = { rx: state.base?.x ?? 20, ry: state.base?.y ?? 20 };
   const width = Math.max(64, (state.base?.x ?? 20) + 32), height = Math.max(64, (state.base?.y ?? 20) + 32);
 
@@ -116,12 +120,12 @@ export function replayApi(state = {}, catalog = {}, options = {}) {
     slot.items = (q.items ?? []).map((s) => ({ name: String(s).split('×')[0], quantity: Number(String(s).split('×')[1]) || 1 }));
   }
   const menu = {
-    0: has((r) => r.yard) ? menuFor(catalog, 'Structure', () => true) : [],
-    1: menuFor(catalog, 'Defense', (r) => r.isBaseDefense || r.wall),
-    2: has((r) => r.factory === 'InfantryType') ? menuFor(catalog, 'Infantry', () => true) : [],
-    3: has((r) => r.factory === 'UnitType') ? menuFor(catalog, 'Vehicle', () => true) : [],
-    4: has((r) => r.factory === 'AircraftType') ? menuFor(catalog, 'Aircraft', () => true) : [],
-    5: has((r) => r.factory === 'NavalUnitType') ? menuFor(catalog, 'Naval', () => true) : [],
+    0: has((r) => r.yard) ? menuFor(catalog, 'Structure', side, () => true) : [],
+    1: menuFor(catalog, 'Defense', side, (r) => r.isBaseDefense || r.wall),
+    2: has((r) => r.factory === 'InfantryType') ? menuFor(catalog, 'Infantry', side, () => true) : [],
+    3: has((r) => r.factory === 'UnitType') ? menuFor(catalog, 'Vehicle', side, () => true) : [],
+    4: has((r) => r.factory === 'AircraftType') ? menuFor(catalog, 'Aircraft', side, () => true) : [],
+    5: has((r) => r.factory === 'NavalUnitType') ? menuFor(catalog, 'Naval', side, () => true) : [],
   };
 
   const api = {

@@ -16,7 +16,13 @@ const AP = [0.25, 0.25, 0.25, 0.75, 1, 1, 0.65, 0.45, 0.6, 0.6, 1];
 const SA = [1, 0.8, 0.7, 0.5, 0.25, 0.25, 0.75, 0.5, 0.25, 1, 1];
 const AA = [1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 1];
 
-/** Armour words and figures taken from the live rules file; `category`/`factory` drive group logic. */
+/**
+ * Armour words and figures taken from the live rules file; `category`/`factory` drive group logic.
+ * `side` is `'allied'` or `'soviet'` and stands in for the rules' `Owner=` list: without it the build
+ * menu would offer a single player both sides' units at once, which is what a scenario must never do --
+ * an impossible menu fabricates options that no match could produce, and the benchmark would then be
+ * scoring imaginary questions.
+ */
 export const CATALOG = {
   // --- structures ---
   GACNST: { yard: true, cost: 2500, power: 0, label: 'Construction Yard', armor: 'concrete', factory: 'BuildingType', buildCategory: 'Structure', techLevel: 1 },
@@ -65,12 +71,19 @@ export const CATALOG = {
 const u = (id, kind, type, rx, ry, extra = {}) => ({ id, kind, type, tile: { x: rx, y: ry }, hp: 100, hpFraction: 1, idle: true, ...extra });
 const TYPE = { aircraft: 1, building: 2, infantry: 3, vehicle: 7 };
 
+// Which side can build what. There is no naming convention to lean on -- `E2`, `FLAKT`, `SHK`, `DESO`,
+// `HTNK` and `V3` are all Soviet without an `N` prefix, while `NACNST` and `NALASR` are Soviet with one --
+// so the set is written out, taken from the rules file's `Owner=` lists rather than guessed from the id.
+const SOVIET = new Set(['NACNST', 'NAWEAP', 'NAREFN', 'TESLA', 'NALASR', 'HTNK', 'APOC', 'TTNK', 'V3', 'DRON', 'E2', 'FLAKT', 'SHK', 'DESO', 'ZEP']);
+for (const name of Object.keys(CATALOG)) CATALOG[name].side = SOVIET.has(name) ? 'soviet' : 'allied';
+
 /** Buildings per kind, as the `inventory` a state summary carries. */
 const stock = (pairs) => Object.fromEntries(pairs.map(([kind, count]) => [kind, { name: CATALOG[kind]?.label ?? kind, count, role: '' }]));
 
 /**
  * Scenario templates. Each returns a state summary shaped like the one `collectState` produces, which is
- * what `replayApi` consumes.
+ * what `replayApi` consumes. `side` says which build menu the player has, and `vs` names the opponent --
+ * the scenarios are all Allied against a Soviet opponent, which is what the archived matches were.
  */
 export const SCENARIOS = {
   // Opening: a yard, one power plant, nothing else. The construction group should be asking about the
