@@ -225,8 +225,12 @@ export function assessStrategy(api, catalog, snapshot, memory) {
     history.approach = { rx: threats.reduce((s, u) => s + u.tile.rx, 0) / threats.length,
       ry: threats.reduce((s, u) => s + u.tile.ry, 0) / threats.length };
   }
+  // Each side's weight is the damage its own rule would do to the other side's units. Both calls used to
+  // read `effectiveness(catalog[threat.name], threats, ...)` -- the threat's rule scored against the
+  // threat list itself, so our power was measured with the ENEMY's weapons and the enemy's was too, and
+  // the comparison that decides `suppressed` was between two numbers that both described the enemy.
   const ownPower = defenders.reduce((s, u) => s + effectiveness(catalog[u.name], threats, catalog, api) * hp(u), 0);
-  const enemyPower = threats.reduce((s, u) => s + effectiveness(catalog[u.name], defenders, catalog, api) * hp(u), 0);
+  const enemyPower = threats.reduce((s, e) => s + effectiveness(catalog[e.name], defenders, catalog, api) * hp(e), 0);
   const underPressure = threats.length > 0;
   const sustained = underPressure && tick - history.since > 450;
   const suppressed = underPressure && (sustained || threats.length >= 3 && enemyPower > ownPower * 0.8);
@@ -344,10 +348,14 @@ export function investmentGroups(api, catalog, snapshot, memory, groups) {
   let defensePlan, coverage = 0, floorTagged = false;
   if (s.harvesters >= Math.min(2, s.economy?.targetMiners ?? 2, strategy.underPressure ? 1 : 2) && free(api.QueueType.Armory)) {
     const options = api.production.available(api.QueueType.Armory).filter(i => catalog[i.name]?.isBaseDefense && !catalog[i.name]?.wall)
-      .map(i => ({ ...i, queue: api.QueueType.Armory, value: effectiveness(catalog[i.name], defenseTargets, catalog, api) }));
+      // Scored against the attackers that are actually in range, summed rather than averaged, and zero for
+      // a tower that cannot engage them. This is what makes the answer to an air raid differ from the
+      // answer to a tank push: an anti-air tower holds a nonzero damage figure against tanks and used to
+      // outrank or lose to a pillbox by an average that ignored which of them can actually shoot.
+      .map(i => ({ ...i, queue: api.QueueType.Armory, value: counterValue(catalog[i.name], defenseTargets, catalog, api) }));
     coverage = defenseUnits.filter(u => defenseTargets.length
       ? defenseTargets.some(e => canFireAt(api, catalog, u, e))
-      : effectiveness(catalog[u.name], [], catalog, api) > 0).length;
+      : counterValue(catalog[u.name], [], catalog, api) > 0).length;
     if (coverage < targetDefenses && (defenseUnits.length < 8 || strategy.underPressure && coverage < 2)) for (const item of options.sort((a, b) => b.value / Math.sqrt(catalog[b.name].cost) - a.value / Math.sqrt(catalog[a.name].cost))) {
       // Cap the whole question, not just this layer's share: the special layer's wall and strongpoint
       // options are already in the group, and the local model reads one multiple-choice list, so the

@@ -1,6 +1,6 @@
 import { specialGroups, executeSpecial, rememberSpecial, maintainSpecial, refreshInfrastructure, SIEGE_RANGE } from "./werhd-jev-special.mjs";
 import { buildBrief, formSquads, squadUnits, sameIntent } from "./werhd-jev-commander.mjs";
-import { assessStrategy, investmentGroups, chooseBuildingSite, chooseRallySite, weaponEffectiveness, effectiveness, infantryProfile, scoutScore, currentWeapon as combatWeapon, activeWeapons, canFireAt, baseThreats, ATTACK_FORCE_SIZE, ATTACK_AA_ESCORTS, vehicleOptions } from "./werhd-jev-strategy.mjs";
+import { assessStrategy, investmentGroups, chooseBuildingSite, chooseRallySite, weaponEffectiveness, effectiveness, counterValue, infantryProfile, scoutScore, currentWeapon as combatWeapon, activeWeapons, canFireAt, baseThreats, ATTACK_FORCE_SIZE, ATTACK_AA_ESCORTS, vehicleOptions } from "./werhd-jev-strategy.mjs";
 import { updateCamera } from "./werhd-jev-camera.mjs";
 import { refreshCatalog, isDecoration } from "./werhd-jev-catalog.mjs";
 import { trackObjective, isGuardedByObjective } from "./werhd-jev-objective.mjs";
@@ -676,9 +676,19 @@ export function candidateGroups(api, catalog, snapshot, memory) {
           ...(isScout ? { engineOwned: true } : {}),
         };
       if(!isScout)combatTraining.push(trainAction);
+      // What this unit would actually do against the enemy that is VISIBLE, as a number the model can
+      // compare across the options. The role scores above are abstract (anti-infantry / anti-armour by
+      // sample armour) and never zero: a rifleman carries a nonzero anti-infantry figure into an air raid
+      // it cannot touch, and nothing in the question said so. `counterValue` sums over the visible enemy
+      // and counts nothing for what the unit cannot engage, so an all-air force makes every non-anti-air
+      // option read 0.
+      const visibleValue = counterValue(r, state.visibleEnemies ?? [], catalog, api);
+      const visibleNote = (state.visibleEnemies ?? []).length
+        ? ` Effect against the ${state.visibleEnemies.length} enemy units now visible ${round(visibleValue)}${visibleValue <= 0 ? ' -- this unit cannot engage them' : ''}.`
+        : '';
       foot(
         `produce_${item.name}`,
-        `${isScout?'SCOUT FIRST: one fast expendable scout to locate the enemy base':'COMBAT ROLE: '+profile.role}. Produce ${r.label}, cost ${r.cost}; speed ${r.speed??0}; current role counts ${JSON.stringify(roles)}. Armor-adjusted anti-infantry score normal ${round(profile.normalInfantry)}, deployed ${round(profile.deployedInfantry)}; best anti-armor ${round(profile.antiArmor)}. Anti-infantry score per 100 credits ${round(profile.antiInfantry/r.cost*100)}. Deployment can reduce damage against infantry.`,
+        `${isScout?'SCOUT FIRST: one fast expendable scout to locate the enemy base':'COMBAT ROLE: '+profile.role}. Produce ${r.label}, cost ${r.cost}; speed ${r.speed??0}; current role counts ${JSON.stringify(roles)}. Armor-adjusted anti-infantry score normal ${round(profile.normalInfantry)}, deployed ${round(profile.deployedInfantry)}; best anti-armor ${round(profile.antiArmor)}. Anti-infantry score per 100 credits ${round(profile.antiInfantry/r.cost*100)}. Deployment can reduce damage against infantry.${visibleNote}`,
         trainAction,
       );
     }
