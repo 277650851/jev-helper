@@ -124,7 +124,13 @@ export function specialGroups(api, catalog, snapshot, memory, groups) {
     // than written off for the rest of the match.
     const busy = new Set([...memory.specialOrders.values()]
       .filter((o) => o.kind === 'collect_crate' && tick - o.tick <= 450).map((o) => o.crateId));
-    for (const c of crates.filter((x) => x.tile && !x.water).slice(0, 3)) {
+    // Nearest first. The listing order is the game's, not a priority, and only three crates are offered --
+    // taking the first three could hand the scout a crate on the far side of the map while one sits beside
+    // the base, which costs recon time for nothing. `distance` is to the base, the point everything is
+    // measured from and the place a detour is cheapest to make.
+    const reachable = crates.filter((x) => x.tile && !x.water)
+      .sort((a, b) => distance(a.tile, base.tile) - distance(b.tile, base.tile));
+    for (const c of reachable.slice(0, 3)) {
       // Skipping one crate must not hide the others, so this skips the crate rather than leaving the loop.
       if (busy.has(c.id)) continue;
       const u = pool[0];

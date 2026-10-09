@@ -109,4 +109,22 @@ assert.equal(snapshot.state.infrastructure.crates, 1, 'the crate count reaches t
   assert.equal(memory.specialTasks.length, 0, 'a trip that never completes is abandoned');
   assert.equal(memory.specialOrders.has(2), false);
 }
-console.log('Upgrade crates: read from crates(), collected with move, and released when the box is gone');
+// 5. Only three crates are offered, so WHICH three matters. The listing order is the game's, not a priority:
+//    taking the first three can hand the scout a crate across the map while one sits beside the base, and the
+//    scout's trip to a frontier is what finds the enemy base at all.
+{
+  memory.specialTasks = []; memory.specialOrders = new Map();
+  own.length = 0;
+  own.push({ id: 1, name: 'YARD', kind: 'YARD', type: 2, tile: { rx: 20, ry: 20 }, hitPoints: 1000, maxHitPoints: 1000 });
+  for (const id of [2, 3, 4]) own.push({ id, name: 'HTNK', kind: 'HTNK', type: 7, tile: { rx: 22 + id, ry: 20 }, hitPoints: 400, maxHitPoints: 400, isIdle: true, primaryWeapon: catalog.HTNK.weapon });
+  // Listed farthest first, nearest LAST -- the order that used to hide the crate beside the base.
+  crates = [crate(11, 55, 55), crate(12, 40, 40), crate(13, 50, 50), crate(14, 21, 21)];
+  const groups = {};
+  specialGroups(api, catalog, snapshot, memory, groups);
+  const keys = Object.keys(groups.salvage?.actions ?? {}).filter((k) => k.startsWith('crate_'));
+  assert.equal(keys.length, 3, `three crates are offered (${keys.join(',')})`);
+  assert.ok(keys.includes('crate_14'), 'the one beside the base is among them even though it is listed last');
+  assert.ok(!keys.includes('crate_11'), 'and the farthest is left out');
+  assert.deepEqual(keys.sort(), ['crate_12', 'crate_13', 'crate_14'], 'the three nearest, in distance order');
+}
+console.log('Upgrade crates: read from crates(), collected with move, released when the box is gone, nearest first');
