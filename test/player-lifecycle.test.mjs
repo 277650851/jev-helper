@@ -23,6 +23,11 @@ let own = [
   },
 ];
 let enemy = [{ id: 9, name: "ENEMY", type: 7, tile: { rx: 15, ry: 15 } }];
+// Vehicle-typed on purpose, and load-bearing: the engine reads the structures queue to decide whether the
+// opening plan may act, so a queue typed as structures here would leave this fixture with no question it
+// can ask at all (no buildings, no units, a one-item build menu) and the three blocks below that drive
+// late, stale and ended-battle replies would never see a request. Whoever makes the opening step
+// engine-owned has to rebuild this fixture first -- see the note on that tag in src/player.
 let queue = { type: 3, size: 0, items: [] };
 const api = {
   me: () => self,
