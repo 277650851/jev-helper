@@ -87,6 +87,42 @@ export function baseThreats(api, catalog, buildings, enemies, harvesters = []) {
     (dist(e.tile, b.tile) < 18 || canFireAt(api, catalog, e, b))));
 }
 
+// A blast weapon reaches beyond the unit it aims at. The rules name that radius differently between builds,
+// so several field names are probed, and it is read from the runtime weapon object because the API's type
+// for a weapon does not declare it. Zero means "no blast", which is what every non-blast weapon returns.
+export function splashOf(w) {
+  if (!w) return 0;
+  for (const k of ['cellSpread', 'area', 'splash', 'spread', 'blast', 'blastRadius', 'areaRange']) {
+    const v = w[k];
+    if (Number.isFinite(v) && v > 0) return v;
+  }
+  return 0;
+}
+// How many of the OTHER targets a blast centred on `target` would also catch, as a multiplier. Only
+// infantry is counted: the flat damage model gives vehicles and buildings one hit each, and "a rocket
+// landing among six conscripts" is exactly the case it understates -- which is why an anti-infantry
+// specialist used to look worse than a tank whose single shot simply does more damage.
+//
+// The per-shot damage is unchanged for the unit aimed at; what the multiplier expresses is how much total
+// damage the shot delivers to the group. Capped at 6 so one very tight cluster cannot dominate every score.
+export function splashReach(weapon, target, targets) {
+  const radius = splashOf(weapon);
+  if (!radius || !targets || targets.length < 2) return 1;
+  const at = target?.tile;
+  if (!at) return 1;
+  let n = 1;
+  for (const other of targets) {
+    // Identity alone is not enough to skip the unit being aimed at: a caller that rebuilt the target list
+    // (the counter profile copies each summary before scoring) passes an equal-but-distinct object, and
+    // counting it again would credit the blast with hitting the unit twice. Same unit, same tile and same
+    // type is what identifies it, and only one entry may match.
+    if (other === target) continue;
+    if (other?.type !== 3 || !other?.tile) continue;
+    if (other.tile.rx === at.rx && other.tile.ry === at.ry) continue;
+    if (Math.hypot(other.tile.rx - at.rx, other.tile.ry - at.ry) <= radius) n++;
+  }
+  return Math.min(n, 6);
+}
 export function weaponEffectiveness(w, targets, catalog, api) {
   if (!w) return 0;
   const samples = targets.length ? targets : [{ type: api.ObjectType.Infantry }, { type: api.ObjectType.Vehicle }];
@@ -106,13 +142,36 @@ export function effectiveness(rule, targets, catalog, api) {
   return samples.reduce((sum,t) => sum + Math.max(0,...weapons.map(w=>weaponEffectiveness(w,[t],catalog,api))),0)/samples.length;
 }
 
-// The 11 armour words in `Verses` index order, and which of them a rule's row is written in: percentages
-// (`Verses=25,...,100`, how the rules files write it) or proportions (`0.25`, `1`, how fixtures write it).
-// A row with a value above 2 can only be percentages.
+// The 11 armour words in `Verses` index order. They are not in any rules INI (there is no `[ArmorTypes]`
+// section in the Red Alert 2 files); the order is the weapon-system dictionary's and matches the `Verses=`
+// comment block in the rules. `counter.mjs` indexes with the same order.
 const ARMOR_WORDS = ['none', 'flak', 'plate', 'light', 'medium', 'heavy', 'wood', 'steel', 'concrete', 'special_1', 'special_2'];
+// The armour table of a weapon, read so that both shapes the codebase actually carries work. The runtime
+// API declares `versus` as `Record<number, number>` -- an OBJECT keyed by armour index -- and the catalog
+// adds `verses` as an ARRAY copy of it (`Object.assign([], w.versus)`). Reading `versus` first and requiring
+// an array therefore finds the object, fails the array test, and silently reports "no table" for every real
+// rule; `weaponEffectiveness` had it right by preferring `verses`. Both are accepted here, by index, so no
+// caller has to know which one it was handed.
+export function versesRow(w) {
+  const row = w?.verses ?? w?.versus;
+  return row ?? undefined;
+}
+export function verseAt(w, index) {
+  const row = versesRow(w);
+  if (row === undefined || index === undefined || index < 0) return undefined;
+  const v = Array.isArray(row) ? row[index] : row?.[index];
+  return v === undefined || v === null ? undefined : Number(v);
+}
+// Which of the two written forms a row uses, decided from the row as a whole rather than per entry.
+// `Verses=25,25,25,75,100,100,...` cannot be read as proportions (the 100s would be 100x damage), and
+// `[0.25, 1]` cannot be read as percentages (1 would mean force-fire-only) -- but both are legal here: the
+// API documents no scale, the rules files use percentages and most fixtures use proportions. A row with a
+// value above 2 can only be percentages.
 export function versesArePercent(w) {
-  const row = w?.versus ?? w?.verses;
-  return Array.isArray(row) && row.some((v) => Number(v) > 2);
+  const row = versesRow(w);
+  if (row === undefined) return false;
+  const values = Array.isArray(row) ? row : Object.values(row);
+  return values.some((v) => Number(v) > 2);
 }
 // Can this rule's weapons be used on that unit at all? `effectiveness` averages a value over the target
 // set, which answers "how good is this on average" and not "how much of this enemy can it touch". For
@@ -129,12 +188,17 @@ export function canEngageTarget(rule, target, catalog, api) {
   return weapons.some((w) => {
     if (isAir ? !w.aa : w.ag === false) return false;
     const armor = target?.armor ?? catalog[target?.name]?.armor;
-    const row = w.versus ?? w.verses;
-    if (!Array.isArray(row)) return true;
-    const i = armor === undefined ? -1 : ARMOR_WORDS.indexOf(String(armor).toLowerCase());
-    const v = i < 0 ? undefined : row[i];
-    if (v === undefined || v === null) return true;
-    return versesArePercent(w) ? Number(v) > 2 : Number(v) > 0;
+    if (armor === undefined) return true;
+    // The armour is either the index itself (a state summary carries the numeric `ArmorType` value) or the
+    // word (the catalog lowercases `ArmorType[rule.armor]`). Resolving a number through the word list would
+    // miss and be read as "no table" -- an acceptance, not a refusal -- so a valid index is used directly.
+    const asIndex = Number(armor);
+    const index = Number.isInteger(asIndex) && asIndex >= 0 && asIndex < ARMOR_WORDS.length
+      ? asIndex
+      : ARMOR_WORDS.indexOf(String(armor).toLowerCase());
+    const v = verseAt(w, index);
+    if (v === undefined) return true;
+    return versesArePercent(w) ? v > 2 : v > 0;
   });
 }
 // What this rule would actually do against the units that are visible: summed over each of them rather
@@ -150,9 +214,16 @@ export function counterValue(rule, targets, catalog, api) {
   const weapons = [rule.weapon, rule.secondary].filter((w) => w && w.damage > 0);
   if (!weapons.length) return 0;
   if (!targets?.length) return effectiveness(rule, [], catalog, api);
-  return targets.reduce((sum, t) => sum + (canEngageTarget(rule, t, catalog, api)
-    ? Math.max(0, ...weapons.map((w) => weaponEffectiveness(w, [t], catalog, api)))
-    : 0), 0);
+  // The blast bonus is applied HERE, where the whole target list is in hand. It used to sit inside
+  // `weaponEffectiveness`, which every one of these callers invokes one target at a time -- so the list it
+  // counted neighbours from always had a single element and the term was always 1, making the feature a
+  // silent no-op on the very path it was written for.
+  return targets.reduce((sum, t) => {
+    if (!canEngageTarget(rule, t, catalog, api)) return sum;
+    const best = Math.max(0, ...weapons.map((w) => weaponEffectiveness(w, [t], catalog, api)));
+    const reach = Math.max(...weapons.map((w) => splashReach(w, t, targets)));
+    return sum + best * reach;
+  }, 0);
 }
 
 export function infantryProfile(rule, api) {
