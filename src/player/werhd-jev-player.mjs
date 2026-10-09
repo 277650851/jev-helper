@@ -1217,10 +1217,15 @@ export function executeCandidate(api, action, catalog) {
     });
     if (!eligible.length)
       return { accepted: false, reason: "deployment_state_changed" };
+    // `api.deploy` answers with a boolean, so a refusal here used to return `accepted: false` and NO reason.
+    // Every refusal needs one: the log's `rejectedBecause` is how a reader tells "the engine wanted this and
+    // the game said no" from "the engine chose badly", and an empty cause makes that indistinguishable.
+    const deployed = api.deploy(eligible);
     return {
-      accepted: api.deploy(eligible),
+      accepted: deployed,
       ids: eligible,
       deployed: action.deployed,
+      ...(deployed ? {} : { reason: "deploy_refused" }),
     };
   }
   if (action.type === "cancel") {
@@ -1289,7 +1294,12 @@ export function executeCandidate(api, action, catalog) {
       );
     return { accepted: true, ids: action.ids };
   }
-  if (action.type === "deploy") return { accepted: api.deploy(action.ids) };
+  if (action.type === "deploy") {
+    // Same reason as the posture branch: `api.deploy` returns a boolean, so a refusal must be given a cause
+    // here or the log records a rejection with nothing to explain it.
+    const deployed = api.deploy(action.ids);
+    return { accepted: deployed, ...(deployed ? {} : { reason: "deploy_refused" }) };
+  }
   if (action.type === "attack") {
     if (!api.units("enemy").some((u) => u.id === action.targetId))
       return { accepted: false, reason: "enemy_no_longer_visible" };
@@ -2232,12 +2242,23 @@ export function splitEngineOwned(requestGroups) {
 // not be overwritten by why the order was then refused. Before this, a refused engine takeover was logged
 // as `queue_changed` / `mission_locked` and the attribution -- the single most important fact about the
 // entry -- was gone. The executor's own reason travels in `rejectedBecause`.
+// A refused order must carry a cause. Several executors hand back `accepted: false` with no `reason` --
+// `api.deploy` and `api.order` answer with a bare boolean, and a couple of branches simply return the count
+// -- so the log ended up with rejections that explained nothing, which is the one thing `rejectedBecause`
+// exists to prevent. Normalising at the point of consumption covers every current branch and any future one,
+// instead of relying on each executor to remember.
+export const EXECUTION_REASON_FALLBACK = "rejected_unnamed";
+export function withRefusalReason(execution = {}) {
+  if (execution.accepted !== false || execution.reason) return execution;
+  return { ...execution, reason: EXECUTION_REASON_FALLBACK };
+}
 export function takeoverEvent({ id, choice, action, execution, reason, owned, tick, sourceTick }) {
+  const result = withRefusalReason(execution);
   return {
-    kind: "action", tick, sourceTick, question: id, choice, action, ...execution,
+    kind: "action", tick, sourceTick, question: id, choice, action, ...result,
     auto: true, ...(owned ? { engineOwned: true } : {}),
     reason,
-    ...(execution?.accepted ? {} : { rejectedBecause: execution?.reason }),
+    ...(result.accepted ? {} : { rejectedBecause: result.reason }),
   };
 }
 export async function attachJevPlayer(api, options = {}) {
@@ -2541,7 +2562,7 @@ export async function attachJevPlayer(api, options = {}) {
           }
         }
         const execStarted = performance.now(),
-          execution = executeCandidate(api, action, catalog);
+          execution = withRefusalReason(executeCandidate(api, action, catalog));
         if (execution.accepted) afterAccepted(action, execution);
         else if (execution.reason !== "wait") status.rejected++;
         rememberChoice(memory, id, answer.choice, execution, api.tick());

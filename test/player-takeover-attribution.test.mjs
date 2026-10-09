@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { collectTakeovers, engineOwnedMarks, askableGroups, requestGroupsFrom, takeoverEvent } from '../src/player/werhd-jev-player.mjs';
+import { collectTakeovers, engineOwnedMarks, askableGroups, requestGroupsFrom, takeoverEvent, withRefusalReason, EXECUTION_REASON_FALLBACK } from '../src/player/werhd-jev-player.mjs';
 
 // A match report has to answer one question about every order: did the ENGINE decide this, or did the MODEL?
 // That is the whole point of the takeover work, and a report that cannot answer it cannot be used to check
@@ -81,5 +81,22 @@ console.log('Takeover attribution: `reason` names the decider (engine_decided or
   assert.equal(auto.reason, 'auto_explore');
   assert.equal(auto.rejectedBecause, 'unit_gone');
   assert.equal(auto.engineOwned, undefined, 'a decline-based fallback is not marked engine-owned');
+}
+console.log('Takeover events: accepted and refused takeovers both keep the decider, with the refusal in its own field');
+
+// 5. Every refusal carries a cause. Several executors answer `accepted: false` with no `reason` -- `api.deploy`
+//    and `api.order` return a bare boolean, and a couple of branches just return the count -- so rejections
+//    reached the log with nothing to explain them. That is the one thing `rejectedBecause` exists to prevent,
+//    and it is what makes `refusalReason` classify them as unattributable.
+{
+  assert.equal(withRefusalReason({ accepted: true }).reason, undefined, 'an accepted order gains nothing');
+  assert.equal(withRefusalReason({ accepted: false, reason: 'queue_changed' }).reason, 'queue_changed', 'a named cause is kept');
+  assert.equal(withRefusalReason({ accepted: false }).reason, EXECUTION_REASON_FALLBACK, 'a nameless refusal gets a placeholder');
+  assert.equal(withRefusalReason({ accepted: false }).accepted, false, 'and the result is otherwise untouched');
+
+  // The takeover event reads through the same normalisation, so `rejectedBecause` is never empty.
+  const e = takeoverEvent({ id: 'defenses', choice: 'produce_GAPILL', action: { type: 'produce' }, execution: { accepted: false }, reason: 'engine_decided', owned: true, tick: 5, sourceTick: 5 });
+  assert.equal(e.reason, 'engine_decided', 'the decider is still named');
+  assert.equal(e.rejectedBecause, EXECUTION_REASON_FALLBACK, 'and the refusal is never blank');
 }
 console.log('Takeover events: accepted and refused takeovers both keep the decider, with the refusal in its own field');
