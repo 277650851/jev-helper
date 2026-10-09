@@ -766,11 +766,12 @@ export function candidateGroups(api, catalog, snapshot, memory) {
         !r ||
         r.engineer ||
         r.cost > 1500 ||
-        // `!(damage > 0)`, not `damage <= 0`. A unit with no Weapon= field at all has `damage` of
-        // undefined, and `undefined <= 0` is false -- so the SPY walked straight through a filter
-        // written to require a weapon. Two spies were built in jev-report-20261010-020745 for a base
-        // that has no code that uses one: nothing issues an infiltration order, and the attack dogs
-        // this build now prioritises kill a spy on sight, which the catalogue lists as what a dog does.
+        // The spy is a real unit, not a broken one: rules.ini gives it no Weapon= field because
+        // infiltrating an enemy building is the game's own mechanic, not something we order -- it walks
+        // in and steals. What it is not is *combat* infantry, so it must not be counted as such here.
+        // `!(damage > 0)` rather than `damage <= 0` because `undefined <= 0` is false, and a filter
+        // written to require a weapon does not hold for a unit that has none.
+        catalog[r.name]?.spy ||
         !(r.weapon?.damage > 0) ||
         redundantFoot ||
         (!isScout && ((r.weapon?.range ?? 0) < 3 || roles[profile.role] >= (profile.role==='antiInfantry'?roleCap:state.infantryRoles.targetAntiArmor))) ||

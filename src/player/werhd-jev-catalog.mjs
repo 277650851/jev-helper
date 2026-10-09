@@ -20,6 +20,10 @@ export function refreshCatalog(api, catalog) {
       weapon: weapon(rule.primary), secondary: weapon(rule.secondary),
       aircraft: type === api.ObjectType.Aircraft,
       attackDog: SCOUT_DOG.test(name),
+      // A spy has no Weapon= entry at all: rules.ini gives it none because infiltrating an enemy
+      // building is the game's own mechanic. It is worth having -- it steals money, power and tech --
+      // but it contributes nothing to a defensive line, so it must never be counted as combat infantry.
+      spy: /^SPY$/.test(name),
     };
     if (rule.deploysInto) pending.push({ name: rule.deploysInto, type: api.ObjectType.Building });
     if (rule.undeploysInto) pending.push({ name: rule.undeploysInto, type: api.ObjectType.Vehicle });
