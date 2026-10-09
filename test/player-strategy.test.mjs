@@ -243,7 +243,12 @@ console.log('Economic priority: two-miner expansion protected, combat prompt pre
   const auto = Object.entries(groups.vehicles?.actions ?? {}).find(([k, a]) => k.startsWith('auto_produce_'));
   assert.ok(auto, 'rich, idle and offered nothing: the fallback puts a combat vehicle on offer');
   assert.equal(auto[1].name, 'TANK'); assert.equal(auto[1].type, 'produce');
-  assert.equal(auto[1].auto, 2, 'and it runs automatically after two declined turns');
+  // The engine takes this one without asking. Twenty-one thousand credits, an idle factory, offered
+  // nothing else: the model cannot improve on it, and three real matches show it answering `wait` to
+  // questions of exactly this shape about half the time. So the fallback is no longer "ask, be refused
+  // twice, build anyway" -- the engine builds and records why.
+  assert.equal(auto[1].engineOwned, true, 'idle money is the engine\'s decision, not a question');
+  assert.equal(auto[1].auto, undefined, 'and it no longer waits for two model refusals to act');
   assert.ok(auto[1].minCredits <= 500, 'same affordability floor as every other production option');
   // A busy factory queue must not be doubled up on.
   api.production.queues = () => idleQueues().map(q => q.type === 3 ? { ...q, size: 1, items: [{ name: 'TANK', quantity: 1, creditsEach: 750, creditsSpent: 0 }] } : q);

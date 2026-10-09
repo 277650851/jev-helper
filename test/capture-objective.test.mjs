@@ -104,10 +104,19 @@ test('money piling up while the model waits: a combat unit is trained anyway; no
   const produce = Object.entries(groups.vehicles?.actions ?? {}).find(([k]) => k !== 'wait');
   assert.ok(produce, 'a vehicle is offered');
   assert.equal(catalog[produce[1].name].harvester, undefined, 'a combat vehicle, not a miner');
-  assert.equal(produce[1].auto, 2, '14,000 credits: automatic after two declines');
+  // 14,000 credits with the factory idle: the engine takes this without asking, because the model has
+  // nothing to add -- the offer exists precisely because nothing else was proposed. It used to be
+  // `auto: 2`, which meant two wasted round trips that three real matches show ending in `wait` anyway.
+  assert.equal(produce[1].engineOwned, true, 'idle money is the engine\'s decision');
+  assert.equal(produce[1].auto, undefined, 'and it does not wait for model refusals');
+  // Below the idle threshold the option is still offered, but as a question: with the money tight, what
+  // to build next is a real choice.
   const modest = world({ own: own(), enemies: [u(1434, 'GACNST', T.Building, 107, 18)], credits: RICH_SPEND - 1000, offers });
   ({ groups } = groupsOf(modest, ''));
-  for (const [k, a] of Object.entries(groups.vehicles?.actions ?? {})) if (k !== 'wait') assert.equal(a.auto, undefined, `${k}: left to the model below ${RICH_SPEND}`);
+  for (const [k, a] of Object.entries(groups.vehicles?.actions ?? {})) if (k !== 'wait') {
+    assert.equal(a.engineOwned, undefined, `${k}: left to the model below the idle threshold`);
+    assert.equal(a.auto, undefined, `${k}: and not taken over either`);
+  }
 });
 
 // 0.7.3 report (same mission, defeat again): the lab was recognized and about fifteen engineers were

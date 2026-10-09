@@ -301,32 +301,45 @@ const catalog = { TANK: { label: "Tank", cost: 750, speed: 5, primary: "Cannon",
 // previous block's trailing timer had not landed yet.
 const callsSince = since => calls.slice(since);
 let callsMark = calls.length;
-let finish, entered;
-const pending = new Promise(resolve => { entered = resolve; });
+// The opening build is engine-owned: the plan has already established that this step's precondition
+// holds, the structures queue is idle and the down payment is covered, so the engine takes it without
+// asking. That means this block cannot wait for the model to be consulted -- it never is -- and waits for
+// the engine's own decision instead.
+let finish, entered = false;
 const player = await attachJevPlayer(api, {
   catalog, intervalMs: 10, disableMicro: true,
   requestDecision: async (_body, {signal}) => {
-    entered();
+    entered = true;
     return new Promise(resolve => { finish = () => {
       assert.equal(signal.aborted, true);
       resolve({ answers: { construction: { choice: "produce_TANK" } } });
     }; });
   },
 });
-await pending;
+// A turn happened when the engine took its own action, or when it did ask.
+const tookATurn = new Promise(resolve => { const check = () => (entered || player.status.decisions > 0) ? resolve() : setTimeout(check, 10); check(); });
+await tookATurn;
+// From here on nothing may be ordered: the engine's own opening decision already happened, and the model
+// was never asked. Marking the tally now is what makes the assertion below about the stop, not about the
+// opening.
+callsMark = calls.length;
+const acceptedAtStop = player.status.accepted;
 player.stop();
-finish();
+if (finish) finish();
 await new Promise(resolve => setTimeout(resolve, 20));
 assert.equal(player.status.running, false);
-assert.equal(player.status.accepted, 0);
-// The reply lands after stop() aborted the controller, so it must be dropped. The assertion here
-// used to expect one order, which is the opposite of what the message says: that entry came from the
-// block below and made this check a tautology.
-assert.deepEqual(callsSince(callsMark), [], "late responses must not issue commands");
+assert.equal(player.status.accepted, acceptedAtStop, 'nothing is accepted after stop');
+// Stop cleared the controller, so no order may follow. The assertion here used to expect one, which is the
+// opposite of what its message says: that entry came from the block below and made the check a tautology.
+assert.deepEqual(callsSince(callsMark), [], "nothing may be ordered after stop");
 
 let tick = 100, staleResolve;
 callsMark = calls.length;
 api.tick = () => tick;
+// A busy structures queue holds the opening plan back, so the model is the one asked here. That is what
+// this block needs to test: the opening build is engine-owned now, and with an idle queue it would answer
+// itself and this reply would never be requested at all.
+queue.size = 1;
 const staleDone = new Promise(resolve => { staleResolve = resolve; });
 const stalePlayer = await attachJevPlayer(api, {
   catalog, intervalMs: 10, disableMicro: true,
@@ -338,6 +351,7 @@ stalePlayer.stop();
 assert.equal(stalePlayer.status.rejected, 1);
 assert.equal(stalePlayer.status.accepted, 0);
 assert.deepEqual(callsSince(callsMark), [], "stale snapshots must not issue commands");
+queue.size = 0;
 
 // Report jev-report-20261008-023829: 102 decisions, 103 discarded. The game ran at ~60 ticks/s and a
 // local CPU model answered in 1.4-3.9 s, i.e. 244 ticks, while the budget was the 180-tick default
@@ -377,6 +391,9 @@ assert.deepEqual(callsSince(callsMark), [], "stale snapshots must not issue comm
 callsMark = calls.length;
 let ended = false, endedResolve;
 const endEvents = [];
+// Same reason as the stale block above: the queue is held busy so the engine does not answer the
+// construction question itself, and the reply that arrives after the battle ends is the one under test.
+queue.size = 1;
 api.tick = () => { if (ended) throw new Error("werhd is not available outside a running battle"); return 100; };
 const endDone = new Promise(resolve => { endedResolve = resolve; });
 const endedPlayer = await attachJevPlayer(api, {
@@ -394,6 +411,7 @@ assert.ok(!endEvents.some(e => e.kind === "error"));
 // expect one order, but this block never produced one -- the entry it matched came from the block
 // above, which is why the suite went red whenever that block's timer landed late.
 assert.deepEqual(callsSince(callsMark), [], "an answer whose battle has ended must issue no orders");
+queue.size = 0;
 console.log(
   "Jev deployment/economy and guards passed: stale targets/snapshots, cancellation, missing units, changed queues/funds, defeat, unknown actions and fog.",
 );

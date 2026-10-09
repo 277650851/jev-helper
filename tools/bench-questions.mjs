@@ -9,38 +9,45 @@
 // drawing conclusions from a number here. In short: this scores QUESTION SHAPE, not play quality.
 import { CATALOG, SCENARIOS, SCENARIO_NAMES } from '../src/synthetic-state.mjs';
 import { replayApi, optionsOf } from '../src/replay-state.mjs';
-import { collectState, candidateGroups, requestGroupsFrom } from '../src/player/werhd-jev-player.mjs';
+import { collectState, candidateGroups, requestGroupsFrom, splitEngineOwned } from '../src/player/werhd-jev-player.mjs';
 import { classifyQuestion } from '../src/report-audit.mjs';
 
 const asJson = process.argv.includes('--json');
 const verbose = process.argv.includes('--verbose');
 const pct = (a, b) => (b ? `${Math.round((a / b) * 100)}%` : '—');
 
-// The build under test. It runs the same selection the match runs -- `requestGroupsFrom` -- so the table
-// describes the questions that would actually be sent, not every group the engine can construct. A
-// benchmark that counted wait-only groups would report 70% of them and be measuring nothing.
-const build = (api, catalog) => optionsOf(requestGroupsFrom(candidateGroups(api, catalog, collectState(api, catalog), {}), {}, api.tick()));
+// The build under test runs the same two steps the match runs: `requestGroupsFrom` picks and caps the
+// questions, `splitEngineOwned` removes the ones the engine answers itself. A benchmark that stopped after
+// the first step would report the old table and hide the change it exists to measure.
+const build = (api, catalog) => {
+  const groups = candidateGroups(api, catalog, collectState(api, catalog), {});
+  const request = requestGroupsFrom(groups, {}, api.tick());
+  const { asked, owned } = splitEngineOwned(request);
+  return { asked: optionsOf(asked), owned, total: Object.keys(request).length };
+};
 
 const rows = [];
-const totals = { asked: 0, forced: 0, narrow: 0, open: 0, empty: 0 };
+const totals = { asked: 0, forced: 0, narrow: 0, open: 0, empty: 0, callable: 0, engineOwned: 0 };
 const groupTotals = {};
 
 for (const name of SCENARIO_NAMES) {
   // Every scenario is one player's view, and which units that player can build changes the menu, so the
   // side is stated rather than left to default.
   const state = { side: 'allied', ...SCENARIOS[name]() };
-  let questions = {};
+  let built = { asked: {}, owned: [], total: 0 };
   let failure = null;
   try {
     const api = replayApi(state, { ...CATALOG });
-    questions = build(api, { ...CATALOG });
+    built = build(api, { ...CATALOG });
   } catch (e) {
     // A scenario that cannot be replayed must be loud: a silent empty result would read as "no questions",
     // which is the most flattering possible answer and therefore the most dangerous one.
     failure = e.message;
   }
-  const per = { name, groups: 0, forced: 0, narrow: 0, open: 0, empty: 0, failure, detail: {} };
-  for (const [id, options] of Object.entries(questions)) {
+  const per = { name, groups: 0, forced: 0, narrow: 0, open: 0, empty: 0, callable: built.total, engineOwned: built.owned.length, failure, detail: {} };
+  totals.callable += built.total;
+  totals.engineOwned += built.owned.length;
+  for (const [id, options] of Object.entries(built.asked)) {
     const kind = classifyQuestion(options);
     per.groups++;
     per[kind]++;
@@ -58,10 +65,13 @@ if (asJson) {
   console.log(JSON.stringify({ totals, groups: groupTotals, scenarios: rows }, null, 2));
   process.exit(0);
 }
-
 console.log('决策问题基准（合成局面，仅衡量「题目形状」，不衡量打法）');
 console.log('');
-console.log(`场景 ${rows.length} 个 · 组-问题 ${totals.asked} 个`);
+console.log(`场景 ${rows.length} 个 · 需要决策的组-问题 ${totals.callable} 个`);
+console.log(`  引擎自己决定（不再提问）        ${String(totals.engineOwned).padStart(4)}  ${pct(totals.engineOwned, totals.callable)}`);
+console.log(`  交给模型的                      ${String(totals.asked).padStart(4)}  ${pct(totals.asked, totals.callable)}`);
+console.log('');
+console.log('交给模型的问题里：');
 console.log(`  只有一个真实选项（引擎已可判定） ${String(totals.forced).padStart(4)}  ${pct(totals.forced, totals.asked)}`);
 console.log(`  2-3 个真实选项                  ${String(totals.narrow).padStart(4)}  ${pct(totals.narrow, totals.asked)}`);
 console.log(`  4 个以上                        ${String(totals.open).padStart(4)}  ${pct(totals.open, totals.asked)}`);

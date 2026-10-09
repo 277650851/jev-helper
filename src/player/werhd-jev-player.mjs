@@ -138,8 +138,21 @@ function roleOf(rule) {
 // Infantry-only armies: above this much money the foot cap rises, and above the second amount
 // training is automatic until the cap.
 export const RICH_INFANTRY_CREDITS = 3000, RICH_INFANTRY_CAP = 40, RICH_INFANTRY_SPEND = 5000;
-// Any army: above RICH_SPEND credits and below RICH_ARMY_CAP units, a declined combat unit is trained anyway.
-export const RICH_SPEND = 5000, RICH_ARMY_CAP = 40;
+// Any army: with money idle and below RICH_ARMY_CAP units, a combat unit is built without being asked.
+//
+// "Idle" was a flat RICH_SPEND = 5000, and that number is what lost jev-report-20261010-005106: the
+// takeover did fire there, but of the 26 vehicles questions 18 were asked with the balance below 5,000,
+// so the line was crossed only while the opening 10,000 was still being spent down. A base that has to
+// earn its money never gets back over it -- that match ended holding 5,741 credits, its army peaked at
+// eight units, and it declined an affordable 750-credit tank seventeen times.
+//
+// So the test is relative now: idle means the wallet covers more than one round of what the group is
+// offering. The absolute figure survives only as a floor, because very early on even 1,200 credits is all
+// there is and hoarding it is not what this is for.
+export const RICH_SPEND = 1500, RICH_ARMY_CAP = 40;
+// Credits at or above this multiple of the cheapest combat unit on offer count as idle. One unit is the
+// minimum that changes anything; two leaves a little in hand for the next one.
+export const RICH_SPEND_MULTIPLE = 2;
 // Capture objectives: the column pushes with this many units, to a point this far short of the target.
 export const CAPTURE_PUSH_UNITS = 6, CAPTURE_STAGE_TILES = 4;
 // How old an answer may be before it is thrown away, in game ticks. The starting point only: the
@@ -557,6 +570,16 @@ export function candidateGroups(api, catalog, snapshot, memory) {
             queue: constructionType,
             cost: r.cost,
             minCredits: Math.min(500, r.cost),
+            // The engine takes this one. Everything the decision needs is already established a few lines
+            // above -- this step is the first whose precondition holds, the structures queue is idle, and
+            // the down payment is covered -- so the model cannot improve on the answer, only refuse it. The
+            // historical cost of asking anyway is recorded at the `auto: 1` note below (36 consecutive
+            // refusals of an affordable refinery).
+            // Not engine-owned (yet): the lifecycle tests drive this group to test late, stale and
+            // ended-battle replies, so taking it out of the model's hands removes the very question they
+            // exercise. The money-idle path below is the one measured to be pure waste; this one needs its
+            // tests reworked first.
+            engineOwned: false,
           },
         );
     }
@@ -1030,24 +1053,43 @@ export function candidateGroups(api, catalog, snapshot, memory) {
     for (const id of ["aircraft", "navy", "garrison", "engineering", "transport"]) if (groups[id]) groups[id].instructions += note;
   }
   // Money piling up while the model keeps answering "wait": 0.7.2 (Battle Lab mission) was offered a
-  // Rhino tank 251 times, credits rose to 14,000 and the army shrank from 19 to 6. Above this much
-  // money the first combat unit on offer is trained automatically after two declines.
-  // With no miners or refineries the strategy layer offers nothing to build at all, and tagging an
-  // option that does not exist does nothing: on 2026-10-08 credits reached 21,065 with 24 idle units
-  // and nothing was ever built. So an affordable combat unit is put on offer here when none is.
-  if (state.self.credits >= RICH_SPEND && allArmy.length < RICH_ARMY_CAP) for (const id of ["vehicles", "infantry"]) {
+  // Rhino tank 251 times, credits rose to 14,000 and the army shrank from 19 to 6. With no miners or
+  // refineries the strategy layer offers nothing to build at all, and tagging an option that does not
+  // exist does nothing: on 2026-10-08 credits reached 21,065 with 24 idle units and nothing was ever
+  // built. So an affordable combat unit is put on offer here when none is.
+  //
+  // This is the clearest case of a question the engine should not be asking. Money is idle, the army is
+  // below a hard cap, the queue is empty, and the unit is affordable -- every premise of the decision is
+  // already established here, so there is no judgement left for the model to supply. It is tagged
+  // `engineOwned`: the option still appears (the criteria explain it, and the log keeps it) but the engine
+  // takes it without a round trip. Previously it was `auto: 2`, which meant asking, being refused, asking
+  // again, being refused again, and then building anyway -- three matches recorded 52-61% refusals of
+  // exactly this shape of question.
+  const moneyIdle = (credits, cheapestCost) =>
+    Number.isFinite(cheapestCost) && credits >= Math.max(RICH_SPEND, cheapestCost * RICH_SPEND_MULTIPLE);
+  for (const id of ["vehicles", "infantry"]) {
     const g = groups[id]; if (!g) continue;
+    if (allArmy.length >= RICH_ARMY_CAP) continue;
     const combat = a => a?.type === "produce" && !catalog[a.name]?.harvester && !catalog[a.name]?.engineer && (catalog[a.name]?.weapon?.damage ?? 0) > 0;
+    const cheapestCombat = Object.values(g.actions).filter(combat).map(a => catalog[a.name]?.cost ?? Infinity).reduce((n, c) => Math.min(n, c), Infinity);
     const entry = Object.entries(g.actions).find(([k, a]) => k !== "wait" && combat(a));
-    if (entry) { if (!Number.isFinite(entry[1].auto)) entry[1].auto = 2; continue; }
-    if (id === "vehicles" && !state.strategy?.recovery && !Object.values(g.actions).some(a => a?.type === "produce")) {
+    if (entry) {
+      if (moneyIdle(state.self.credits, cheapestCombat)) entry[1].engineOwned = true;
+      continue;
+    }
+    // Nothing on offer at all: synthesise an affordable combat unit, but only with money genuinely idle.
+    // The credits test also guards the queue lookup below, which needs a Vehicles queue the API may not
+    // describe.
+    if (id === "vehicles" && state.self.credits >= RICH_SPEND && !state.strategy?.recovery && !Object.values(g.actions).some(a => a?.type === "produce")) {
       const queue = api.QueueType.Vehicles, queued = state.queues?.find(q => q.type === queue)?.size ?? 0;
       const name = api.production.available(queue).find(i => combat({ type: "produce", name: i.name }) &&
         state.self.credits >= Math.min(500, catalog[i.name]?.cost ?? Infinity))?.name;
       if (name && !queued) {
         const key = `auto_produce_${name}`;
         g.criteria[key] = `MONEY IS IDLE: ${catalog[name]?.label ?? name} costs ${catalog[name]?.cost}, we hold ${state.self.credits} and the army is below ${RICH_ARMY_CAP} units. Build it now instead of waiting; the queue is empty and nothing else is proposed.`;
-        g.actions[key] = { type: "produce", name, queue, cost: catalog[name]?.cost, minCredits: Math.min(500, catalog[name]?.cost ?? 0), auto: 2 };
+        // Engine-owned for the same reason as the branch above: this option exists because nothing else was
+        // proposed, money is idle and the queue is empty. There is no alternative for the model to weigh.
+        g.actions[key] = { type: "produce", name, queue, cost: catalog[name]?.cost, minCredits: Math.min(500, catalog[name]?.cost ?? 0), engineOwned: true };
       }
     }
   }
@@ -1987,11 +2029,48 @@ export function requestGroupsFrom(groups, memory = {}, tick = 0) {
       .slice(0, MAX_REQUESTED_GROUPS)
       .map(([id, g]) => [
         id,
-        { instructions: g.instructions, criteria: g.criteria },
+        {
+          instructions: g.instructions,
+          criteria: g.criteria,
+          // Which of the offered keys the engine would have taken anyway. Left out of the model's copy and
+          // acted on directly; see `splitEngineOwned`.
+          engineOwned: Object.fromEntries(Object.entries(g.actions ?? {})
+            .filter(([, a]) => a?.engineOwned === true).map(([k]) => [k, true])),
+        },
       ]),
   );
 }
 
+// A group whose only real option is one the ENGINE would have chosen anyway is not a question. Sending it
+// asks the model to ratify a decision its own preconditions already made, and the only answer it can
+// express is `wait` -- which, measured on three real matches, is what it did 52-61% of the time. Those
+// refusals are pure loss: the option was legal, affordable and the queue was idle, and the turn bought
+// nothing. The same three matches show the split is a property of the questions, not of the model: the
+// vehicles group refused 92-97% of its single-option questions while tactics refused 0-10%.
+//
+// So a producer marks such an option `engineOwned`, and `splitEngineOwned` lifts it out of the request: the
+// engine executes it and records why, and the model is not asked. The decision is deliberately opt-in per
+// option rather than inferred from "this group has only one option": affording something is not the same as
+// having decided to buy it, and only the producer knows which of its offers answers its own precondition.
+export function splitEngineOwned(requestGroups) {
+  const asked = {}, owned = [];
+  for (const [id, g] of Object.entries(requestGroups)) {
+    const real = Object.keys(g.criteria ?? {}).filter((k) => k !== "wait");
+    const only = real.length === 1 ? real[0] : undefined;
+    // Only lift the option when it is the group's single real choice. With a genuine alternative the
+    // question is a real one and stays with the model.
+    if (only && g.engineOwned?.[only] === true) {
+      owned.push({ id, choice: only });
+      const criteria = { ...g.criteria };
+      delete criteria[only];
+      // With `wait` all that would remain there is nothing to ask, so the group is dropped entirely.
+      if (Object.keys(criteria).length > 1) asked[id] = { ...g, criteria };
+      continue;
+    }
+    asked[id] = g;
+  }
+  return { asked, owned };
+}
 export async function attachJevPlayer(api, options = {}) {
   if (!api) throw new Error("Enter a battle before attaching Jev.");
   const requestDecision = options.requestDecision;
@@ -2182,13 +2261,38 @@ export async function attachJevPlayer(api, options = {}) {
       const snap = collectState(api, catalog),
         groups = candidateGroups(api, catalog, snap, memory);
       const requestGroups = requestGroupsFrom(groups, memory, tick);
-      if (!Object.keys(requestGroups).length) return;
+      // Options the engine would have taken anyway are executed rather than asked about: the model cannot
+      // change the answer, so the only thing such a question can elicit is a refusal. This runs before the
+      // request so a group reduced to `wait` alone is dropped from it entirely.
+      const { asked, owned } = splitEngineOwned(requestGroups);
+      const acceptedBeforeOwned = status.accepted;
+      for (const { id, choice } of owned) {
+        const action = groups[id]?.actions?.[choice];
+        if (!action) continue;
+        const execution = executeCandidate(api, action, catalog);
+        // Counted against the decision budget like any other turn. Without this the engine could keep taking
+        // its own actions without the budget ever advancing, and a match with nothing left to ask would
+        // never reach `maxDecisions` -- the one guarantee that the loop stops.
+        status.decisions++;
+        if (execution.accepted) afterAccepted(action, execution);
+        rememberChoice(memory, id, choice, execution, tick, true);
+        emit({
+          kind: "action", tick, sourceTick: tick, question: id, choice, action, ...execution,
+          auto: true, engineOwned: true,
+          reason: execution.accepted ? "engine_decided" : execution.reason,
+        });
+      }
+      // Nothing left to ask the model: the engine's own decisions were the whole turn.
+      if (!Object.keys(asked).length) {
+        if (status.accepted > acceptedBeforeOwned) memory.quietTurns = 0;
+        return;
+      }
       memory.questionTicks ??= new Map();
-      for (const id of Object.keys(requestGroups)) memory.questionTicks.set(id, tick);
+      for (const id of Object.keys(asked)) memory.questionTicks.set(id, tick);
       status.busy = true;
       const started = performance.now();
       const acceptedBefore = status.accepted;
-      const result = await requestDecision({ state: snap.state, groups: requestGroups }, { signal: controller.signal });
+      const result = await requestDecision({ state: snap.state, groups: asked }, { signal: controller.signal });
       status.decisions++;
       status.last = { tick, ...result };
       if (!status.running) return;
