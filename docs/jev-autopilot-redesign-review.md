@@ -78,6 +78,31 @@
 
 所以护甲与克制**只能读运行时 `api.rules()`**；照 `docs/` 抄表至少会错这两个。
 
+### 0.3 `docs/rules-规则文件.ini` 与游戏实际规则的关系（已实测）
+
+游戏真正使用的是覆盖层 `C:\ra2web.github.io\res\overlay\rules.ini`（392 KB / 21958 行，
+目录里另有 `ra2.csf` 字符串表与 `art.ini`）。把入库的 `docs/rules-规则文件.ini`
+（568 KB / 25124 行）与它逐节比对：
+
+| 项 | 结果 |
+|---|---|
+| 节数 | live 1258 / doc 1245，**共有 1244** |
+| 共有节中完全一致 | **1169** |
+| 关键单位数值 | `MTNK heavy/105mm`、`FV light/HoverMissile`、`HTNK heavy/120mm`、`DESO plate/RadBeamWeapon`、`ZEP light/BlimpBomb`、`FLAKT flak/FlakGuyGun` —— **两边完全相同** |
+| 只在 live 的节 | 14 个：`GGI`、`J5(J5MISSILE)`、`GUARDIANPARA`、`J10`、`SEAWOLFMP5`、`MIRAGEWH` … |
+| 只在 doc 的节 | 1 个：`AIRTOGROUNDMISSILE1` |
+
+**结论**：入库的那份是覆盖层的**带中文注释版本，不是另一套规则**——两者是同一规则集，
+live 更新一点（多 14 个尤里复仇后期单位）。所以：
+
+- 该文件适合当**注释版参考**（注释解释了每项含义），这是它比覆盖层更适合入库的原因。
+- 但它**不是权威**：真正的权威是覆盖层，且两者会各自演进。**一切数值仍读运行时 `api.rules()`。**
+- 游戏跑的是**基础红警 2** 规则（`Name=Red Alert 2 -- Official Rules of Engagement`，
+  `[Countries]` 无 `YuriCountry`），`rules.ini` 里 `TANY`/`BEAG`/`GAAIRC` 才是真 ID，
+  **没有 `TANYA`/`BEAGLE`/`GAHPAD`**。
+- `ra2-unit-catalog.md` 那 51 个对不上的 ID，多数（含整套尤里单位与建筑）
+  **在这个客户端里根本不存在**——不是文档写错，是客户端不提供。它描述的是完整的红警 2 单位表。
+
 ---
 
 ## 1. 先澄清三条线的关系（这决定哪些结论能用）

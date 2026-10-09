@@ -10,23 +10,25 @@
 > - **生产归属**：步兵 → 兵营；地面载具 → 战车工厂；海军 → 造船厂/船坞；空军 → 机场/空指部；建筑 → 建造场菜单；超级武器 → 对应特殊建筑触发。
 > - 表格按原始 CSV 顺序保留，字段：`内部 ID, 中文名称, 阵营, 特性, 优点, 缺点`。
 >
-> **⚠️ 本表的 ID 属于「尤里复仇 / 词典 ID 集」，与同目录 `rules-规则文件.ini` 的 ID 集不完全一致。**
-> 实测：本表 139 个内部 ID 中 **88 个**能在 `rules-规则文件.ini` 里找到同名 `[节]`，**51 个找不到**。原因有两类：
+> **⚠️ 本表的 ID 属于「尤里复仇 / 词典 ID 集」，与本客户端实际使用的规则 ID 集不一致。**
+> 实测：本表 139 个内部 ID 中 **88 个**能在 `docs/rules-规则文件.ini` 里找到同名 `[节]`，**51 个找不到**。原因有两类：
 >
-> 1. **46 个是那份规则文件根本没有的物件**——`rules-规则文件.ini` 是**早期红警 2** 规则
->    （`[Countries]` 只有 9 项，无 `YuriCountry`），所以整批尤里单位与尤里建筑
+> 1. **46 个是那套规则根本没有的物件**——游戏跑的是**基础红警 2**规则
+>    （覆盖层 `res/overlay/rules.ini` 里 `Name=Red Alert 2 -- Official Rules of Engagement`，
+>    `[Countries]` 无 `YuriCountry`），所以整批尤里单位与尤里建筑
 >    （`INIT VIRUS BRUTE YURICLONE YURIPRIME LASHER GATTTANK CHAOSDRONE MASTERMIND MAGNETRON
 >    YMCV YACNST YBARRACKS YWARFACTORY YNAVAL YBLAB YAPSYT YAPPET` 等）以及部分后期盟苏单位
 >    （`GUARDIANGI ROBOTANK BATTLEFORTRESS SIEGECHOPPER BEAGLE DISK BORIS NABNKR NATBNK` …）
->    在它里面**不存在**，不是 ID 写错了。
+>    在本客户端里**不存在**，不是 ID 写错了。本表描述的是完整的红警 2 单位表。
 > 2. **5 个是同物件、不同 ID**（工具条词典用本表的写法，规则文件用另一套）：
 >    `TANYA`→`TANY`、`PCOMMANDO`→`PTROOP`、`SMIN`→`DROD`、`VLADBOAT`→`VLAD`、`BEAGLE`→`BEAG`。
->    另外 `GAHPAD`/`NAHPAD`（机场/直升机场）在规则文件里是 `GAAIRC`/`GAHPAD` 的另一套命名。
+>    `GAHPAD`/`NAHPAD`（机场/直升机场）在规则里是 `GAAIRC`/`GAHPAD` 的另一套命名。
 >
 > **对代码的影响**：运行时 `catalog[u.name]` 的键来自游戏 API 返回的真实 ID，**不来自本表**，
 > 所以本表不会让引擎查错单位。但**不要照本表在代码里硬编码 ID 或建表**——查不到就取不到护甲和武器，
 > 而护甲正是武器 `Verses`（11 项克制系数表）的索引。护甲与克制一律读运行时 `api.rules()`。
-> 反过来，`docs/rules-规则文件.ini` 也**不能**当作本表的权威校对源，它缺整整一个阵营。
+> 反过来，`docs/rules-规则文件.ini` 也**不能**当作本表的权威校对源：它比游戏覆盖层还旧一点
+> （缺 `GGI/J5/GUARDIANPARA/J10` 等 14 个节），且同样缺少整套尤里阵营。
 
 ---
 
