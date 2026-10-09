@@ -147,10 +147,16 @@ test('after a failed attack the higher threshold drives automatic training', () 
   assert.equal(snap.state.forceReadiness.threshold, 12); assert.equal(snap.state.forceReadiness.ready, false);
   assert.equal(groups.infantry.actions.produce_GI.auto, 2, '8 of 12 with 25,000 credits: training is not optional');
   // 0.7.1: with 25,000 credits unspent training is forced even at the normal threshold, so the calm
-  // case is checked with ordinary money.
-  const calm = world({ own:[...home(), ...squad(8, 14, 14)], credits:3500 });
+  // case is checked with money that is genuinely short.
+  //
+  // "Ordinary money" used to be 3,500 here. It cannot be any more: jev-report-20261010-005106 spent
+  // 48% of its decision turns below 5,000 with a median of 5,086, and declined an affordable
+  // 750-credit tank seventeen times inside that band, ending the match on 5,741 credits with a peak
+  // army of 8. A balance of 3,500 against a 200-credit conscript is seventeen times the unit cost;
+  // calling that "not enough to act on" describes a rule that no base ever met.
+  const calm = world({ own:[...home(), ...squad(8, 14, 14)], credits:1800 });
   const g2 = candidateGroups(calm.api, catalog, collectState(calm.api, catalog), calm.memory);
-  assert.equal(g2.infantry.actions.produce_GI?.auto, undefined, 'at the normal threshold of 8 nothing is forced');
+  assert.equal(g2.infantry.actions.produce_GI?.auto, undefined, 'with 1,800 credits nothing is forced');
 });
 
 test('once ready, the force stays ready around the threshold and only drops below 75%', () => {
@@ -513,9 +519,19 @@ test('an infantry-only army keeps training while money piles up, and stays cappe
   let g = candidateGroups(rich.api, catalog, collectState(rich.api, catalog), rich.memory);
   assert.ok(g.infantry?.actions.produce_GI, '20 conscripts and 9,000 credits: more are offered');
   assert.equal(g.infantry.actions.produce_GI.auto, 2, 'and trained automatically');
+  // 3,500 was previously the "left to the model" case. It is now trained automatically, and that is
+  // the intended change rather than an accident: see the note on the escalation test above and
+  // `moneyIdle` in player.mjs. Kept as an assertion in its own right so the boundary stays visible.
   const mid = world({ own:[...home(), ...squad(20)], enemies:enemyBase(), credits:3500 });
   g = candidateGroups(mid.api, catalog, collectState(mid.api, catalog), mid.memory);
-  assert.ok(g.infantry?.actions.produce_GI, '3,500 credits: offered'); assert.equal(g.infantry.actions.produce_GI.auto, undefined, 'but left to the model');
+  assert.ok(g.infantry?.actions.produce_GI, '3,500 credits: offered');
+  assert.equal(g.infantry.actions.produce_GI.auto, 2, 'and trained automatically: 3,500 is 17 conscripts');
+  const lean = world({ own:[...home(), ...squad(20)], enemies:enemyBase(), credits:1800 });
+  g = candidateGroups(lean.api, catalog, collectState(lean.api, catalog), lean.memory);
+  // This fixture offers no infantry at all at 1,800 -- force and economy plans are priced above it --
+  // so it cannot express an "offered but not forced" middle. The boundary is pinned by the escalation
+  // test above (25,000 forced, 1,800 not). What matters here is that nothing is forced.
+  assert.equal(g.infantry?.actions?.produce_GI?.auto, undefined, '1,800 credits: nothing is forced');
   const poor = world({ own:[...home(), ...squad(20)], enemies:enemyBase(), credits:1500 });
   g = candidateGroups(poor.api, catalog, collectState(poor.api, catalog), poor.memory);
   assert.ok(!g.infantry?.actions?.produce_GI, '1,500 credits: the old cap of 16 still applies');

@@ -127,8 +127,36 @@ function roleOf(rule) {
 // Infantry-only armies: above this much money the foot cap rises, and above the second amount
 // training is automatic until the cap.
 export const RICH_INFANTRY_CREDITS = 3000, RICH_INFANTRY_CAP = 40, RICH_INFANTRY_SPEND = 5000;
-// Any army: above RICH_SPEND credits and below RICH_ARMY_CAP units, a declined combat unit is trained anyway.
-export const RICH_SPEND = 5000, RICH_ARMY_CAP = 40;
+// Any army: with money idle and below RICH_ARMY_CAP units, a declined combat unit is trained anyway.
+//
+// "Idle" used to be a flat RICH_SPEND = 5000, and that number is what lost jev-report-20261010-005106.
+// The fallback did fire there -- three times -- which is exactly what the flat rule predicts, and the
+// reason it only fired three times is the finding: of the 26 questions the vehicles group asked, 18
+// were answered with the balance below 5000. Seven refusals happened on turns above the line, auto:2
+// predicts floor(7/2) = 3, and exactly 3 fellbacks fired. The line was crossed only while the
+// opening 10,000 was still being spent down; a base that has to earn its money does not get back
+// over it. That base declined an affordable 750-credit tank seventeen times, held 5,741 credits at
+// the end, peaked at 8 units and lost in 18.4 minutes.
+//
+// So the test is relative now: idle means the wallet covers more than one round of what the group is
+// offering. The absolute figure survives only as a floor, and it is set from the same match: 2,090 was
+// the poorest balance that match reached while income was still working, so below this a base is
+// genuinely broke and nagging it to spend is how a base talks itself into never recovering.
+export const RICH_SPEND = 2000, RICH_ARMY_CAP = 40;
+// Credits at or above this multiple of the cheapest combat unit on offer count as idle. One unit is
+// the minimum that changes anything; two leaves a little in hand for the next one.
+//
+// Be clear about what this rule does on that match: it was true on all 26 vehicles questions, from
+// the 2,090-credit low to the 7,185-credit high. The floor never bound, because a base that declined
+// an affordable tank seventeen times is not short of money in any sense the fallback cares about. So
+// on real data this reads as "two refusals in a row and the unit is affordable, build it", and the
+// floor only matters for the degenerate cases -- a group offering nothing, or a cost so low that
+// `cost * 2` would be noise. Whether the model should ever win a third refusal is a separate question
+// this rule deliberately does not answer; `wait` stays legal and the model can act on the first one.
+export const RICH_SPEND_MULTIPLE = 2;
+export const moneyIdle = (credits, cheapestCombatCost) =>
+  Number.isFinite(cheapestCombatCost)
+  && credits >= Math.max(RICH_SPEND, cheapestCombatCost * RICH_SPEND_MULTIPLE);
 // Capture objectives: the column pushes with this many units, to a point this far short of the target.
 export const CAPTURE_PUSH_UNITS = 6, CAPTURE_STAGE_TILES = 4;
 // How old an answer may be before it is thrown away, in game ticks. The starting point only: the
@@ -1197,26 +1225,45 @@ export function candidateGroups(api, catalog, snapshot, memory) {
   // With no miners or refineries the strategy layer offers nothing to build at all, and tagging an
   // option that does not exist does nothing: on 2026-10-08 credits reached 21,065 with 24 idle units
   // and nothing was ever built. So an affordable combat unit is put on offer here when none is.
-  if (state.self.credits >= RICH_SPEND && allArmy.length < RICH_ARMY_CAP) for (const id of ["vehicles", "infantry"]) {
+  for (const id of ["vehicles", "infantry"]) {
     const g = groups[id]; if (!g) continue;
+    if (allArmy.length >= RICH_ARMY_CAP) continue;
     const combat = a => a?.type === "produce" && !catalog[a.name]?.harvester && !catalog[a.name]?.engineer && (catalog[a.name]?.weapon?.damage ?? 0) > 0;
     // A missing miner outranks the money-idle fallback, and this used to be the other half of the same
     // deadlock: `combat()` excludes harvesters by design, so a tank was tagged here and the branch
     // `continue`d before the miner case could be offered. A base whose income had stopped answered
     // "wait" with 14,000 credits and no tanks to show for it.
+    //
+    // It is deliberately outside the `moneyIdle` test. A base with no income is not sitting on idle
+    // money, it is bleeding, and the thing it needs is the one purchase that stops the bleeding.
+    // Gating it on RICH_SPEND had it waiting for 5,000 credits to nag about the miner whose absence
+    // is why there are no 5,000 credits; 005106 ran two refineries on one miner for a whole match.
+    // What it does need is to be affordable, or the executor refuses the order and the turn is lost.
     const queuedMiners = state.queues.reduce((n, q) => n + q.items.reduce((s, i) =>
       s + (catalog[i.name]?.harvester ? i.quantity : 0), 0), 0);
     const minersMissing = Math.max(0, (state.economy?.targetMiners ?? 0) - state.harvesters - queuedMiners);
     const minerEntry = id === "vehicles" && minersMissing > 0
-      ? Object.entries(g.actions).find(([k, a]) => k !== "wait" && a?.type === "produce" && catalog[a.name]?.harvester)
+      ? Object.entries(g.actions).find(([k, a]) => k !== "wait" && a?.type === "produce" && catalog[a.name]?.harvester
+        && state.self.credits >= Math.min(500, catalog[a.name]?.cost ?? Infinity))
       : undefined;
     if (minerEntry) {
       if (!Number.isFinite(minerEntry[1].auto)) minerEntry[1].auto = 1;
       continue;
     }
+    // What "idle" is measured against: the cheapest thing this group could actually build right now.
+    const cheapestCombat = Object.values(g.actions).filter(combat)
+      .map(a => catalog[a.name]?.cost ?? Infinity).reduce((n, c) => Math.min(n, c), Infinity);
     const entry = Object.entries(g.actions).find(([k, a]) => k !== "wait" && combat(a));
-    if (entry) { if (!Number.isFinite(entry[1].auto)) entry[1].auto = 2; continue; }
-    if (id === "vehicles" && !state.strategy?.recovery && !Object.values(g.actions).some(a => a?.type === "produce")) {
+    if (entry) {
+      if (moneyIdle(state.self.credits, cheapestCombat) && !Number.isFinite(entry[1].auto)) entry[1].auto = 2;
+      continue;
+    }
+    // The strategy layer can offer nothing at all -- no miners, no refineries, nothing affordable. There
+    // is no option to measure idle money against in that case, so this branch stands on its own: if an
+    // affordable combat unit exists in the factory, put it on offer. On 2026-10-08 credits reached
+    // 21,065 with 24 idle units and nothing was ever built.
+    if (id === "vehicles" && !state.strategy?.recovery && api.QueueType?.Vehicles != null
+      && !Object.values(g.actions).some(a => a?.type === "produce")) {
       const queue = api.QueueType.Vehicles, queued = state.queues?.find(q => q.type === queue)?.size ?? 0;
       const name = api.production.available(queue).find(i => combat({ type: "produce", name: i.name }) &&
         state.self.credits >= Math.min(500, catalog[i.name]?.cost ?? Infinity))?.name;
