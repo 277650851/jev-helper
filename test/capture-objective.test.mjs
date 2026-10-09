@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { collectState, candidateGroups, executeCandidate, orderSquad, maintainBattle, RICH_SPEND, CAPTURE_PUSH_UNITS, CAPTURE_STAGE_TILES } from '../src/player/werhd-jev-player.mjs';
+import { collectState, candidateGroups, executeCandidate, orderSquad, maintainBattle, askableGroups, requestGroupsFrom, RICH_SPEND, CAPTURE_PUSH_UNITS, CAPTURE_STAGE_TILES } from '../src/player/werhd-jev-player.mjs';
 import { rememberSpecial, maintainSpecial, ESCORT_ARRIVE_TILES } from '../src/player/werhd-jev-special.mjs';
 import { parseObjective, matchesCapture, isGuardedByObjective } from '../src/player/werhd-jev-objective.mjs';
 import { catalog, T, u, infantry, world, home, brief } from './commander-world.mjs';
@@ -229,4 +229,30 @@ test('after a capture the objective is still followed, and the report says what 
   groupsOf(y); const l = y.enemies.splice(0, 1)[0]; y.self.push(l); groupsOf(y);
   y.self.splice(y.self.indexOf(l), 1); y.setTick(12200);
   assert.equal(groupsOf(y).snap.state.objectiveTarget.afterCapture.how, 'gone');
+});
+
+test('the engineer a mission objective needs is NOT taken from the model while a real choice exists', () => {
+  // `objectiveEngineer` means the engine tied the engineer to a stated capture objective, so it is tagged
+  // `engineOwned`. That tag must NOT remove it while the barracks still offers alternatives -- ownership may
+  // only replace a question with no judgement left in it. This world's barracks offers E2 and ADOG besides,
+  // which is exactly that case, and it is the half of the behaviour worth guarding: a tag meant to save a
+  // round trip must never quietly take a decision away from the model.
+  const x = world({ own: [...home(), ...tanks(100, 10)], enemies: labBase(), credits: 4000 });
+  const { snap, groups } = groupsOf(x);
+  assert.equal(snap.state.objectiveTarget?.mode, 'capture', 'the fixture really has a capture objective');
+  const entry = Object.entries(groups.infantry?.actions ?? {}).find(([, a]) => /ENGINEER/i.test(a?.name ?? ''));
+  assert.ok(entry, 'the barracks offers the engineer the objective needs');
+  assert.equal(entry[1].auto, 1, 'it is the objective case, not the generic one');
+  assert.equal(entry[1].engineOwned, true, 'and it carries the ownership tag');
+  const only = Object.keys(groups.infantry.criteria).filter((k) => k !== 'wait');
+  assert.ok(only.length > 1, `this world has real alternatives (${only.join(',')})`);
+  const asked = askableGroups(requestGroupsFrom(groups, x.memory, 100));
+  assert.ok('infantry' in asked, 'so the question is still put to the model');
+  assert.deepEqual(Object.keys(asked.infantry.criteria), Object.keys(groups.infantry.criteria), 'with every option intact');
+  assert.ok(Object.keys(asked.infantry.criteria).includes(entry[0]), 'including the engineer itself');
+
+  // The other half, which needs the engineer to be the group's ONLY real option: then it is taken outright.
+  // Built directly, because no world helper produces a barracks with a single item on its menu.
+  const lone = { infantry: { instructions: 'i', criteria: { produce_SENGINEER: 'c', wait: 'w' }, actions: { produce_SENGINEER: { ...entry[1] }, wait: { type: 'wait' } } } };
+  assert.ok(!('infantry' in askableGroups(requestGroupsFrom(lone, {}, 100))), 'a lone owned option is not asked about');
 });

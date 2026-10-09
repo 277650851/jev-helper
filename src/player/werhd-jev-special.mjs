@@ -290,7 +290,15 @@ export function specialGroups(api, catalog, snapshot, memory, groups) {
     const first = captureTargets[0];
     if (engineer) addProduction(group('infantry', ''), { ...engineer, queue: api.QueueType.Infantry },
       huts.length && bridgeUrgent ? `PRIORITY: train an engineer to repair the bridge (${bridgeWhy})` : objectiveEngineer ? `MISSION OBJECTIVE: train an engineer to capture ${catalog[wanted.name]?.label ?? wanted.name} #${wanted.id}` : first ? `OBJECTIVE: train an engineer to capture ${catalog[first.unit.name]?.label ?? first.unit.name} #${first.unit.id}${captureTargets.length > 1 ? ` and ${captureTargets.length - 1} more capturable structure${captureTargets.length > 2 ? 's' : ''}` : ''}` : 'Train one engineer for visible bridge repair',
-      undefined, { auto: objectiveEngineer ? 1 : (first || bridgeUrgent) && snapshot.state.self.credits >= catalog[engineer.name].cost + 1500 ? 3 : bridgeUrgent ? 3 : undefined });
+      undefined, { auto: objectiveEngineer ? 1 : (first || bridgeUrgent) && snapshot.state.self.credits >= catalog[engineer.name].cost + 1500 ? 3 : bridgeUrgent ? 3 : undefined,
+        // When the engineer is being trained to CAPTURE a stated mission objective, the engine has already
+        // tied it to that objective -- the option exists only because the mission needs it, and it is the
+        // group's sole real choice whenever the barracks has nothing else to offer (measured: across three
+        // reports `infantry:produce_ENGINEER` was a forced question 13 times). `engineOwned` removes the one
+        // wasted round trip `auto: 1` still charges before the fallback fires. With a real alternative beside
+        // it the option is NOT lifted -- `askableGroups` only drops an owned option when it is the single
+        // real choice -- so the model keeps the choice, and it retains the `auto: 1` fallback besides.
+        ...(objectiveEngineer ? { engineOwned: true } : {}) });
   }
   for (const bridge of bridges.slice(0, 12)) {
     const tile = { rx: bridge.x, ry: bridge.y };
