@@ -344,9 +344,19 @@ export function chooseBuildingSite(api, catalog, name, own, memory, limit = 200,
     const open = counts.map((c, i) => [c, i]).filter(([c]) => c === fewest).map(([, i]) => i);
     const approachSector = approach ? sectorOf(approach) : -1;
     const sector = open.includes(approachSector) ? approachSector : open[0];
-    const angle = ((sector + 0.5) / DEFENSE_SECTORS) * Math.PI * 2 - Math.PI;
-    // Stand off far enough to fire across an approach but close enough to cover the base itself.
-    const radius = Math.max(4, Math.min(10, (r.weapon?.range ?? 5) * 0.7));
+    // With a known approach the turret goes to the outermost buildable distance on that bearing, so
+    // the raid is engaged before it reaches the base; without one it sits at a standoff radius that
+    // fires across an approach while still covering the base. The candidate scan and canPlace decide
+    // what is actually legal (jev feedback: turrets should face the enemy's direction at the far
+    // edge of the buildable ring).
+    let angle, radius;
+    if (approach) {
+      angle = Math.atan2(approach.ry - base.tile.ry, approach.rx - base.tile.rx);
+      radius = Math.max(8, Math.min(18, (r.weapon?.range ?? 5) * 1.8));
+    } else {
+      angle = ((sector + 0.5) / DEFENSE_SECTORS) * Math.PI * 2 - Math.PI;
+      radius = Math.max(4, Math.min(10, (r.weapon?.range ?? 5) * 0.7));
+    }
     desired = { rx: base.tile.rx + Math.cos(angle) * radius, ry: base.tile.ry + Math.sin(angle) * radius };
   } else {
     const vector = approach ? { x: approach.rx - base.tile.rx, y: approach.ry - base.tile.ry } : { x: 1, y: 1 };
@@ -355,18 +365,23 @@ export function chooseBuildingSite(api, catalog, name, own, memory, limit = 200,
     desired = { rx: base.tile.rx + vector.x / length * offset, ry: base.tile.ry + vector.y / length * offset };
   }
   const candidates = new Map();
-  for (const anchor of buildings.slice(0, 12)) for (let dx = -10; dx <= 10; dx++) for (let dy = -10; dy <= 10; dy++) {
+  const span = defense ? 14 : 10;
+  for (const anchor of buildings.slice(0, 12)) for (let dx = -span; dx <= span; dx++) for (let dy = -span; dy <= span; dy++) {
     const x = anchor.tile.rx + dx, y = anchor.tile.ry + dy;
     const tile = api.map.tile(x, y);
     if (!tile) continue;
     const p = { rx: x, ry: y };
-    if (defense && targets.length && !targets.some(e =>
+    // A deep turret on the observed bearing intercepts enemies still on the way; requiring it to
+    // cover today's targets (which are already at the base) would filter every standoff site out.
+    if (defense && !approach && targets.length && !targets.some(e =>
       weaponEffectiveness(r.weapon, [e], catalog, api) > 0 &&
       dist(p, e.tile) <= (r.weapon?.range ?? 0) && dist(p, e.tile) >= (r.weapon?.minRange ?? 0))) continue;
     // canPlace answers legality; spacing and access are ordinary player strategy.
     if (buildings.some(b => dist(p,b.tile) < (catalog[b.name]?.yard ? 4 : defense ? 3 : 4)) || !trafficClearance(p,buildings,own,catalog)) continue;
     if (r.wall && buildings.some(b => catalog[b.name]?.factory && dist(b.tile, p) < 4)) continue;
-    let score = -dist(p, desired) - dist(p, base.tile) * 0.15;
+    // Away from the base is a bonus on a known bearing (outermost standoff line); toward it is a
+    // bonus when the approach is unknown (cover the base itself).
+    let score = -dist(p, desired) + dist(p, base.tile) * (approach && defense ? 0.25 : -0.15);
     if (approach && defense) {
       const range = r.weapon?.range || 4, enemyDistance = dist(p, approach);
       score += enemyDistance <= range + 2 ? 6 : -Math.max(0, enemyDistance - range - 2);
