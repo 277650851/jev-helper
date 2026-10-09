@@ -163,16 +163,23 @@ export function historyHints(groups, memory, state, assessment) {
   const level = assessment?.level ?? 0, out = {};
   for (const [id, g] of Object.entries(groups)) {
     const recent = memory.recent?.[id]; if (!recent?.length) continue;
-    let streak = 0, first = recent.at(-1);
-    for (let i = recent.length - 1; i >= 0 && recent[i].choice === recent.at(-1).choice; i--) { streak++; first = recent[i]; }
-    const choice = recent.at(-1).choice, lostSince = lostNow - first.lost, killedSince = killedNow - first.killed;
-    // No progress: nothing destroyed, or more lost than destroyed (feeding units in one at a time
-    // still kills a few enemies, which used to hide the pattern).
-    const stale = choice !== "wait" && streak >= STALE_REPEATS && (killedSince === 0 || lostSince > killedSince) && g.actions[choice];
+    const last = recent.at(-1), choice = last.choice;
+    // The streak counts what the MODEL answered, not what the engine executed. `rememberChoice` is
+    // also called for the mechanical `auto:` takeovers, so counting every entry let an option the
+    // engine had taken over repeatedly accumulate a "stale" streak the model never produced -- and at
+    // STALE_REMOVE that option was then deleted from the menu, which removed the very counter the
+    // takeover existed to guarantee. Takeovers answer to their own precondition checks and their own
+    // decline counter; a losing streak is a property of repeated free choices.
+    const picks = recent.filter(r => !r.auto);
+    const autoRuns = recent.length - picks.length;
+    let streak = 0, first = picks.at(-1);
+    for (let i = picks.length - 1; i >= 0 && picks[i].choice === choice; i--) { streak++; first = picks[i]; }
+    const lostSince = lostNow - (first?.lost ?? lostNow), killedSince = killedNow - (first?.killed ?? killedNow);
+    const stale = picks.length > 0 && choice !== "wait" && streak >= STALE_REPEATS && (killedSince === 0 || lostSince > killedSince) && g.actions[choice];
     const summary = recent.slice(-6).map(r => `${r.choice}${r.auto ? "*" : ""}${r.accepted ? "" : r.reason === "wait" ? "" : "(" + (r.reason || "skipped") + ")"}`).join(", ");
-    out[id] = { recent: summary, streak, lostSince, killedSince, stale: !!stale };
+    out[id] = { recent: summary, streak, lostSince, killedSince, stale: !!stale, ...(autoRuns ? { autoRuns } : {}) };
     if (!(level >= 1 || stale)) continue;
-    g.instructions += ` RECENT ANSWERS HERE: ${summary}. The last ${streak} answer${streak === 1 ? "" : "s"} ${streak === 1 ? "was" : "were"} "${choice}"; since then we lost ${lostSince} and destroyed ${killedSince}. Repeating an answer that produced nothing is unlikely to work: prefer a different option unless the situation has changed.`;
+    g.instructions += ` RECENT ANSWERS HERE: ${summary} (* = executed by the engine after repeated waits). The model chose "${choice}" ${streak} time${streak === 1 ? "" : "s"} running${autoRuns ? `, and the engine took that option over ${autoRuns} time${autoRuns === 1 ? "" : "s"}` : ""}; since then we lost ${lostSince} and destroyed ${killedSince}. Repeating an answer that produced nothing is unlikely to work: prefer a different option unless the situation has changed.`;
     if (stale) {
       const others = Object.keys(g.actions).filter(k => k !== "wait" && k !== choice);
       // Small local models ignore the STALE text, so a long losing streak is taken off the menu for a turn.
