@@ -11,19 +11,41 @@
 // much of the threat each carries, what that implies about enemy intent, and -- using the rules'
 // `Verses` tables through `effectiveness` -- which of OUR producible options actually hurts the
 // observed mix. The profile is small enough to travel with every question.
+//
+// Everything numeric comes from `api.rules()` at runtime, never from `docs/`. That matters: the rules
+// file checked into `docs/` is an EARLY RED ALERT 2 file, not Yuri's Revenge -- it has no Yuri faction
+// and none of the YR units -- and there is no `[ArmorTypes]` section in any RA2 rules file. Two
+// armour values also changed between that file and real YR: the Kirov went `light` -> `medium` and the
+// Flak Trooper `flak` -> `none`. Reading armour off the live rule (as this module does) is therefore
+// the only correct source; a table copied out of `docs/` would be wrong for at least those two.
 import { effectiveness, currentWeapon } from './werhd-jev-strategy.mjs';
 
-// The 11 armour words in `Verses` index order. Kept here rather than imported so the classification
-// does not depend on the order strategy.mjs happens to use.
+// The 11 armour words in `Verses` index order: None, Flak, Plate, Light, Medium, Heavy, Wood, Steel,
+// Concrete, Special_1, Special_2. The list is NOT in any rules INI (there is no `[ArmorTypes]`
+// section in the Red Alert 2 rule files); it is documented in the weapon-system dictionary and is
+// consistent with the `Verses=` comment block in the rules file. `strategy.mjs` indexes with the same
+// order, and `Verses` values are read live from `api.rules()`, so no counter table is hard-coded here.
+const ARMOR_ORDER = ['none', 'flak', 'plate', 'light', 'medium', 'heavy', 'wood', 'steel', 'concrete', 'special_1', 'special_2'];
 const AIR_ZONE = 1;
 
+// Expected damage per shot into a specific armour, honouring the warhead's `Verses` row. Both spellings
+// of the key appear in the wild (`versus` from the API, `verses` after catalog normalisation) and the
+// values arrive either as `0.75` or as `75`, so both forms are read. 0/1/2 are flags rather than
+// ratios -- 0% cannot fire, 1% force-fire only -- but they are still the smallest multipliers, which
+// is what a threat estimate wants.
+const versesOf = (w, armor) => {
+  const i = ARMOR_ORDER.indexOf(String(armor ?? '').toLowerCase());
+  if (i < 0) return 1;
+  const v = w?.versus?.[i] ?? w?.verses?.[i];
+  if (v === undefined || v === null) return 1;
+  return Number(v) > 1 ? Number(v) / 100 : Number(v);
+};
+// Rate of fire is in frames at 15 fps, so 60/rof is shots per second.
 const sum = (n, v) => n + v;
-// A unit's share of the threat, in "how much damage per second it can put into us" terms, with the
-// parts we cannot measure dropped rather than guessed: no weapon means no threat estimate.
-const dps = (rule) => {
+const dps = (rule, armor) => {
   const w = [rule?.weapon, rule?.secondary].filter((x) => x && x.damage > 0);
   if (!w.length) return 0;
-  return w.map((x) => x.damage * (x.rof ? 60 / x.rof : 1)).reduce(sum, 0);
+  return w.map((x) => x.damage * versesOf(x, armor) * (x.rof ? 15 / x.rof : 1)).reduce(sum, 0);
 };
 
 // Armed, mobile, in the air: only weapons with `aa` can answer it.
@@ -56,7 +78,9 @@ export function buildEnemyProfile(api, catalog, state, produceOptions = []) {
     // The summary already carries the armour word it was built with; fall back to the rule.
     const armor = e?.armor ?? rule?.armor;
     if (armor) b.armor.set(armor, (b.armor.get(armor) ?? 0) + 1);
-    const t = dps(rule);
+    // Threat is measured against the armour this unit actually wears: a weapon's `Verses` row can
+    // differ tenfold between armours, so a flat damage-per-second would misrank a base threat.
+    const t = dps(rule, armor);
     b.threat += t;
     const w = rule?.weapon;
     if (w?.range > b.maxRange) b.maxRange = w.range;
