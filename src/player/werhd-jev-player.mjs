@@ -1662,13 +1662,11 @@ export function respondToThreats(api, catalog, memory, emit, mobile, enemies, sk
     // Unfold when the deployed form answers the threat the mobile one cannot. jev-report-20261010
     // feedback: a Guardian GI / GI that charges in with its rifle instead of unfolding is exactly the
     // "runs up to the enemy before shooting" bug the user sees. deployRecommendation weighs the net
-    // gain (damage rate and reach) so a static form is only taken when it pays. Deployers whose
-    // deployed form is a TickTank building (platform Grizzly MTNK -> DMTK) are left to the strategy
-    // layer: api.deploy on them crashes the game page (jevreport-20261010-053355 died with
-    // `Cannot read properties of undefined (reading 'x')` right after `部署 #1542`), and only
-    // infantry-style deployment is what the micro instinct should be deciding anyway.
+    // gain (damage rate and reach) so a static form is only taken when it pays. The platform is a
+    // Republic-of-Heroes-style MOD: Grizzly (MTNK) unfolds into a DMTK turret and is genuinely better
+    // deployed, so only construction yards (MCV) are excluded from the micro instinct.
     const depRule = catalog[u.name]?.deploysInto ? catalog[catalog[u.name].deploysInto] : undefined;
-    if (!u.isDeployed && catalog[u.name]?.deploysInto && depRule && !depRule.tickTank && !depRule.yard &&
+    if (!u.isDeployed && catalog[u.name]?.deploysInto && depRule && !depRule.yard &&
         deployRecommendation(api, catalog, u, enemies)?.deploy && !canFireAt(api, catalog, u, e)) {
       api.deploy([u.id]);
       memory.threatReplies.set(u.id, tick);
@@ -1734,7 +1732,9 @@ export function respondToThreats(api, catalog, memory, emit, mobile, enemies, sk
   // keeps its other entries.
   if (replies.length && tick - (memory.lastThreatReport ?? -Infinity) >= THREAT_REPORT_TICKS) {
     memory.lastThreatReport = tick;
-    const text = (r) => r.reply === "close_in" ? `${r.ids.length} 个单位抵近还击 ${r.name} #${r.targetId}` : `#${r.ids[0]} 避开 ${r.name} #${r.targetId}，后撤到 (${r.target.x},${r.target.y})`;
+    const text = (r) => r.reply === "close_in" ? `${r.ids.length} 个单位抵近还击 ${r.name} #${r.targetId}`
+      : r.reply === "deploy" ? `#${r.ids[0]} 展开以接敌 ${r.name} #${r.targetId}`
+      : `#${r.ids[0]} 避开 ${r.name} #${r.targetId}，后撤到 (${r.target.x},${r.target.y})`;
     emit({ kind: "micro", tick, description: `射程外受击：${replies.slice(0, 3).map(text).join("；")}${replies.length > 3 ? `；另 ${replies.length - 3} 起` : ""}`,
       replies: replies.length, ids: replies.flatMap((r) => r.ids), reply: replies[0].reply, targetId: replies[0].targetId });
   }
@@ -1913,11 +1913,10 @@ export function maintainBattle(api, catalog, memory, emit) {
       if (target) {
         // Unfold to answer what the mobile form cannot: a GI / Guardian GI that would have to charge
         // into the defender's range unfolds instead. deployRecommendation weighs the net gain, so a
-        // static form is only taken when it pays. TickTank deployers (Grizzly -> DMTK building) stay
-        // out of the micro instinct for the same reason as in respondToThreats: api.deploy on them
-        // crashes the game page.
+        // static form is only taken when it pays. Construction yards stay out; the platform's
+        // Grizzly -> DMTK turret deployment is genuinely useful and is allowed here.
         const defenderDepRule = catalog[u.name]?.deploysInto ? catalog[catalog[u.name].deploysInto] : undefined;
-        if (!u.isDeployed && catalog[u.name]?.deploysInto && defenderDepRule && !defenderDepRule.tickTank && !defenderDepRule.yard &&
+        if (!u.isDeployed && catalog[u.name]?.deploysInto && defenderDepRule && !defenderDepRule.yard &&
             !canFireAt(api,catalog,u,target) &&
             deployRecommendation(api, catalog, u, defenseThreats)?.deploy &&
             tick-(memory.postureOrders?.get(u.id)??-1000)>150) {
