@@ -298,7 +298,14 @@ export function createBackground(c, {fetchImpl = fetch, now = Date.now, uuid = (
         next.mission=e.mission;next.armyMax=Math.max(s.armyMax??0,next.army??0);
       }
       else {
-        next.events=[{at:now(),kind:String(e.kind).slice(0,40),actionType:String(e.action?.type??'').slice(0,40),choice:String(e.choice??e.action?.name??'').slice(0,80),accepted:e.accepted===true,reason:String(e.reason??'').slice(0,80),text:String(e.message??e.description??e.action?.label??e.action?.name??e.choice??e.reason??e.kind).slice(0,240)},...s.events].slice(0,20);
+        // The live event shape read by the popup and dashboard. It must carry the same attribution the saved
+        // record does: `reason` names the decider (`engine_decided` / `auto_*`), `rejectedBecause` says why a
+        // refusal happened, and `engineOwned` marks an option the engine owned. This is the third place an
+        // action event passes through, and like the saved record it kept only `reason` -- so the panel showed
+        // a refused engine takeover as `engine_decided` with nothing to explain it, and used that same word
+        // as the event's display text.
+        const why = String(e.rejectedBecause ?? '').slice(0, 80);
+        next.events=[{at:now(),kind:String(e.kind).slice(0,40),actionType:String(e.action?.type??'').slice(0,40),choice:String(e.choice??e.action?.name??'').slice(0,80),accepted:e.accepted===true,reason:String(e.reason??'').slice(0,80),...(why?{rejectedBecause:why}:{}),...(e.engineOwned?{engineOwned:true}:{}),text:String(e.message??e.description??e.action?.label??e.action?.name??e.choice??(why||e.reason)??e.kind).slice(0,240)},...s.events].slice(0,20);
         // A commander turn carries several orders; each one carried out counts as an accepted action.
         if(e.kind==='command')next.acceptedActions=(s.acceptedActions??0)+(Array.isArray(e.results)?e.results.filter(r=>r?.accepted===true).length:0);
         if(e.kind==='action'){

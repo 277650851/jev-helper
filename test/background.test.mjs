@@ -390,3 +390,19 @@ test('the data panel, opened in a tab, is trusted like the popup; game pages and
   assert.ok((await x.app.handle({type:'GET_SETTINGS'},panel)).hasKey);
   for(const bad of [{...panel,url:'https://staging.wangerhuoda.com/'},{...panel,id:'other-extension'},{...panel,frameId:1},{...panel,url:'https://evil.test/chrome-extension://test-extension/'}])await assert.rejects(x.app.handle({type:'MATCHES_LIST'},bad));
 });
+
+test('the live event feed keeps the same attribution a saved report does',async()=>{
+  // The popup and dashboard read `session.events`, built here rather than in logbook. It kept only `reason`,
+  // so a refused engine takeover appeared in the panel as `engine_decided` with nothing to explain it -- and
+  // that same word became the event's display text. This is the third place an action event passes through,
+  // and all three had to carry the attribution before any of it was visible.
+  const x=await setup(async()=>answer());
+  await x.app.handle({type:'EVENT',token:x.s.token,event:{kind:'action',tick:1349,question:'construction',choice:'produce_GAREFN',accepted:false,reason:'engine_decided',rejectedBecause:'queue_changed',engineOwned:true,auto:true,action:{type:'produce',name:'GAREFN'}}},sender);
+  const s=await x.app.getSession(7);
+  const e=s.events[0];
+  assert.equal(e.reason,'engine_decided','who decided is kept');
+  assert.equal(e.rejectedBecause,'queue_changed','and why it was refused');
+  assert.equal(e.engineOwned,true,'and that the option was engine-owned');
+  assert.equal(e.accepted,false);
+  assert.doesNotMatch(e.text,/^engine_decided$/,'the display text is not just the decider');
+});
