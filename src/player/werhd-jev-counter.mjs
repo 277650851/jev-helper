@@ -30,15 +30,35 @@ const AIR_ZONE = 1;
 
 // Expected damage per shot into a specific armour, honouring the warhead's `Verses` row. Both spellings
 // of the key appear in the wild (`versus` from the API, `verses` after catalog normalisation) and the
-// values arrive either as `0.75` or as `75`, so both forms are read. 0/1/2 are flags rather than
-// ratios -- 0% cannot fire, 1% force-fire only -- but they are still the smallest multipliers, which
-// is what a threat estimate wants.
+// values arrive either as a percentage (`75`, how the rules files write it) or as a proportion (`0.75`),
+// so both forms are read. 0/1/2 are flags rather than ratios -- 0% cannot fire, 1% force-fire only -- but
+// they are still the smallest multipliers, which is what a threat estimate wants.
+const rowOf = (w) => {
+  const row = w?.versus ?? w?.verses;
+  return Array.isArray(row) ? row : undefined;
+};
+// Which of the two written forms a row uses, decided from the row as a whole rather than per entry.
+// `Verses=25,25,25,75,100,100,...` cannot be read as proportions (the 100s would be 100x damage), and
+// `[0.25, 1]` cannot be read as percentages (1 would mean force-fire-only) -- but both are legal in this
+// codebase: the API documents `versus` only as `Record<number, number>` with no scale, the rules files use
+// percentages, and most test fixtures use proportions. Deciding per entry instead of per row is what gets
+// this wrong: a full-strength proportion of `1` is indistinguishable from the `1` flag, so the whole row
+// has to say which convention it is in. A row with a value above 2 can only be percentages.
+export function versesArePercent(w) {
+  const row = rowOf(w);
+  if (!row) return false;
+  return row.some((v) => Number(v) > 2);
+}
 const versesOf = (w, armor) => {
   const i = ARMOR_ORDER.indexOf(String(armor ?? '').toLowerCase());
-  if (i < 0) return 1;
-  const v = w?.versus?.[i] ?? w?.verses?.[i];
+  const row = rowOf(w);
+  if (i < 0 || !row) return 1;
+  const v = row[i];
   if (v === undefined || v === null) return 1;
-  return Number(v) > 1 ? Number(v) / 100 : Number(v);
+  if (!versesArePercent(w)) return Number(v);
+  // The flag entries stay flags: 0% cannot fire, 1% force-fire only, 2% inert. They are kept as tiny
+  // multipliers rather than zero so a threat estimate does not read "cannot be hit" as "harmless".
+  return Number(v) / 100;
 };
 // Rate of fire is in frames at 15 fps, so 60/rof is shots per second.
 const sum = (n, v) => n + v;
@@ -59,6 +79,60 @@ export function enemyArchetype(rule, unit) {
   if (unit?.type === 3) return 'infantry';
   if (rule.category === 'AFV' || unit?.type === 7) return 'vehicle';
   return 'other';
+}
+
+// Can this weapon be used on that unit at all? `Verses` alone cannot answer it: a Grizzly's shell has a
+// nonzero entry for every armour word, so a raw damage score rates it as a fine answer to Kirovs. What
+// stops it is that the weapon has no `aa`, and that is a separate field from the damage table.
+//
+// 0% and 1% are flags, not small ratios: 0% means the weapon cannot fire at that armour, 1% is
+// force-fire only, 2% is the inert Westwood value. Counting them as mere low damage understates how
+// unusable they are, so they count as cannot-engage. The reading of the row is `versesArePercent` above,
+// so a proportional `1` (full damage) and a percentage `1` (force-fire only) are not confused.
+const verseOf = (w, armor) => {
+  const i = ARMOR_ORDER.indexOf(String(armor ?? '').toLowerCase());
+  const row = rowOf(w);
+  return i < 0 || !row ? undefined : row[i];
+};
+export function canEngage(rule, unit, targetKind) {
+  const weapons = [rule?.weapon, rule?.secondary].filter((w) => w && w.damage > 0);
+  if (!weapons.length) return false;
+  const usable = (w) => {
+    if (targetKind === 'air') return w.aa === true;
+    if (targetKind === 'building' || targetKind === 'defense') return w.ag !== false || w.aa === true;
+    if (targetKind === 'infantry' || targetKind === 'vehicle' || targetKind === 'harvester' || targetKind === 'naval') return w.ag !== false;
+    return true;
+  };
+  const armor = unit?.armor ?? rule?.armor;
+  return weapons.some((w) => {
+    if (!usable(w)) return false;
+    const v = verseOf(w, armor);
+    // No table means no restriction -- the same reason `versesOf` falls back to 1.
+    if (v === undefined || v === null) return true;
+    // 0 always means "cannot fire". 1 and 2 are flags only in the percentage form: a proportional table
+    // expresses full damage as 1 and has no way to write "inert" other than 0, so there they are ordinary
+    // multipliers. The two readings are kept apart by looking at the row as a whole.
+    return versesArePercent(w) ? Number(v) > 2 : Number(v) > 0;
+  });
+}
+
+// How much this option actually hurts the force that is visible. Unlike `effectiveness` -- which averages
+// the best weapon over the sample set and therefore rates a dedicated anti-armour gun highly against a
+// pure infantry wave -- this asks, for every visible unit, whether the option can engage it at all, and
+// sums the damage it would do. An answer that cannot touch half the enemy scores nothing for that half,
+// which is the whole point of adapting to the mix.
+//
+// Targets are the state's visible-enemy summaries, so `kind` (the catalog key) and `armor` are what the
+// lookup uses.
+export function counterScore(rule, targets, catalog) {
+  if (!rule || !targets.length) return 0;
+  return targets.reduce((sum, t) => {
+    const enemy = catalog[t?.kind ?? t?.name];
+    const kind = enemyArchetype(enemy, t);
+    if (!canEngage(rule, enemy, kind)) return sum;
+    const armor = t?.armor ?? enemy?.armor;
+    return sum + dps(rule, armor);
+  }, 0);
 }
 
 // One line per archetype present: how many, how much threat, and how tough the toughest sample is.
@@ -114,14 +188,14 @@ export function buildEnemyProfile(api, catalog, state, produceOptions = []) {
   if (defenseCount) intents.push(`${defenseCount} enemy defences are in sight: static guns must be out-ranged or bypassed`);
   if (standoff > ownMaxRange && ownMaxRange > 0) intents.push(`enemy weapons reach ${standoff} tiles, ours reach ${ownMaxRange}: we are out-ranged, so close in or answer from beyond`);
 
-  // Which of our producible options actually hurts what is visible. `effectiveness` already applies
-  // the rules' Verses table, so this needs no hard-coded counter table.
+  // Which of our producible options actually hurts what is visible, scored against every visible unit
+  // rather than against an average of them.
   const targets = groups.length ? seen : [];
   const counters = produceOptions
     .map((option) => {
       const rule = catalog[option.name];
       if (!rule) return null;
-      const value = targets.length ? effectiveness(rule, targets, catalog, api) : 0;
+      const value = targets.length ? counterScore(rule, targets, catalog) : 0;
       return value > 0 ? { name: option.name, label: rule.label ?? option.name, value: Math.round(value) } : null;
     })
     .filter(Boolean)

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { collectState, candidateGroups } from '../src/player/werhd-jev-player.mjs';
-import { buildEnemyProfile, enemyArchetype, counterBrief } from '../src/player/werhd-jev-counter.mjs';
+import { buildEnemyProfile, enemyArchetype, counterBrief, canEngage, counterScore, versesArePercent } from '../src/player/werhd-jev-counter.mjs';
 
 // The decision layer used to see the enemy only as a count: `visibleEnemyCount`, `nearbyEnemyCount`,
 // `airThreatCount`. `collectState` did gather `visibleEnemies` with names and health, but nothing read
@@ -102,4 +102,79 @@ snap = collectState(api, catalog);
 const empty = candidateGroups(api, catalog, snap, {});
 assert.equal(counterBrief(empty.enemyProfile ?? buildEnemyProfile(api, catalog, snap.state, [])), '');
 assert.doesNotMatch(empty.vehicles.instructions, /Opposing force:/, 'no enemy visible, no opposing-force text');
+
+// 6. The whole point of the profile: changing the enemy CHANGES which of our options is named. A module
+//    that produced the same ordering for every enemy would satisfy every test above and still be useless.
+//    This is the adaptive-countering claim, and it is the one that has to be pinned.
+{
+  const options = [{ name: 'MTNK' }, { name: 'E1' }, { name: 'NASAM' }];
+  const top = () => buildEnemyProfile(api, catalog, collectState(api, catalog).state, options).counters[0]?.name;
+
+  enemies = [u(200, 'HTNK', 7, 42, 30), u(201, 'HTNK', 7, 43, 30), u(202, 'HTNK', 7, 44, 30)];
+  assert.equal(top(), 'MTNK', 'heavy armour is answered by the anti-armour gun');
+
+  enemies = [u(210, 'ZEP', 1, 42, 30, { zone: 1 }), u(211, 'ZEP', 1, 43, 30, { zone: 1 })];
+  assert.equal(top(), 'NASAM', 'aircraft are answered by the anti-air tower');
+
+  enemies = Array.from({ length: 6 }, (_, i) => u(220 + i, 'FLAKT', 3, 42 + i, 30));
+  assert.equal(top(), 'E1', 'a pure infantry wave is answered by the rifleman, not by the tank');
+}
+
+// 7. Engagement is a hard filter, not a low score: a ground-only weapon cannot be the answer to aircraft
+//    even though its `Verses` row has a nonzero entry for every armour. Reading the row as a proportion
+//    instead of a percentage makes a full-strength entry look like 1%, which is how this went wrong.
+{
+  enemies = [u(230, 'ZEP', 1, 42, 30, { zone: 1 }), u(231, 'ZEP', 1, 43, 30, { zone: 1 })];
+  const profile = buildEnemyProfile(api, catalog, collectState(api, catalog).state, [{ name: 'MTNK' }, { name: 'E1' }, { name: 'NASAM' }]);
+  const named = profile.counters.map((c) => c.name);
+  assert.ok(named.includes('NASAM'), 'the anti-air tower is named');
+  assert.ok(!named.includes('MTNK'), `a tank with no anti-air weapon must not be named against aircraft (${named.join(', ')})`);
+  assert.ok(!named.includes('E1'), 'nor the rifleman');
+
+  // And the flag values themselves: in the percentage form 0/1/2 mean cannot-fire / force-fire-only /
+  // inert, so a weapon whose row is all flags engages nothing -- at any armour.
+  const flagged = { category: 'AFV', cost: 700, armor: 'heavy', weapon: { damage: 100, rof: 30, range: 5, ag: true, verses: [0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1] } };
+  enemies = [u(240, 'HTNK', 7, 42, 30)];
+  assert.equal(versesArePercent(flagged.weapon), false, 'a row that never exceeds 2 is unambiguous: it cannot be a percentage row');
+  assert.equal(canEngage(flagged, catalog.HTNK, 'vehicle'), true, 'and read as proportions its 2 is a multiplier, not the inert flag');
+  // The same row as percentages: now every entry really is a flag, so nothing is engageable. Only the
+  // row-level reading tells these two apart -- entry for entry they are the same small integers.
+  const flaggedPct = { ...flagged, weapon: { ...flagged.weapon, verses: [0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 41] } };
+  assert.equal(versesArePercent(flaggedPct.weapon), true, 'one entry above 2 makes it a percentage row');
+  assert.equal(canEngage(flaggedPct, catalog.HTNK, 'vehicle'), false, 'and a 1 in the heavy slot is force-fire only, not 100%');
+  const flaggedPctFull = { ...flagged, weapon: { ...flagged.weapon, verses: [30, 1, 1, 1, 1, 100, 1, 1, 1, 1, 30] } };
+  assert.equal(canEngage(flaggedPctFull, catalog.HTNK, 'vehicle'), true, 'while a 100 in the heavy slot is engagement');
+  assert.equal(canEngage(catalog.MTNK, catalog.HTNK, 'vehicle'), true, 'a percentage row at full strength engages');
+}
+
+// 8. The two written forms are told apart by the ROW, not by the entry. A full-strength proportion of `1`
+//    is the same number as the `1` flag, so reading each entry on its own cannot work: it either discards
+//    every full-strength proportion or accepts every force-fire-only flag. The API documents `versus` only
+//    as `Record<number, number>` with no scale, and the rules files use percentages while most fixtures
+//    use proportions -- so the row has to say which convention it is in.
+{
+  const percent = { name: 'A', weapon: { damage: 100, rof: 30, range: 5, ag: true, verses: [100, 80, 70, 50, 25, 25, 75, 50, 25, 100, 100] } };
+  const proportion = { name: 'B', weapon: { damage: 100, rof: 30, range: 5, ag: true, verses: [1, 0.8, 0.7, 0.5, 0.25, 0.25, 0.75, 0.5, 0.25, 1, 1] } };
+  const target = { kind: 'HTNK', name: 'Rhino', type: 7, armor: 'heavy' };
+  assert.equal(versesArePercent(percent.weapon), true, 'a row with a value above 2 is percentages');
+  assert.equal(versesArePercent(proportion.weapon), false, 'a row that never exceeds 1 is proportions');
+  // Both describe the same weapon at the same strength, so both must engage and score the same.
+  for (const rule of [percent, proportion]) {
+    assert.equal(canEngage(rule, catalog.HTNK, 'vehicle'), true, `${rule.name}: full strength engages`);
+    assert.equal(counterScore(rule, [target], catalog), counterScore(percent, [target], catalog), `${rule.name}: the two forms agree`);
+  }
+  // A row of nothing but 1s is genuinely ambiguous -- "1% everywhere" and "100% everywhere" are the same
+  // numbers -- so the row-level test cannot resolve it and reads it as proportions, i.e. full damage. The
+  // limitation is worth stating: no real weapon's row is uniformly 1, and the alternative (reading them as
+  // flags) would silently discard every proportion-form weapon that damages everything equally.
+  const allOnes = { name: 'C', weapon: { damage: 100, rof: 30, range: 5, ag: true, verses: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1] } };
+  assert.equal(versesArePercent(allOnes.weapon), false, 'an all-1 row cannot be identified as percentages');
+  assert.equal(canEngage(allOnes, catalog.HTNK, 'vehicle'), true, 'so it is read as full damage rather than as force-fire only');
+  assert.ok(counterScore(proportion, [target], catalog) > 0, 'the proportional form scores');
+  const percentOneHeavy = { name: 'C2', weapon: { damage: 100, rof: 30, range: 5, ag: true, verses: [30, 1, 1, 1, 1, 1, 1, 1, 1, 1, 30] } };
+  assert.equal(canEngage(percentOneHeavy, catalog.HTNK, 'vehicle'), false, 'with any entry above 2 the row IS percentages, and then the 1 is force-fire only');
+  const zeros = { name: 'E', weapon: { damage: 100, rof: 30, range: 5, ag: true, verses: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] } };
+  assert.equal(canEngage(zeros, catalog.HTNK, 'vehicle'), false, 'a zero row cannot fire at anything, in either form');
+}
 console.log('Counter profile: archetypes, armour words, threat, rules-driven counter scores and the question brief');
+console.log('Adaptive counters: the named answer follows the enemy mix, and weapons that cannot engage are excluded rather than under-scored');
