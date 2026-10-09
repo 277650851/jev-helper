@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { auditReport, classifyQuestion, reportMeta, topChoice, takeoversOf } from '../src/report-audit.mjs';
+import { logStats } from '../src/logbook.mjs';
 
 // The audit turns a saved battle report into the one number the rewrite rests on: how often the engine
 // asked the model a question whose answer its own preconditions had already fixed. Those questions are
@@ -155,3 +156,29 @@ const q = (options, choice, extra = {}) => ({ optionCount: options.length, optio
   assert.equal(trouble.taken, 1, 'while the takeovers are unaffected');
 }
 console.log('Report audit: forced-question share, refusal rate, per-group split, all-wait decisions and attribution');
+
+// The audit tool and the live log must classify the SAME entries the SAME way. They did not: for one real
+// report the audit said `unnamed: 4` while the panel said `engine_decided: 4`, which makes both numbers
+// untrustworthy -- and the panel's value was the decider's name standing in for a cause. This is a
+// cross-module check precisely because the defect was a divergence between two modules that each looked
+// right on its own.
+{
+  const entries = [
+    { kind: 'action', auto: true, accepted: false, reason: 'engine_decided', rejectedBecause: 'queue_changed', question: 'vehicles', choice: 'produce_TANK' },
+    { kind: 'action', auto: true, accepted: false, reason: 'engine_decided', question: 'construction', choice: 'produce_GAREFN' },
+    { kind: 'action', auto: true, accepted: false, reason: 'auto_explore', question: 'scouting', choice: 'explore_1_1' },
+    { kind: 'action', auto: false, accepted: false, reason: 'unit_gone', question: 'infantry', choice: 'produce_E1' },
+    { kind: 'action', auto: true, accepted: true, reason: 'engine_decided', question: 'defenses', choice: 'produce_GAPILL' },
+  ];
+  const audit = takeoversOf(entries);
+  const live = logStats(entries);
+  for (const [why, n] of Object.entries(audit.refusals)) {
+    assert.equal(live.actions.skippedReasons[why], n, `${why}: the audit and the live log agree on the count`);
+  }
+  // The live log also counts refusals of orders the MODEL chose; the audit's tally is takeovers only. The
+  // classification is what has to match, not the scope.
+  assert.equal(live.actions.skippedReasons.unit_gone, 1, 'a model-chosen refusal is counted by the live log');
+  assert.equal(audit.refusals.unit_gone, undefined, 'and is outside the takeover tally');
+  assert.ok(!('engine_decided' in live.actions.skippedReasons), 'the decider is never a cause in either tool');
+  assert.ok(!('engine_decided' in audit.refusals));
+}

@@ -1,8 +1,7 @@
 // Audit the QUESTION SET an autopilot match actually asked. Pure function over report entries, so it
 // can be exercised from a test without a running game, a model, or a recorded file.
 //
-// Why this exists: the decision layer cannot be judged by reading it. Several separate investigations
-// on this codebase reached a confident wrong conclusion from the source alone -- a "flaky engine bug"
+// Why this exists: the decision layer cannot be judged by reading it. Several separate investigations// on this codebase reached a confident wrong conclusion from the source alone -- a "flaky engine bug"
 // that was really a shared test array, two "high severity" defects that were structurally unreachable,
 // and a rules file assumed to be the live one -- and every one was settled by measuring. A battle report
 // already records, per decision, the option keys the model was shown, what it chose, its probabilities,
@@ -11,6 +10,7 @@
 // The premise the rewrite rests on is that the engine asks the model questions whose answer its own
 // preconditions already fixed, and the model can therefore only refuse. This module counts exactly that.
 
+import { refusalReason } from './logbook.mjs';
 /**
  * Classify one question by how much is left for the model to decide.
  *   forced — one real option besides `wait`: the answer was determined before the question was asked
@@ -123,7 +123,10 @@ export function takeoversOf(entries = []) {
     if (t.accepted === false) {
       g.refused++;
       refused++;
-      const why = t.rejectedBecause ?? (named ? 'unnamed' : String(t.reason ?? 'unknown'));
+      // The same classification the live log uses, so the audit tool and the panel never disagree about the
+      // same report. They did: this produced `unnamed: 4` where the panel produced `engine_decided: 4` for
+      // the very same entries, which makes both numbers untrustworthy.
+      const why = refusalReason(t);
       refusals[why] = (refusals[why] ?? 0) + 1;
     } else g.accepted++;
   }
