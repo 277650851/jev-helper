@@ -18,7 +18,7 @@
 // armour values also changed between that file and real YR: the Kirov went `light` -> `medium` and the
 // Flak Trooper `flak` -> `none`. Reading armour off the live rule (as this module does) is therefore
 // the only correct source; a table copied out of `docs/` would be wrong for at least those two.
-import { effectiveness, currentWeapon } from './werhd-jev-strategy.mjs';
+import { effectiveness, currentWeapon, counterValue } from './werhd-jev-strategy.mjs';
 
 // The 11 armour words in `Verses` index order: None, Flak, Plate, Light, Medium, Heavy, Wood, Steel,
 // Concrete, Special_1, Special_2. The list is NOT in any rules INI (there is no `[ArmorTypes]`
@@ -116,23 +116,17 @@ export function canEngage(rule, unit, targetKind) {
   });
 }
 
-// How much this option actually hurts the force that is visible. Unlike `effectiveness` -- which averages
-// the best weapon over the sample set and therefore rates a dedicated anti-armour gun highly against a
-// pure infantry wave -- this asks, for every visible unit, whether the option can engage it at all, and
-// sums the damage it would do. An answer that cannot touch half the enemy scores nothing for that half,
-// which is the whole point of adapting to the mix.
+// How much this option actually hurts the force that is visible. This is the SAME judgement the engine
+// makes when it chooses which unit to offer, so it delegates to `counterValue` rather than keeping a
+// second copy: the copy had already drifted (it left out the range factor the engine's score applies), and
+// a briefing that disagrees with the choice is worse than no briefing.
 //
-// Targets are the state's visible-enemy summaries, so `kind` (the catalog key) and `armor` are what the
-// lookup uses.
-export function counterScore(rule, targets, catalog) {
+// Targets are the state's visible-enemy summaries. They carry the catalog key in `kind` and nothing in
+// `name`; `counterValue` resolves the target's armour through `catalog[target.name]`, so the kind is put
+// into `name` here.
+export function counterScore(rule, targets, catalog, api) {
   if (!rule || !targets.length) return 0;
-  return targets.reduce((sum, t) => {
-    const enemy = catalog[t?.kind ?? t?.name];
-    const kind = enemyArchetype(enemy, t);
-    if (!canEngage(rule, enemy, kind)) return sum;
-    const armor = t?.armor ?? enemy?.armor;
-    return sum + dps(rule, armor);
-  }, 0);
+  return counterValue(rule, targets.map((t) => ({ ...t, name: t?.kind ?? t?.name })), catalog, api);
 }
 
 // One line per archetype present: how many, how much threat, and how tough the toughest sample is.
@@ -195,7 +189,7 @@ export function buildEnemyProfile(api, catalog, state, produceOptions = []) {
     .map((option) => {
       const rule = catalog[option.name];
       if (!rule) return null;
-      const value = targets.length ? counterScore(rule, targets, catalog) : 0;
+      const value = targets.length ? counterScore(rule, targets, catalog, api) : 0;
       return value > 0 ? { name: option.name, label: rule.label ?? option.name, value: Math.round(value) } : null;
     })
     .filter(Boolean)

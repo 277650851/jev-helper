@@ -91,7 +91,7 @@ export function weaponEffectiveness(w, targets, catalog, api) {
   if (!w) return 0;
   const samples = targets.length ? targets : [{ type: api.ObjectType.Infantry }, { type: api.ObjectType.Vehicle }];
   return samples.reduce((sum, t) => {
-    if (t.zone === (api.ZoneType?.Air ?? 1) ? !w.aa : w.ag === false) return sum;
+    if (t.zone === (api?.ZoneType?.Air ?? 1) ? !w.aa : w.ag === false) return sum;
     const armor = catalog[t.name]?.armor;
     const index = t.armor ?? Object.entries(api.ArmorType ?? {}).find(([k, v]) => /^\d+$/.test(k) && String(v).toLowerCase() === armor)?.[0]
       ?? (t.type === api.ObjectType.Infantry ? (api.ArmorType?.None ?? 0) : (api.ArmorType?.Heavy ?? 5));
@@ -125,7 +125,7 @@ export function versesArePercent(w) {
 export function canEngageTarget(rule, target, catalog, api) {
   const weapons = [rule?.weapon, rule?.secondary].filter((w) => w && w.damage > 0);
   if (!weapons.length) return false;
-  const isAir = target?.zone === (api.ZoneType?.Air ?? 1) || catalog[target?.name]?.aircraft;
+  const isAir = target?.zone === (api?.ZoneType?.Air ?? 1) || catalog[target?.name]?.aircraft;
   return weapons.some((w) => {
     if (isAir ? !w.aa : w.ag === false) return false;
     const armor = target?.armor ?? catalog[target?.name]?.armor;
@@ -149,10 +149,7 @@ export function counterValue(rule, targets, catalog, api) {
   if (!rule) return 0;
   const weapons = [rule.weapon, rule.secondary].filter((w) => w && w.damage > 0);
   if (!weapons.length) return 0;
-  if (!targets?.length) {
-    const samples = [{ type: api.ObjectType.Infantry }, { type: api.ObjectType.Vehicle }];
-    return samples.reduce((sum, t) => sum + Math.max(0, ...weapons.map((w) => weaponEffectiveness(w, [t], catalog, api))), 0) / samples.length;
-  }
+  if (!targets?.length) return effectiveness(rule, [], catalog, api);
   return targets.reduce((sum, t) => sum + (canEngageTarget(rule, t, catalog, api)
     ? Math.max(0, ...weapons.map((w) => weaponEffectiveness(w, [t], catalog, api)))
     : 0), 0);

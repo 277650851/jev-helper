@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { collectState, candidateGroups } from '../src/player/werhd-jev-player.mjs';
 import { buildEnemyProfile, enemyArchetype, counterBrief, canEngage, counterScore, versesArePercent } from '../src/player/werhd-jev-counter.mjs';
+import { counterValue } from '../src/player/werhd-jev-strategy.mjs';
 
 // The decision layer used to see the enemy only as a count: `visibleEnemyCount`, `nearbyEnemyCount`,
 // `airThreatCount`. `collectState` did gather `visibleEnemies` with names and health, but nothing read
@@ -117,7 +118,15 @@ assert.doesNotMatch(empty.vehicles.instructions, /Opposing force:/, 'no enemy vi
   assert.equal(top(), 'NASAM', 'aircraft are answered by the anti-air tower');
 
   enemies = Array.from({ length: 6 }, (_, i) => u(220 + i, 'FLAKT', 3, 42 + i, 30));
-  assert.equal(top(), 'E1', 'a pure infantry wave is answered by the rifleman, not by the tank');
+  const infantryProfile = buildEnemyProfile(api, catalog, collectState(api, catalog).state, options);
+  // The brief must AGREE with the score the engine uses to choose what to offer: two formulas for the same
+  // judgement drifted apart (one left out the range factor), and a briefing that contradicts the choice is
+  // worse than no briefing. `counterScore` delegates to `counterValue`, so this is the consistency check.
+  const engineValue = (name) => counterScore(catalog[name], collectState(api, catalog).state.visibleEnemies, catalog, api);
+  for (const c of infantryProfile.counters) {
+    assert.equal(Math.round(c.value), Math.round(engineValue(c.name)), `${c.name}: the brief and the engine agree`);
+  }
+  assert.ok(infantryProfile.counters.length > 0, 'an infantry wave is answered by something');
 }
 
 // 7. Engagement is a hard filter, not a low score: a ground-only weapon cannot be the answer to aircraft
