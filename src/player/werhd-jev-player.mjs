@@ -976,7 +976,9 @@ export function candidateGroups(api, catalog, snapshot, memory) {
     : `Force not ready (${state.forceReadiness.reason}); ${readiness.threshold} combat units needed, ${readiness.combatUnits} exist.`;
   const tactics = group(
     "tactics",
-    `${objectiveNote}${readyNote} Choose the combat mission to win by destroying the enemy base; protect the base from nearby attackers first. Keep a useful active attack; do not oscillate between attack and retreat. When the enemy base is unknown, advance through a supplied frontier. Combat orders cost zero credits.${assessment.level ? " " + escalationAdvice(assessment) : ""}`,
+    `${objectiveNote}${readyNote} ${state.baseUnderAttack
+      ? 'URGENT: the base is under attack. Defend it NOW: choose defend_base and intercept the visible base threats. Assaults and assemblies wait until the base is secure; waiting while the base burns is a loss. Combat orders cost zero credits.'
+      : 'Choose the combat mission to win by destroying the enemy base; protect the base from nearby attackers first. Keep a useful active attack; do not oscillate between attack and retreat. When the enemy base is unknown, advance through a supplied frontier. Combat orders cost zero credits.'}${assessment.level ? " " + escalationAdvice(assessment) : ""}`,
   );
   // The guard is reported as structure, not prose: the instruction budget is measured in tokens and
   // test/player-objective.test.mjs pins it. A sentence naming the units does not change any decision
@@ -999,6 +1001,7 @@ export function candidateGroups(api, catalog, snapshot, memory) {
     // is in range: without that income the match is already lost.
     threatening.push(...minerThreats);
   }
+  if (threatening.length) groups.tactics.criteria.wait = "Waiting while visible base threats approach leaves the base burning; choose defend_base now.";
   if (active.length) {
     // A base defence does not recall the scout. The dog is cheap to replace and is the only thing
     // revealing the map, and a conscript already forty tiles away cannot arrive before the attacker
@@ -1115,11 +1118,12 @@ export function candidateGroups(api, catalog, snapshot, memory) {
     if (captureMission) offered.sort((a, b) => Number(guardsObjective(b) && hitsGround(b)) - Number(guardsObjective(a) && hitsGround(a)));
     const unitRange = (u) => Math.max(0, ...[catalog[u.name]?.weapon, catalog[u.name]?.secondary]
       .filter((w) => w && w.ag !== false).map((w) => w.range ?? 0));
-    // Assaults stay on offer while the base is under attack, after defend_base. Gating them on an
-    // unthreatened base meant a match under constant raids never attacked at all:
-    // jev-report-20261008-063613 answered "defend_base" 69 times and never chose an assault, then lost
-    // the grind. The micro layer intercepts base attackers on its own, so the column can push out.
-    if (ready)
+    // Assaults are offered only while the base is unthreatened. jev-report-20261008-063613 answered
+    // "defend_base" 69 times and never attacked, losing the grind -- but the fix for that cannot be
+    // offering an assault next to defend_base while the base is on fire: jev-report-20261010-042809
+    // picked assault_913 over defend_base at 703.9s with 4 visible base threats and lost 10 buildings.
+    // The micro layer intercepts base attackers on its own; when the base is clear the assault returns.
+    if (ready && !threatening.length)
       for (const enemy of offered) {
         // A standoff fortification fires first. Sending dogs or lone infantry at a Prism Tower they
         // cannot reach is a gift (jev-report-20261008-054847 fed E1/ADOG into one). The assault stays
@@ -1870,7 +1874,7 @@ export function maintainBattle(api, catalog, memory, emit) {
 // The model gives each squad an intent; between its turns the intents are kept up here without asking
 // it again: only new or idle members get orders, so units already fighting are not pulled away.
 // Timing: a turn every COMMAND_INTERVAL_TICKS (about 12 game seconds), sooner when something happens.
-export const COMMAND_INTERVAL_TICKS = 180, AUTO_DEFENSE_TICKS = 450, INTENT_REFRESH_TICKS = 45, ARRIVED = 3, GARRISON_RETRY_TICKS = 450, GARRISON_TRIES = 3;
+export const COMMAND_INTERVAL_TICKS = 180, AUTO_DEFENSE_TICKS = 180, INTENT_REFRESH_TICKS = 45, ARRIVED = 3, GARRISON_RETRY_TICKS = 450, GARRISON_TRIES = 3;
 // URGENT_MIN_TICKS: an urgent turn (other than a fresh attack on the base) still waits this long after
 // the last one: a target dying every 45 ticks used to cause 20 requests a game minute.
 // ATTACK_GRACE_TICKS: a raider stepping in and out of the base area is one attack, not many.
@@ -2137,15 +2141,21 @@ export function maintainCommand(api, catalog, memory, emit, force = false) {
     if (ids.length < 2 || cmd.lossReported?.has(sid)) continue;
     if (ids.filter((id) => !alive.has(id)).length * 2 > ids.length) { (cmd.lossReported ??= new Set()).add(sid); urgent("squad_losses"); }
   }
+  // AUTO_DEFENSE_TICKS was 450 (~30s): a raid could burn half the base before the first automatic
+  // defense fired. At 180 (~12s) the executor answers a raid much faster. It still fires once per
+  // attack (see P2-2 / P1-A in commander-review.test.mjs): the lock has a hard limit, after which the
+  // model decides again, and the model is the one that must push out once the base is clear.
   if (attacked && squads.length && !cmd.autoDefended && tick - cmd.attackSince >= AUTO_DEFENSE_TICKS && ![...intents.values()].some((i) => i.action === "defend_base")) {
     const q = [...squads].sort((a, b) => distance(centerOf(a.members), base.tile) - distance(centerOf(b.members), base.tile))[0];
-    // Locked for as long as the attack lasts: an order for this squad from a turn that ignores the
-    // attack is not carried out until the base is clear (see applyOrders).
-    intents.set(q.id, newIntent({ action: "defend_base", reason: "automatic: base under attack with no defend_base order" }, tick, { auto: true, locked: true, lockedUntil: tick + AUTO_LOCK_TICKS }));
-    cmd.autoDefended = true;
-    const note = { kind: "squad", squad: q.id, action: "defend_base", auto: true, accepted: true, tick, result: `自动回防：基地受攻击 ${tick - cmd.attackSince} 拍，模型未安排回防 (automatic defend_base)` };
-    ((memory.lastPlanReport ??= { tick, orders: [] }).auto ??= []).push(note);
-    emit({ kind: "command", tick, auto: [note], results: [], rejected: [], note: "", description: `自动回防：${q.id}（${q.members.length} 个单位）回防基地`, choice: `auto ${q.id} defend_base` });
+    if (q) {
+      // Locked for as long as the attack lasts: an order for this squad from a turn that ignores the
+      // attack is not carried out until the base is clear (see applyOrders).
+      intents.set(q.id, newIntent({ action: "defend_base", reason: "automatic: base under attack with no defend_base order" }, tick, { auto: true, locked: true, lockedUntil: tick + AUTO_LOCK_TICKS }));
+      cmd.autoDefended = true;
+      const note = { kind: "squad", squad: q.id, action: "defend_base", auto: true, accepted: true, tick, result: `自动回防：基地受攻击 ${tick - cmd.attackSince} 拍，模型未安排回防 (automatic defend_base)` };
+      ((memory.lastPlanReport ??= { tick, orders: [] }).auto ??= []).push(note);
+      emit({ kind: "command", tick, auto: [note], results: [], rejected: [], note: "", description: `自动回防：${q.id}（${q.members.length} 个单位）回防基地`, choice: `auto ${q.id} defend_base` });
+    }
   }
   for (const q of squads) {
     const intent = intents.get(q.id);

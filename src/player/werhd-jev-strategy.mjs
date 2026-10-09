@@ -491,9 +491,12 @@ export function investmentGroups(api, catalog, snapshot, memory, groups) {
         : `counter-fire at (${placement.x},${placement.y}), enemy ranges ${reachableThreats.map(e=>currentWeapon(e,catalog).range).join(',') || 'no local target'}`;
       add(dg, item, `${strategy.underPressure ? 'URGENT' : 'PREPARE'}: ${answered}, estimated effectiveness ${Math.round(item.value)}`, Math.min(200, r.cost), placement);
       // Below the floor the first one is not a judgement call: after two waits the executor builds it.
-      // It is still not a reserved capital plan — a peacetime turret must not take the money an
-      // objective (an engineer, a miner) is holding, so only a pressured base reserves for defenses.
-      if (defenseFloor && !floorTagged) { dg.actions[`produce_${item.name}`].auto = 2; floorTagged = true; }
+      // Under attack with a tower that can reach the attackers it is also not a judgement call:
+      // jev-report-20261010-042809 declined the URGENT Prism Cannon at 703.9s (4 threats in range,
+      // 2911 credits on hand) and lost 10 buildings. It is still not a reserved capital plan -- a
+      // peacetime turret must not take the money an objective (an engineer, a miner) is holding, so
+      // only a pressured base reserves for defenses.
+      if ((defenseFloor || strategy.underPressure && reachableThreats.length) && !floorTagged) { dg.actions[`produce_${item.name}`].auto = 2; floorTagged = true; }
       if (strategy.underPressure) defensePlan ??= { name: item.name, cost: r.cost, queue: item.queue };
     }
   }
