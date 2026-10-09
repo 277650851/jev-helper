@@ -106,6 +106,58 @@ export function effectiveness(rule, targets, catalog, api) {
   return samples.reduce((sum,t) => sum + Math.max(0,...weapons.map(w=>weaponEffectiveness(w,[t],catalog,api))),0)/samples.length;
 }
 
+// The 11 armour words in `Verses` index order, and which of them a rule's row is written in: percentages
+// (`Verses=25,...,100`, how the rules files write it) or proportions (`0.25`, `1`, how fixtures write it).
+// A row with a value above 2 can only be percentages.
+const ARMOR_WORDS = ['none', 'flak', 'plate', 'light', 'medium', 'heavy', 'wood', 'steel', 'concrete', 'special_1', 'special_2'];
+export function versesArePercent(w) {
+  const row = w?.versus ?? w?.verses;
+  return Array.isArray(row) && row.some((v) => Number(v) > 2);
+}
+// Can this rule's weapons be used on that unit at all? `effectiveness` averages a value over the target
+// set, which answers "how good is this on average" and not "how much of this enemy can it touch". For
+// choosing what to offer against the enemy that is actually visible, the second question is the one that
+// matters: a ground-only tank has a nonzero damage figure against aircraft and a tank with no anti-air
+// weapon must not be offered as the answer to Kirovs.
+//
+// 0 always means "cannot fire". 1 and 2 are flags only in the percentage form: a proportional table writes
+// full damage as 1, so there it is an ordinary multiplier.
+export function canEngageTarget(rule, target, catalog, api) {
+  const weapons = [rule?.weapon, rule?.secondary].filter((w) => w && w.damage > 0);
+  if (!weapons.length) return false;
+  const isAir = target?.zone === (api.ZoneType?.Air ?? 1) || catalog[target?.name]?.aircraft;
+  return weapons.some((w) => {
+    if (isAir ? !w.aa : w.ag === false) return false;
+    const armor = target?.armor ?? catalog[target?.name]?.armor;
+    const row = w.versus ?? w.verses;
+    if (!Array.isArray(row)) return true;
+    const i = armor === undefined ? -1 : ARMOR_WORDS.indexOf(String(armor).toLowerCase());
+    const v = i < 0 ? undefined : row[i];
+    if (v === undefined || v === null) return true;
+    return versesArePercent(w) ? Number(v) > 2 : Number(v) > 0;
+  });
+}
+// What this rule would actually do against the units that are visible: summed over each of them rather
+// than averaged, so an option that answers the whole force outranks one that answers a corner of it, and
+// an option that can answer nothing scores zero.
+//
+// With NOBODY visible there is nothing to counter, and zero would be wrong in the other direction: the
+// engine still has to pick what to build, and a zero score eliminates every option and freezes the plan
+// ("six vehicles stayed below the attack gate", the very case that motivated the mobilize plan). So the
+// empty case falls back to the generic score against the default infantry/vehicle samples.
+export function counterValue(rule, targets, catalog, api) {
+  if (!rule) return 0;
+  const weapons = [rule.weapon, rule.secondary].filter((w) => w && w.damage > 0);
+  if (!weapons.length) return 0;
+  if (!targets?.length) {
+    const samples = [{ type: api.ObjectType.Infantry }, { type: api.ObjectType.Vehicle }];
+    return samples.reduce((sum, t) => sum + Math.max(0, ...weapons.map((w) => weaponEffectiveness(w, [t], catalog, api))), 0) / samples.length;
+  }
+  return targets.reduce((sum, t) => sum + (canEngageTarget(rule, t, catalog, api)
+    ? Math.max(0, ...weapons.map((w) => weaponEffectiveness(w, [t], catalog, api)))
+    : 0), 0);
+}
+
 export function infantryProfile(rule, api) {
   const infantry = [0,1,2].map(armor=>({type:api.ObjectType.Infantry,armor}));
   const armor = [3,4,5].map(armor=>({type:api.ObjectType.Vehicle,armor}));
@@ -379,7 +431,11 @@ export function investmentGroups(api, catalog, snapshot, memory, groups) {
   let counterPlan;
   if ((standoff.length || mobileDefenseNeeded) && s.harvesters && free(api.QueueType.Vehicles)) {
     const options = mobileOptions
-      .map(a => ({ ...a, value: effectiveness(catalog[a.name], counterTargets, catalog, api) /
+      // Scored against the enemy that is actually visible, summed rather than averaged, and only for the
+      // options that can engage it at all. Previously an average over the target set: with one air target
+      // in the mix every ground unit lost most of its score, and the ordering came out the same for a tank
+      // wave and a conscript wave -- which is the opposite of what a counter planner is for.
+      .map(a => ({ ...a, value: counterValue(catalog[a.name], counterTargets, catalog, api) /
         Math.sqrt(catalog[a.name].cost) * ((catalog[a.name].weapon?.range ?? 0) >= Math.max(...counterTargets.map(e=>currentWeapon(e,catalog).range??0)) ? 1.75 : 1) }))
       .filter(a => a.value > 0).sort((a,b) => b.value-a.value);
     const counter = options[0];
@@ -400,7 +456,9 @@ export function investmentGroups(api, catalog, snapshot, memory, groups) {
     const item=mobileOptions.map(i=>{
       const rule=catalog[i.name],range=Math.max(0,...[rule.weapon,rule.secondary]
         .filter(w=>w&&w.ag!==false&&weaponEffectiveness(w,targets,catalog,api)>0).map(w=>w.range??0));
-      return {...i,value:effectiveness(rule,targets,catalog,api)/Math.sqrt(i.cost)*(siege&&range>enemyRange?1.75:1)};
+      // Same reasoning as the counter plan above: summed over the visible enemy, so what the model is
+      // offered to mobilize with follows the force it will meet.
+      return {...i,value:counterValue(rule,targets,catalog,api)/Math.sqrt(i.cost)*(siege&&range>enemyRange?1.75:1)};
     })
       .filter(i=>i.value>0).sort((a,b)=>b.value-a.value)[0];
     if(item) {
