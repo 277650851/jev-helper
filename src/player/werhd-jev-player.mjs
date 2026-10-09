@@ -161,8 +161,13 @@ export const moneyIdle = (credits, cheapestCombatCost) =>
 export const CAPTURE_PUSH_UNITS = 6, CAPTURE_STAGE_TILES = 4;
 // How far from the base a scout has to be before a base defence stops calling it back, in tiles.
 export const SCOUT_RECALL_TILES = 18;
-// Combat infantry already at home before one more is withheld in favour of the scout.
-export const SCOUT_BLOCKS_FOOT = 6;
+// Combat infantry already at home before the scout takes the barracks queue. Two is a guard that stops
+// the first raid from walking in; past that the dog goes out instead. This is deliberately aggressive:
+// without vision the enemy base is never found, no objective is ever captured, and every later decision
+// is made blind, so a base trading vision for a seventh conscript has bought nothing it can use. The
+// order it fixes is jev-report-20261010-012710, which built eight E1 between ticks 1723 and 4115 and its
+// first dog at 6770 -- three game minutes of the match fought with no eyes.
+export const SCOUT_BLOCKS_FOOT = 2;
 // How old an answer may be before it is thrown away, in game ticks. The starting point only: the
 // budget adapts to the latency actually observed (see attachJevPlayer), because the same number of
 // ticks is 3 s on a fast game and 12 s on a slow one.
