@@ -408,3 +408,40 @@ api.production.queues=idleQueues;own.push(u(87,'TANK',7));
 snap=collectState(api,catalog);groups=candidateGroups(api,catalog,snap,{});
 assert.ok(groups.vehicles.actions.produce_HELI,'airborne options remain available when the ground-force prerequisite is satisfied');
 console.log('Ground queue: airborne vehicles cannot fill or indefinitely delay the required ground force');
+
+// The defence question is assembled by two layers: special.mjs offers walls and strongpoints, then
+// strategy.mjs adds counter-weapons. strategy.mjs used to do that with a wholesale
+// `groups.defenses = {...}` reassignment, which silently deleted everything the first layer had put
+// there -- the walls were unreachable and no test noticed, because each module's own test calls only
+// that module. This drives the real pipeline and requires both layers' options to survive.
+{
+  const dcatalog = {
+    YARD: { yard: true, factory: 'BuildingType' }, POWER: { power: 200, cost: 800 },
+    REF: { refinery: true }, MINER: { harvester: true }, BARRACKS: { factory: 'InfantryType' },
+    FACTORY: { factory: 'UnitType' }, TANK: { category: 'AFV', cost: 750, weapon: { damage: 65, range: 5, ag: true } },
+    PILL: { isBaseDefense: true, cost: 500, label: 'Pillbox', weapon: { damage: 15, range: 5, ag: true } },
+    WALL: { wall: true, cost: 100, label: 'Wall' },
+  };
+  const du = (id, name, type, x = 30, y = 30) => ({ id, name, type, tile: { rx: x, ry: y }, hitPoints: 100, maxHitPoints: 100, isIdle: true, primaryWeapon: dcatalog[name]?.weapon });
+  const down = [du(1,'YARD',2),du(2,'POWER',2,26,30),du(3,'REF',2,30,35),du(4,'MINER',7),du(5,'MINER',7),du(6,'BARRACKS',2),du(7,'FACTORY',2)];
+  const dapi = {
+    units: relation => relation === 'self' ? down : [],
+    me: () => ({ credits: 10000, power: { total: 200, drain: 50 } }), tick: () => 4000, time: () => 100,
+    ObjectType: { Building: 2, Infantry: 3, Vehicle: 7, Aircraft: 1 },
+    QueueType: { Structures: 0, Armory: 1, Infantry: 2, Vehicles: 3, Aircrafts: 4, Ships: 5 },
+    OrderType: { DeploySelected: 10 }, ArmorType: { 5: 'Heavy' },
+    map: { size: () => ({ width: 60, height: 60 }), visible: () => true, tile: (x,y) => x >= 0 && y >= 0 && x < 60 && y < 60 ? { rx:x, ry:y, landType:0 } : undefined },
+    canPlace: (name,x,y) => x >= 20 && x <= 39 && y >= 20 && y <= 39 && !down.some(u=>Math.hypot(u.tile.rx-x,u.tile.ry-y)<2),
+    order: () => {}, crates: () => [],
+    production: { queues: () => Array.from({length:6},(_,type)=>({type,size:0,maxSize:99,items:[]})),
+      available: q => (q === 1 ? ['PILL','WALL'] : q === 3 ? ['TANK'] : []).map(name => ({name, type: q === 1 ? 2 : 7})) },
+  };
+  const dsnap = collectState(dapi, dcatalog);
+  const dgroups = candidateGroups(dapi, dcatalog, dsnap, {});
+  assert.ok(dgroups.defenses.actions.produce_WALL,
+    'the special layer offers walls and the strategy layer must not delete them');
+  assert.ok(dgroups.defenses.actions.produce_PILL, 'the strategy layer still adds its counter-weapon');
+  const dchoices = Object.keys(dgroups.defenses.actions).filter(k => k !== 'wait');
+  assert.ok(dchoices.length <= 5, `one multiple-choice question must stay small; got ${dchoices.join(', ')}`);
+}
+

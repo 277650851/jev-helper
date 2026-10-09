@@ -9,6 +9,10 @@ export const ATTACK_AA_ESCORTS = 2;
 export const MIN_BASE_DEFENSES = 3;
 // Turrets are laid out in this many even sectors around the base, i.e. a triangle for three guns.
 export const DEFENSE_SECTORS = 3;
+// How many real defence choices the question may offer, walls included. It used to be three
+// counter-weapons with the special layer's wall options silently deleted; now that they survive, the
+// cap has to cover the whole list, because one multiple-choice question is what the local model reads.
+export const DEFENSE_OPTION_CAP = 5;
 
 // Planning and the model share this eligibility set, even before starting cash arrives.
 export function vehicleOptions(api, catalog, state) {
@@ -262,8 +266,19 @@ export function investmentGroups(api, catalog, snapshot, memory, groups) {
     g.criteria[key] = `${purpose}: ${r.label}; cost ${r.cost}, technology level ${r.techLevel ?? 0}, power ${r.power ?? 0}, weapon range ${r.weapon?.range ?? 0}.`;
     g.actions[key] = { type: 'produce', name: item.name, queue: item.queue, cost: r.cost, minCredits, placement };
   };
-  // Replace generic wall-first choices with actual counter-weapons and a firing position.
-  const dg = groups.defenses = { instructions: 'Counter attackers only with static weapons that can reach them from the supplied legal site. Compare enemy and friendly range: a shorter-range tower is not a counter to a standoff attacker. Use mobile interception or technology when no static counter can reach. Reserve power; walls do not solve a range disadvantage.', criteria: { wait: 'Wait when existing defenses cover the threat or when no effective defense can reach it.' }, actions: { wait: { type: 'wait' } } };
+  // Add counter-weapons and a firing position to the defence question. This used to REPLACE the
+  // group outright (`groups.defenses = {…}`), which silently threw away everything the special layer
+  // had put there a moment earlier -- `specialGroups` runs first and offers walls and strongpoints
+  // through the same group id. The intent was only to replace generic wall-first *choices*, but a
+  // wholesale reassignment also discarded that layer's instructions and criteria, so those options
+  // could never reach the model. Attach to the existing group and add to it instead.
+  const existingDefenses = groups.defenses;
+  const dg = groups.defenses = existingDefenses ?? { instructions: '', criteria: {}, actions: {} };
+  // The special layer's text stays: it carries the wall/exits caveat this one does not repeat.
+  dg.instructions = 'Counter attackers only with static weapons that can reach them from the supplied legal site. Compare enemy and friendly range: a shorter-range tower is not a counter to a standoff attacker. Use mobile interception or technology when no static counter can reach. Reserve power; walls do not solve a range disadvantage.'
+    + (existingDefenses?.instructions ? ` ${existingDefenses.instructions}` : '');
+  dg.criteria.wait ??= 'Wait when existing defenses cover the threat or when no effective defense can reach it.';
+  dg.actions.wait ??= { type: 'wait' };
   const defenseUnits = buildings.filter(u => catalog[u.name]?.isBaseDefense && !catalog[u.name]?.wall);
   // Once a barracks stands, the base holds a floor of defences whether or not it is under attack:
   // jev-report-20261008-054847 answered wait 82 of 83 defensive turns and built one pillbox, so the
@@ -282,7 +297,11 @@ export function investmentGroups(api, catalog, snapshot, memory, groups) {
       ? defenseTargets.some(e => canFireAt(api, catalog, u, e))
       : effectiveness(catalog[u.name], [], catalog, api) > 0).length;
     if (coverage < targetDefenses && (defenseUnits.length < 8 || strategy.underPressure && coverage < 2)) for (const item of options.sort((a, b) => b.value / Math.sqrt(catalog[b.name].cost) - a.value / Math.sqrt(catalog[a.name].cost))) {
-      if (Object.keys(dg.actions).length >= 3) break;
+      // Cap the whole question, not just this layer's share: the special layer's wall and strongpoint
+      // options are already in the group, and the local model reads one multiple-choice list, so the
+      // total number of real choices is what has to stay small. Counter-weapons are added first, so a
+      // crowded group drops the walls rather than the guns.
+      if (Object.keys(dg.actions).filter(k => k !== 'wait').length >= DEFENSE_OPTION_CAP) break;
       if (item.value <= 0) continue;
       const r = catalog[item.name];
       if (r.power < 0 && (s.economy?.powerMargin ?? 0) < -r.power) continue;
@@ -299,7 +318,8 @@ export function investmentGroups(api, catalog, snapshot, memory, groups) {
       // Below the floor the first one is not a judgement call: after two waits the executor builds it.
       // It is still not a reserved capital plan — a peacetime turret must not take the money an
       // objective (an engineer, a miner) is holding, so only a pressured base reserves for defenses.
-      if (defenseFloor && !floorTagged) { dg.actions[`produce_${item.name}`].auto = 2; floorTagged = true; }
+      // An option the special layer already tagged (it carries its own takeover threshold) is left alone.
+      if (defenseFloor && !floorTagged && !Number.isFinite(dg.actions[`produce_${item.name}`]?.auto)) { dg.actions[`produce_${item.name}`].auto = 2; floorTagged = true; }
       if (strategy.underPressure) defensePlan ??= { name: item.name, cost: r.cost, queue: item.queue };
     }
   }
