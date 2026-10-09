@@ -212,6 +212,22 @@ export function canEngageTarget(rule, target, catalog, api) {
     return versesArePercent(w) ? v > 2 : v > 0;
   });
 }
+// Can this tower answer anything the enemy is actually showing? A ground-only gun offered against an air
+// raid is not a choice, it is a decoy: the model may spend on it and it will never fire at what is coming.
+// Both defence layers used to add every affordable tower regardless, and their range gates only compared
+// against attackers AT the base -- which is nobody in peacetime.
+//
+// With nobody visible the question cannot be answered from the enemy, so the answer is yes and the caller
+// falls back to its own generic scoring.
+export function canAnswerVisible(rule, enemies, catalog, api) {
+  if (!enemies?.length) return true;
+  // Without a weapon there is nothing to judge, and a stub rule (a fixture, or a build whose rules the API
+  // did not describe) must not be filtered as a decoy. Only a rule that HAS a weapon and still cannot reach
+  // anything the enemy is showing is excluded.
+  const weapons = [rule?.weapon, rule?.secondary].filter((w) => w && w.damage > 0);
+  if (!weapons.length) return true;
+  return counterValue(rule, enemies, catalog, api) > 0;
+}
 // What this rule would actually do against the units that are visible: summed over each of them rather
 // than averaged, so an option that answers the whole force outranks one that answers a corner of it, and
 // an option that can answer nothing scores zero.
@@ -452,6 +468,11 @@ export function investmentGroups(api, catalog, snapshot, memory, groups) {
       // crowded group drops the walls rather than the guns.
       if (Object.keys(dg.actions).filter(k => k !== 'wait').length >= DEFENSE_OPTION_CAP) break;
       if (item.value <= 0) continue;
+      // A tower that cannot engage the visible enemy at all is not an option, it is a decoy: offering it
+      // invites the model to spend on something that will never fire at what is coming. The gates below
+      // compare only against attackers AT the base, and those are empty in peacetime -- so a ground-only
+      // pillbox used to be offered as the answer to an air raid it cannot touch.
+      if (enemies.length && counterValue(catalog[item.name], enemies, catalog, api) <= 0) continue;
       const r = catalog[item.name];
       if (r.power < 0 && (s.economy?.powerMargin ?? 0) < -r.power) continue;
       // A nearby short-range escort must not disguise an uncovered siege threat.
@@ -475,9 +496,14 @@ export function investmentGroups(api, catalog, snapshot, memory, groups) {
     }
   }
   // Without a threat this question was answered "wait" every time and cost about a quarter of the
-  // tokens of each turn, so it is only asked while the base is under pressure — or while the base is
+  // tokens of each turn, so it is only asked while the base is under pressure -- or while the base is
   // still below its defensive floor and has a barracks to build from.
-  if (!strategy.underPressure && !defenseFloor) { delete groups.defenses; defensePlan = undefined; }
+  //
+  // The one exception is the admission added above: when nothing can be offered, that note IS the answer,
+  // and deleting the group would throw it away and leave the model reading a silence as "nothing to worry
+  // about".
+  const hasOptions = Object.keys(dg.actions).some((k) => k !== 'wait');
+  if (!strategy.underPressure && !defenseFloor && !hasOptions) { delete groups.defenses; defensePlan = undefined; }
   const cg = group('construction', 'Restore core infrastructure, then unlock higher technology. During suppression, build a firing line and develop a counter instead of spending forever on basic tanks. Aircraft factories and higher-tech buildings unlock new options. A repair dock is not an airfield.');
   // Keep the technology options this layer rebuilds from rule categories, plus the ones the special
   // layer and the opening plan offer: power, refineries, walls/strongpoints and air support. The filter
@@ -622,6 +648,29 @@ export function investmentGroups(api, catalog, snapshot, memory, groups) {
       || r.refinery && !s.economy.refineries
       || r.factory === 'UnitType' && !r.naval && !s.economy.factories);
     if (!essential && s.uncommittedCredits - a.cost < strategy.reserve) { delete g.actions[key]; delete g.criteria[key]; }
+  }
+  // Now that the shared wallet has had its say, say so if the defence question was emptied. Placing this
+  // BEFORE the reserve filter was wrong and looked right: the tower was still present at that point and
+  // was removed a moment later for cost, so the check never fired and the group was left as a bare `wait`
+  // -- which the model reads as "nothing to defend against". That is the opposite of the truth when the
+  // only tower that can answer what is visible is one the base cannot pay for.
+  {
+    const dg = groups.defenses;
+    if (dg && !Object.keys(dg.actions).some((k) => k !== 'wait') && enemies.length && !/No available defence|not affordable yet/.test(dg.instructions)) {
+      const towers = api.production.available(api.QueueType.Armory).filter((i) => catalog[i.name]?.isBaseDefense && !catalog[i.name]?.wall);
+      if (towers.length) {
+        const usable = towers.filter((i) => counterValue(catalog[i.name], enemies, catalog, api) > 0);
+        const label = (i) => catalog[i.name]?.label ?? i.name;
+        // Two different truths, which the model acts on differently: either nothing on the menu can engage
+        // what is visible (so more static guns will never help), or something can but the base cannot pay
+        // for it yet (so holding the funds is the answer).
+        const note = !usable.length
+          ? ` None of the available defences can engage what is visible (${towers.map(label).join(', ')} cannot reach it). Do not wait for these towers: the answer is technology or mobile anti-air, not another static gun.`
+          : ` The defence that answers what is visible is not affordable yet (${usable.map((i) => `${label(i)} costs ${catalog[i.name]?.cost}`).join(', ')}; the base holds ${s.self.credits}). Hold the funds for it rather than buying a tower that cannot reach the threat.`;
+        dg.instructions += note;
+        dg.criteria.wait = `WAIT FOR NOW:${note} Choose wait, and let the production questions answer the threat instead.`;
+      }
+    }
   }
   // Explain upgraded unit advantages to the model using current target armor, range and rules.
   for (const id of ['vehicles', 'infantry', 'aircraft', 'navy']) {

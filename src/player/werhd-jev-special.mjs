@@ -1,4 +1,4 @@
-import { isAirSupport, effectiveness } from './werhd-jev-strategy.mjs';
+import { isAirSupport, effectiveness, canAnswerVisible } from './werhd-jev-strategy.mjs';
 import { isCapturable } from './werhd-jev-catalog.mjs';
 export const ATTACK_STUCK_TICKS = 2700, CAPTURE_RESENDS = 3, SIEGE_RANGE = 8, BASE_GARRISON_SPARE = 8;
 // Leaving a building once its job is done: no armed enemy within RELEASE_RADIUS for this long.
@@ -317,6 +317,10 @@ export function specialGroups(api, catalog, snapshot, memory, groups) {
     for (const item of api.production.available(api.QueueType.Armory)) {
       const r = catalog[item.name];
       if (!r || !afford(r, 1000) || existing.filter((u) => u.name === item.name).length >= (r.wall ? 4 : 2)) continue;
+      // A tower that cannot engage what the enemy is showing is not a choice. The strategy layer applies the
+      // same test; this layer runs first and used to add everything affordable, so a pillbox reached the model
+      // as the answer to an air raid it cannot touch. Walls are exempt: they screen movement rather than shoot.
+      if (r.isBaseDefense && !r.wall && !canAnswerVisible(r, enemies, catalog, api)) continue;
       if (r.isBaseDefense || r.wall)
         addProduction(defenses, { ...item, queue: api.QueueType.Armory }, r.wall ? 'Build a wall segment to screen a vulnerable approach, leaving a passage' : 'Build a defensive strongpoint');
     }

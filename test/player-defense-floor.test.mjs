@@ -89,3 +89,46 @@ const groupsFor = (scenario) => {
 }
 console.log('Defence floor: engine-owned only when it is the group\'s single real option, and only while a barracks stands');
 console.log('Defence ranking: the tower choice follows the visible enemy even before it reaches the base');
+
+// 5. When the defence question ends up with nothing to offer, it has to SAY WHY. Left as a bare `wait` --
+//    and, before this, silently deleted -- the model reads it as "there is nothing to defend against",
+//    which is the opposite of the truth when the only tower that answers the visible enemy is one the base
+//    cannot pay for. The note has to survive the shared-wallet filter, which is what empties the group.
+{
+  const kirovs = Array.from({ length: 3 }, (_, i) => ({ id: 900 + i, name: 'ZEP', kind: 'ZEP', type: 1, zone: 1, armor: 'light', tile: { rx: 44, ry: 44 } }));
+  const groupsFor = (visibleEnemies, credits) => {
+    const state = { side: 'allied', ...SCENARIOS.defense_floor(), visibleEnemies, credits };
+    const api = replayApi(state, { ...CATALOG });
+    const catalog = { ...CATALOG };
+    const snap = collectState(api, catalog);
+    return { groups: candidateGroups(api, catalog, snap, {}), snap };
+  };
+
+  // 850 credits cannot buy the Patriot (1000) that answers aircraft, and the pillbox cannot reach them.
+  const poor = groupsFor(kirovs, 850);
+  const offered = Object.keys(poor.groups.defenses?.actions ?? {}).filter((k) => k !== 'wait');
+  assert.deepEqual(offered, [], 'the only answer is unaffordable, so nothing is offered');
+  assert.match(poor.groups.defenses.instructions, /not affordable yet/, 'and the question says so instead of staying silent');
+  assert.match(poor.groups.defenses.instructions, /Patriot/i, 'naming the tower that would answer');
+  assert.match(poor.groups.defenses.criteria.wait, /WAIT FOR NOW/, 'the wait option carries the reason too');
+
+  // The same state with the funds available offers the Patriot rather than an admission.
+  const rich = groupsFor(kirovs, 4000);
+  assert.ok(Object.keys(rich.groups.defenses.actions).some((k) => /NASAM|Patriot/i.test(k)), 'with the funds, the anti-air tower is offered');
+
+  // With no enemy visible there is nothing to admit.
+  const quiet = groupsFor([], 850);
+  assert.doesNotMatch(quiet.groups.defenses?.instructions ?? '', /not affordable yet|No available defence/, 'no enemy, no admission');
+
+  // When only ground towers exist and the enemy is in the air, the truth is the other one: more static guns
+  // will never answer it, so the note must say that instead of suggesting the base save up.
+  const groundOnly = { ...CATALOG };
+  const g2 = (() => {
+    const api = replayApi({ side: 'allied', ...SCENARIOS.defense_floor(), visibleEnemies: kirovs, credits: 4000 }, { ...CATALOG });
+    api.production.available = (q) => (q === api.QueueType.Armory ? [{ name: 'GAPILL', type: 2 }] : []);
+    const snap = collectState(api, groundOnly);
+    return candidateGroups(api, groundOnly, snap, {});
+  })();
+  assert.deepEqual(Object.keys(g2.defenses?.actions ?? {}).filter((k) => k !== 'wait'), [], 'no ground tower can reach aircraft');
+  assert.match(g2.defenses.instructions, /cannot reach it|cannot engage/i, 'and it says the towers cannot reach, rather than to save up');
+}
