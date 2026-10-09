@@ -1421,19 +1421,40 @@ export function executeCandidate(api, action, catalog) {
   if (action.type === "mission") {
     if (action.mode === "defend") {
       const own = api.units('self');
-      const threats = baseThreats(api, catalog, own.filter(u=>u.type===api.ObjectType.Building), api.units('enemy'),
-        own.filter(u=>catalog[u.name]?.harvester));
+      const buildings = own.filter(u=>u.type===api.ObjectType.Building);
+      const enemyAll = api.units('enemy');
+      let threats = baseThreats(api, catalog, buildings, enemyAll, own.filter(u=>catalog[u.name]?.harvester));
+      // jev-report-20261010-060543: defend_base was rejected with base_threat_changed at 7059 while
+      // the raid had already been grinding the miners since ~6572 and the first base contact came at
+      // ~3087. baseThreats only counts enemies that can hurt core buildings, which is the right bar
+      // for "is the base dying" but too strict for "should the garrison go defend": an armed enemy
+      // within 14 tiles of a core building is already a reason to hold the base perimeter. Without
+      // this, the model's defend order bounces off and the units just stand there.
+      if (!threats.length) {
+        const core = buildings.filter(b => !catalog[b.name]?.wall && !catalog[b.name]?.tickTank && !b.garrison);
+        threats = enemyAll.filter(e => e.primaryWeapon && core.some(b => distance(e.tile, b.tile) < 14));
+      }
       threats.sort((a,b)=>Number(b.id===action.targetId)-Number(a.id===action.targetId));
       if (!threats.length) return { accepted: false, reason: 'base_threat_changed' };
+      // The ids in the order may be dead (060543: unit_gone x3); fall back to any combat unit so a
+      // defend order is never dropped just because the previous garrison was wiped out.
+      let defenders = action.ids.map(id=>own.find(u=>u.id===id)).filter(Boolean);
+      if (!defenders.length) {
+        const any = own.filter(u=> u.type!==api.ObjectType.Building && !catalog[u.name]?.harvester &&
+          !catalog[u.name]?.aircraft && !catalog[u.name]?.naval && u.primaryWeapon);
+        defenders = any.slice(0, Math.max(3, action.ids.length));
+      }
       const ids = [], undeployIds = [];
-      for (const id of action.ids) {
-        const u = own.find(u=>u.id===id);
-        const compatible = threats.filter(e=>effectiveness(catalog[u.name],[e],catalog,api)>0);
-        const target = compatible.find(e=>canFireAt(api,catalog,u,e)) ?? compatible[0];
-        if (!target) continue;
-        ids.push(id);
-        if (u.isDeployed && !threats.some(e=>canFireAt(api,catalog,u,e))) undeployIds.push(id);
-        else api.attack([id],target.id);
+      // Focus fire: every defender shoots the same primary target instead of each picking its own
+      // enemy (060543: the base defense trickled out one unit at a time and got picked off).
+      // Units that cannot reach it yet still attack: the game walks them in, like the old
+      // compatible[0] fallback did.
+      const focus = threats.find(e => defenders.some(u=>effectiveness(catalog[u.name],[e],catalog,api)>0 && canFireAt(api,catalog,u,e))) ?? threats[0];
+      for (const u of defenders) {
+        if (u.isDeployed && !threats.some(e=>canFireAt(api,catalog,u,e))) { undeployIds.push(u.id); continue; }
+        if (!(effectiveness(catalog[u.name],[focus],catalog,api)>0)) continue;
+        ids.push(u.id);
+        api.attack([u.id], focus.id);
       }
       if (undeployIds.length) api.deploy(undeployIds);
       return { accepted: ids.length > 0, ids, undeployIds, reason: ids.length ? undefined : 'no_compatible_defender' };
@@ -1868,7 +1889,10 @@ export function maintainBattle(api, catalog, memory, emit) {
       if (!nearThreat) continue;
       const safe = own.find((b) => catalog[b.name]?.yard) ?? own.find((b) => b.type === api.ObjectType.Building);
       if (!safe) continue;
-      if (tick - (memory.minerEscape?.get(miner.id) ?? -Infinity) < 90) continue;
+      // Cooldown between escapes: 060543 showed 90+ miner events in one match, a gather/retreat
+      // seesaw while a raider patrolled near the field. 240 ticks (~16s) is long enough that the
+      // miner only abandons the field when the threat is persistent, not for every passing enemy.
+      if (tick - (memory.minerEscape?.get(miner.id) ?? -Infinity) < 240) continue;
       api.move([miner.id], safe.tile.rx, safe.tile.ry);
       memory.minerEscape ??= new Map();
       memory.minerEscape.set(miner.id, tick);
@@ -2549,7 +2573,11 @@ export async function attachJevPlayer(api, options = {}) {
     if (status.running) microTimer = setTimeout(micro, 150);
   };
   const decide = async () => {
-    if (!status.running) return;
+    // In-flight guard: the tick wake path (runDue) already checks busy, but the timer path schedules
+    // loop() directly, so two decide() calls can enter concurrently while the tick gate
+    // (tick === lastTick) is not atomic — that doubled a produce order in player-lifecycle
+    // (calls had ['produce','TANK'] twice). One request out at a time is the contract.
+    if (!status.running || status.busy) return;
     lastDecideAt = performance.now();
     try {
       const tick = api.tick();
@@ -2697,7 +2725,8 @@ export async function attachJevPlayer(api, options = {}) {
   // Commander turn: the first at once, then every COMMAND_INTERVAL_TICKS or sooner when maintainCommand
   // flagged something urgent; never while a request is out (status.busy keeps runDue away).
   const command = async () => {
-    if (!status.running) return;
+    // Same in-flight guard as decide: never while a request is out.
+    if (!status.running || status.busy) return;
     lastDecideAt = performance.now();
     try {
       const tick = api.tick(), cmd = memory.command ??= {};

@@ -341,14 +341,17 @@ assert.deepEqual(calls, [["produce", "TANK"]], "stale snapshots must not issue c
   let n = 0;
   calls.length = 0;
   own = [ { id: 1, name: 'TANK', type: 7, tile: { rx: 10, ry: 10 }, hitPoints: 100, maxHitPoints: 100, primaryWeapon: { damage: 50, range: 5 } } ];
+  // Resolve on the accepted action event, not a 15ms poll: the poll let one more decide() run and
+  // produce a second TANK before stop(), which made the calls assertion at the end of the file flaky.
+  let acceptedResolve;
+  const settled = new Promise(resolve => { acceptedResolve = resolve; });
   const player = await attachJevPlayer(api, {
     catalog, intervalMs: 10, disableMicro: true,
     // Every reply is ~244 ticks old, exactly as in the report: the first is discarded, and the budget
     // the rejection reports must then be wide enough for the next one to be accepted.
     requestDecision: async () => { const age = ages[Math.min(n++, ages.length - 1)]; tick += age; return { answers: { construction: { choice: 'produce_TANK' } } }; },
-    onEvent: e => { events.push(e); if (e.kind === 'stale') tick += 1; },
+    onEvent: e => { events.push(e); if (e.kind === 'stale') tick += 1; if ((e.kind === 'action' && e.accepted) || events.length > 6) acceptedResolve(); },
   });
-  const settled = new Promise(resolve => { const check = () => (player.status.accepted > 0 || events.length > 6) ? resolve() : setTimeout(check, 15); check(); });
   await settled;
   player.stop('manual');
   const stale = events.filter(e => e.kind === 'stale');
