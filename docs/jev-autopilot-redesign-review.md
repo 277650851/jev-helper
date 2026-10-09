@@ -54,6 +54,7 @@
 | `a1b752b` | 反制覆盖步兵与防御组；修正威胁评估里 `effectiveness` 规则/目标颠倒 |
 | `342ef97` | 反制简报与引擎选择共用同一评分（`counterScore` 委托 `counterValue`） |
 | `10a3604` | 为 `effectiveness` 的语义加测试（参数顺序、平均与求和、拒绝与稀释） |
+| `d1b174b` | **修复 `Verses` 读取错误（F2）**：两种形状都读；溅射上移到 `counterValue`（F4） |
 
 **核实后判定不可达、因此不改**：S5（矿车目标两套默认值）、S14（矿车选项被同轮清理删掉）——
 两条的详细推翻过程写在各节里，留着是为了避免下一个人按「高严重度缺陷」去改。
@@ -308,6 +309,54 @@
 平均与求和（`effectiveness` 与兵力规模无关、`counterValue` 随规模放大）、
 以及「不能交战的目标」对前者只是稀释、对后者是拒绝——后者正是地面武器对空时
 「平均值仍给出健康数字」的原因。
+
+---
+
+## 0.13 独立审计：一次严重的读取错误（F2），以及审计本身的价值
+
+§0.12 的审计是我自己做的。本轮另派了一个独立子代理，对同一批调用点做穷尽核对——
+它带回了**我自己没发现的严重缺陷**，证明这一步值得做。
+
+### F2（严重）：`Verses` 的读取对真实规则完全失效
+
+`canEngageTarget` 与 `versesArePercent` 写成 `const row = w.versus ?? w.verses` 并**要求
+`Array.isArray(row)`**。但：
+
+- API 类型声明 `versus: Record<number, number>`——**对象**（`werhd-player-api.d.ts:260`）；
+- 目录里 `verses` 才是数组（`catalog.mjs:13` 的 `Object.assign([], w.versus)`），而 `versus`
+  经展开仍然留在对象上。
+
+于是真实规则下读到的永远是那个**对象**，`Array.isArray` 为假，被当作「没有表格」——
+**`canEngageTarget` 对所有通过 aa/ag 闸门的目标都返回 `true`，`versesArePercent` 恒为假。**
+前几轮辛苦建立的「不能交战的记 0」在实战里几乎完全失效。
+
+`weaponEffectiveness` 一直是对的（它优先 `verses`），所以这是我**自己新代码引入的读取错误**——
+而**夹具无法发现它**：测试只传数组或只传 `verses`，于是永远走那条能工作的分支。
+
+修法：抽出 `versesRow`/`verseAt` 一处共享读取，两种形状都支持、都按索引取值；
+`canEngageTarget` 同时接受 `armor` **是索引**的情形（真实状态摘要带数字索引，
+经词表解析会 miss 并再次被读成「无表格」而放行）。新增测试用**生产的真实形状**验证。
+
+### F4：溅射项在它唯一的目标路径上是空操作
+
+我把溅射乘在 `weaponEffectiveness` 里，而 `counterValue`/`effectiveness` 都是**逐个目标**
+调用它（单元素列表），于是 `splashReach` 恒为 1——功能静默失效。
+改为把溅射上移到 `counterValue`（那里握着完整目标列表），`weaponEffectiveness` 恢复为纯粹的单目标分。
+
+### 审计给出的其余发现（未修，按价值排序）
+
+- **F1（高，影响瞄准决策）**：`player.mjs` 有六处用 `effectiveness(rule, [target]) > 0` 作
+  「能否打它」的谓词。参数顺序正确，但 `effectiveness` 会**同时扫两个武器**、忽略姿态，
+  而 `activeWeapons` 对可部署单位只给一个槽位。实证：`[GGI]` 移动时 `Primary=GuardianPara`（无对空）、
+  部署后 `Secondary=GuardianMissile`（有对空），于是移动中的 Guardian GI 会被判定为能打飞机。
+  仓里 `mobileAntiAirCount` 与 `hurts`/`canFireAt` 已经用 `activeWeapons` 做对了这件事。
+- **F3**：`special.mjs:184` 是最后一处仍用 `effectiveness` 排名的选项排序（IFV 载谁）。
+- **F5**：`strategy.mjs:568` 打印的「estimated effectiveness」用全图敌人，而该处选择用
+  `counterValue`——正是我自己写下的「与选择矛盾的简报比没有简报更糟」。
+- **F6**：`counter.mjs` 遗留未使用的 `effectiveness` 导入；两处 `versesArePercent` 副本。
+
+**结论**：独立审计抓到了作者（我）看不见的错误，因为它不受「我刚写的代码应该是对的」这一预设影响。
+这类「静默返回合理数字」的缺陷，正是最需要外部核对的。
 
 ---
 
