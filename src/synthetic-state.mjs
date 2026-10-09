@@ -156,6 +156,18 @@ export const SCENARIOS = {
     ],
     queues: [],
   }),
+  // A barracks stands but the base is below its defensive floor, with no threat in sight and only the
+  // cheapest tower affordable -- so the defence question is reduced to a single real option. That is the
+  // situation two real matches refused 11 times out of 11 and 16 out of 16, and the one where the floor is
+  // meant to stop being a question at all. An infantry-only base, which is exactly where a bare base has
+  // no other way to hold.
+  defense_floor: () => ({
+    tick: 4000, gameSeconds: 266, credits: 850,
+    power: { total: 300, drain: 25 }, harvesters: 2, base: { x: 20, y: 20 },
+    inventory: stock([['GACNST', 1], ['GAPOWR', 2], ['GAREFN', 1], ['GAPILE', 1]]),
+    army: [u(11, 'CMIN', TYPE.vehicle, 26, 24), u(12, 'CMIN', TYPE.vehicle, 27, 25), u(20, 'E1', TYPE.infantry, 24, 28)],
+    visibleEnemies: [], queues: [],
+  }),
   // Money idle with production available and no force at all: the case the money-idle takeover exists for.
   idle_money: () => ({
     tick: 9000, gameSeconds: 600, credits: 12000,

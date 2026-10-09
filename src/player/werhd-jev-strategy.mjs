@@ -315,11 +315,13 @@ export function investmentGroups(api, catalog, snapshot, memory, groups) {
       const placement = chooseBuildingSite(api, catalog, item.name, units, memory, 200, reachableThreats);
       if (!placement || s.self.credits < Math.min(200, r.cost)) continue;
       add(dg, item, `${strategy.underPressure ? 'URGENT' : 'PREPARE'}: counter-fire at (${placement.x},${placement.y}), estimated effectiveness ${Math.round(item.value)}; enemy ranges ${reachableThreats.map(e=>currentWeapon(e,catalog).range).join(',') || 'no local target'}`, Math.min(200, r.cost), placement);
-      // Below the floor the first one is not a judgement call: after two waits the executor builds it.
-      // It is still not a reserved capital plan — a peacetime turret must not take the money an
-      // objective (an engineer, a miner) is holding, so only a pressured base reserves for defenses.
-      // An option the special layer already tagged (it carries its own takeover threshold) is left alone.
-      if (defenseFloor && !floorTagged && !Number.isFinite(dg.actions[`produce_${item.name}`]?.auto)) { dg.actions[`produce_${item.name}`].auto = 2; floorTagged = true; }
+      // Below the floor the first one is not a judgement call: the base has a barracks, it is short of the
+      // minimum defences, and this tower is affordable -- so the engine builds it rather than asking. It
+      // used to be `auto: 2`, i.e. ask, be refused, ask, be refused, then build anyway; two real matches
+      // refused the only offered defence 11 times out of 11 and 16 out of 16, which is the same story the
+      // money-idle path told. The floor is bounded by MIN_BASE_DEFENSES, so this cannot spend without end.
+      // An option another layer already owns is left alone -- it carries its own takeover rule.
+      if (defenseFloor && !floorTagged && dg.actions[`produce_${item.name}`]?.engineOwned !== true) { dg.actions[`produce_${item.name}`].engineOwned = true; floorTagged = true; }
       if (strategy.underPressure) defensePlan ??= { name: item.name, cost: r.cost, queue: item.queue };
     }
   }
