@@ -597,8 +597,14 @@ export function candidateGroups(api, catalog, snapshot, memory) {
     // The wing operationalGoals targets. GAHPAD, unless the radar step already produced GAAIRC.
     { why: "the attack plan calls for an aircraft wing", need: r => AIRFIELD(r), when: () => !powerStep() && factories >= 1 && !has(AIRFIELD) && !has(r => /^GAAIRC$/.test(r.name ?? '')) },
     // Without it every vehicle lost is gone for the rest of the match.
+    // The battle lab comes before the repair depot, and the order is the whole point. A repair depot
+    // keeps the units you already have alive; a battle lab unlocks the units that answer what is
+    // killing them. On jev-report-20261010-012710 the plan built the depot at 33% of the match and the
+    // lab at 76%, while the opposing AI was already mass-producing Prism tanks behind its own lab --
+    // so the only answer we own, a Prism Tower, was not reachable until three quarters of the way in,
+    // by which time the base was down to a handful of buildings and no emplacement at all.
+    { why: "higher technology needs a battle lab, and it is what unlocks a counter to what is beating us", need: r => LAB(r), when: () => !powerStep() && factories >= 1 && !has(LAB) },
     { why: "repairs vehicles, which are otherwise lost permanently", need: r => REPAIR(r), when: () => !powerStep() && factories >= 1 && !has(REPAIR) },
-    { why: "higher technology needs a battle lab", need: r => LAB(r), when: () => !powerStep() && factories >= 1 && !has(LAB) },
   ];
   if (!queueOf(constructionType)?.size) {
     // One step per turn, the first whose precondition still holds. Deciding this once outside the loop
