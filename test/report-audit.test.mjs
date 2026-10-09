@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { auditReport, classifyQuestion, reportMeta, topChoice, takeoversOf } from '../src/report-audit.mjs';
+import { auditReport, classifyQuestion, reportMeta, topChoice, takeoversOf, LOW_CONFIDENCE } from '../src/report-audit.mjs';
 import { logStats } from '../src/logbook.mjs';
 
 // The audit turns a saved battle report into the one number the rewrite rests on: how often the engine
@@ -181,4 +181,33 @@ console.log('Report audit: forced-question share, refusal rate, per-group split,
   assert.equal(audit.refusals.unit_gone, undefined, 'and is outside the takeover tally');
   assert.ok(!('engine_decided' in live.actions.skippedReasons), 'the decider is never a cause in either tool');
   assert.ok(!('engine_decided' in audit.refusals));
+}
+// A forced question has three possible endings, and only one of them is a reason to take it away: the model
+// refused it without having an opinion. Measured on jev-report-20261010-061242 the split was sharp --
+// `defend_base` forced 6 times at confidence 0.002-0.011 and refused 4, `assemble_force` forced twice at
+// 0.57 and 0.82 and answered both. An earlier pass of this review reasoned from the option NAME instead
+// ("assemble_force is not a defensive emergency") and reached the right conclusion by luck; confidence is
+// the number that actually tells the two apart.
+// 5. The three endings of a forced question, counted apart.
+{
+  const lower = LOW_CONFIDENCE / 2, higher = LOW_CONFIDENCE * 10;
+  const a = auditReport([
+    decision(100, { tactics: q(['assemble_force', 'wait'], 'assemble_force', { confidence: 0.82 }) }),
+    decision(160, { tactics: q(['assemble_force', 'wait'], 'assemble_force', { confidence: 0.57 }) }),
+    decision(220, { tactics: q(['defend_base', 'wait'], 'wait', { confidence: 0.004 }) }),
+    decision(280, { tactics: q(['defend_base', 'wait'], 'wait', { confidence: 0.011 }) }),
+    decision(340, { tactics: q(['defend_base', 'wait'], 'defend_base', { confidence: 0.002 }) }),
+    // A confident refusal is the model disagreeing, not the model having nothing to say.
+    decision(400, { vehicles: q(['produce_MTNK', 'wait'], 'wait', { confidence: 0.9 }) }),
+  ]);
+  assert.equal(a.counts.forced, 6, 'all six are single-option questions');
+  assert.equal(a.forcedMatched, 3, 'three were answered with the only option');
+  assert.equal(a.forcedRefused, 3, 'three were refused');
+  assert.equal(a.forcedRefusedUnsure, 2, 'but only two of those were refused with no preference expressed');
+  assert.equal(a.groups.tactics.refusedForcedUnsure, 2, 'and the per-group split agrees');
+  assert.equal(a.groups.vehicles.refusedForcedUnsure, 0, 'a refusal above the cut is not counted as silence');
+  assert.equal(a.refusedConfidenceMedian, 0.011, 'and the median travels with the report, so the cut can be read against it');
+  const mt = a.refusedForcedOptions.find((o) => o.option === 'vehicles:produce_MTNK');
+  assert.deepEqual(mt, { option: 'vehicles:produce_MTNK', above: 1, below: 0 }, 'the per-option split separates the two directions');
+  assert.ok(lower < LOW_CONFIDENCE && higher > LOW_CONFIDENCE, 'the fixture brackets the threshold');
 }

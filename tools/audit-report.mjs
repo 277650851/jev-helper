@@ -10,7 +10,7 @@
 // matches the vehicles group refused 92-97% of its forced questions while tactics refused 0-10%, which
 // is a property of the questions, not of the model.
 import fs from 'node:fs/promises';
-import { auditReport, reportMeta, topChoice, takeoversOf } from '../src/report-audit.mjs';
+import { auditReport, reportMeta, topChoice, takeoversOf, LOW_CONFIDENCE } from '../src/report-audit.mjs';
 
 const file = process.argv[2];
 const asJson = process.argv.includes('--json');
@@ -34,7 +34,18 @@ console.log(`平均候选 ${a.averageOptions} 个 · 平均题面 ${a.averageIns
 console.log(`全部组都选 wait 的决策：${a.waitEveryGroup} / ${a.decisions}`);
 console.log('');
 console.log(`★ 唯一选项题的结局：模型拒绝（选 wait）${a.forcedRefused} / ${a.counts.forced} = ${pct(a.forcedRefused, a.counts.forced)}；选中那唯一选项 ${a.forcedMatched}`);
-console.log('  （这类题在提问之前答案就已由引擎的前置条件确定，模型的意见无法改变它，只能拒绝）');
+console.log(`  其中拒绝时几乎没有置信度的 ${a.forcedRefusedUnsure} 个（< ${LOW_CONFIDENCE}）。这是个**连续量的切点，不是两类**：`);
+console.log('  本局拒绝置信度中位 ' + a.refusedConfidenceMedian + '，切点只挑出「几乎什么都没说」的那一端；');
+console.log('  高于切点代表模型表达了一定偏好（从微弱到强），不等于「有把握地反对」。');
+console.log('  分布集中在少数选项上，所以按选项分开列；混在一起会得出相反结论：');
+console.log('  模型对某个强制选项表达了偏好，是「引擎判定可能有错」的证据；沉默则不是。');
+if (a.refusedForcedOptions?.length) {
+  console.log('\n  被拒绝的唯一选项（按高于切点的次数排序）：');
+  console.log('    选项                                    高于切点   低到无声');
+  for (const o of a.refusedForcedOptions.slice(0, 10)) {
+    console.log(`    ${o.option.padEnd(36)} ${String(o.above).padStart(6)} ${String(o.below).padStart(8)}`);
+  }
+}
 console.log('');
 console.log('各组明细（按唯一选项题数量排序）：');
 console.log('  组            提问   唯一选项  拒绝唯一   等待率  平均候选  常选');

@@ -33,10 +33,17 @@ const topOf = (m) => Object.entries(m).sort((a, b) => b[1] - a[1])[0]?.[0] ?? ''
  * @param entries report `entries` array (any other kinds are ignored)
  * @param meta    optional match metadata, copied into the summary for attribution
  */
+// Refusal confidence is a CONTINUUM, not two kinds. Across two archived matches the 95 and 54 refusals of
+// forced questions span 0 to 0.78 with a median near 0.20, so this cut picks out only the extreme tail --
+// the refusals where the model expressed nothing at all. Everything above it carries *some* preference,
+// from barely-there to strong, and calling that "confident disagreement" would overstate it. The median
+// travels with the report so a reader can see where the cut actually falls in that match.
+export const LOW_CONFIDENCE = 0.05;
+const median = (xs) => { if (!xs.length) return null; const s = [...xs].sort((a, b) => a - b); const m = s.length >> 1; return s.length % 2 ? s[m] : Math.round(((s[m - 1] + s[m]) / 2) * 1000) / 1000; };
 export function auditReport(entries = [], meta = {}) {
   const decisions = entries.filter((e) => e?.kind === 'decision');
   const groups = {};
-  const totals = { asked: 0, forced: 0, narrow: 0, open: 0, empty: 0, refusedForced: 0, matchedForced: 0, waitEveryGroup: 0, options: 0, instructionChars: 0, withoutWait: 0 };
+  const totals = { asked: 0, forced: 0, narrow: 0, open: 0, empty: 0, refusedForced: 0, refusedForcedUnsure: 0, matchedForced: 0, waitEveryGroup: 0, options: 0, instructionChars: 0, withoutWait: 0, refusedByOption: {}, refusedConfidence: [] };
   const refusedExamples = [];
 
   for (const d of decisions) {
@@ -49,7 +56,7 @@ export function auditReport(entries = [], meta = {}) {
       if (!keys.length) continue;
       const kind = classifyQuestion(keys);
       const real = keys.filter((k) => k !== 'wait');
-      const rec = groups[id] ??= { asked: 0, forced: 0, narrow: 0, open: 0, empty: 0, refusedForced: 0, matchedForced: 0, wait: 0, options: 0, chars: 0, choices: {} };
+      const rec = groups[id] ??= { asked: 0, forced: 0, narrow: 0, open: 0, empty: 0, refusedForced: 0, refusedForcedUnsure: 0, matchedForced: 0, wait: 0, options: 0, chars: 0, choices: {} };
       rec.asked++;
       rec[kind]++;
       rec.options += keys.length;
@@ -67,6 +74,23 @@ export function auditReport(entries = [], meta = {}) {
         if (g.choice === 'wait') {
           totals.refusedForced++;
           rec.refusedForced++;
+          // A forced question the model refused while reporting almost no confidence is a different thing
+          // from one it refused with a clear preference. `jev-report-20261010-061242` splits sharply --
+          // `defend_base` forced 6 times at 0.002-0.011 and refused 4, `assemble_force` forced twice at 0.57
+          // and 0.82 and answered both -- so confidence does separate "no opinion" from "has a preference",
+          // where reasoning from the option's name (as an earlier pass of this review did) reached a
+          // conclusion by luck. It does NOT separate "barely prefers" from "confidently disagrees": see the
+          // note on LOW_CONFIDENCE, which is a cut on a continuum.
+          //
+          // Counted PER OPTION, because the distribution is concentrated: across three archived matches
+          // `vehicles:produce_MTNK` was refused 41 times above the cut and 0 below it, while
+          // `deployment:undeploy_mobile` was refused 0 above and 25 below. One aggregate hides that, and the
+          // two point in opposite directions -- a preference expressed against a forced option is evidence
+          // the engine's determination may be wrong, while silence is not.
+          if (Number(g.confidence) < LOW_CONFIDENCE) { totals.refusedForcedUnsure++; rec.refusedForcedUnsure++; }
+          const tally = totals.refusedByOption[`${id}:${real[0]}`] ??= { above: 0, below: 0 };
+          if (Number(g.confidence) < LOW_CONFIDENCE) tally.below++; else tally.above++;
+          totals.refusedConfidence.push(Number(g.confidence) || 0);
           if (refusedExamples.length < 8) refusedExamples.push({ tick: d.tick, group: id, only: real[0], confidence: g.confidence, probabilities: g.probabilities ?? {} });
         } else if (g.choice === real[0]) { totals.matchedForced++; rec.matchedForced++; }
       }
@@ -79,6 +103,11 @@ export function auditReport(entries = [], meta = {}) {
     questions: totals.asked,
     counts: { forced: totals.forced, narrow: totals.narrow, open: totals.open, empty: totals.empty },
     forcedRefused: totals.refusedForced,
+    // The refused ones the model had no opinion about, and the same split per option.
+    forcedRefusedUnsure: totals.refusedForcedUnsure,
+    refusedForcedOptions: Object.entries(totals.refusedByOption).map(([option, v]) => ({ option, ...v })).sort((x, y) => y.above - x.above),
+    // Where the cut actually falls in this match, so the split above can be read against it.
+    refusedConfidenceMedian: median(totals.refusedConfidence),
     forcedMatched: totals.matchedForced,
     waitEveryGroup: totals.waitEveryGroup,
     withoutWait: totals.withoutWait,
