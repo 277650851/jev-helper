@@ -277,6 +277,11 @@ SLIM_SCALARS = (
 )
 SLIM_KEEP = SLIM_SCALARS + ("self", "base", "forceReadiness", "combatAssessment",
                             "queues", "inventory")
+# `forces` and `homeGuard` were briefly added here so the model could see the home guard. Measured
+# over 117 real states replayed through the running service, that costs ~38 tokens a question and
+# puts 50% of them on the 1024 cap against 18% without -- the guard is not free, and nothing in the
+# question-building layer reads either field. A pinned state truncates from the right, so the
+# `queues` and `forceReadiness` the model needs most are what gets cut. Left out deliberately.
 # --slim-state-units adds these, which compact_units() rewrites into 'KIND x,y hp%' strings, so
 # "where is the enemy and where are my units" stays inside the budget: 732 state tokens,
 # sequence 902 -- still below the cap and still a third less compute than the full state.

@@ -634,10 +634,22 @@ function operationalGoals(api, catalog, snapshot, groups, memory = {}) {
     const needed=current<desired;
     if (id === 'vehicles' && ['counter_range','counter_pressure','mobilize'].includes(s.strategy.investment?.purpose)) {
       const plan = s.strategy.investment;
+      const waitingSupported = !!q?.size || s.self.credits < Math.min(250, plan.cost);
       s.decisionReadiness[id] = { queueIdle: !q?.size, priority: plan.purpose, target: plan.name,
-        minimumStartingCredits: Math.min(250, plan.cost), waitingSupported: !!q?.size || s.self.credits < Math.min(250,plan.cost) };
-      g.instructions += ` MOBILE COUNTER FIRST: ${plan.name} is the reserved investment. Complete the ${ATTACK_FORCE_SIZE}-vehicle force and, when air threats are visible, at least ${ATTACK_AA_ESCORTS} mobile anti-air escorts so it can defend and then attack. Static guns cannot pursue flanking troops. Start it at the supplied minimum budget; protect any counter already in production and do not divert this reserve to more towers or technology.`;
-      g.criteria.wait = 'Wait only if the counter is queued, unavailable, or its minimum starting credits are missing.';
+        minimumStartingCredits: Math.min(250, plan.cost), waitingSupported };
+      // Measured over the 55 pristine captures in .preview/states-slim that pair this offer against
+      // `wait`: the model answers wait 54 times, with P(wait) averaging 0.77 across 960 such
+      // questions. Replaying the same 55 states against three different phrasings of this branch --
+      // the shipped wording, an imperative rewrite, and one with the base instruction's "saving for
+      // the selected investment is intentional" tail removed as well -- moved the wait rate only
+      // between 98% and 95%. Wording is not the lever here, so the wait criterion no longer offers a
+      // reason the engine has already ruled out (it is only offered when the queue is idle and the
+      // credits cover the down payment) and the executor takes over after two declines. `auto: N`
+      // means "N consecutive declines and the engine acts", not "skip the model": executeCandidate
+      // still re-checks the queue and the credits, so a stale decision is refused, not forced.
+      g.instructions += ` MOBILE COUNTER FIRST: produce ${plan.name} now. It is the reserved investment and the vehicle queue is ${q?.size ? 'busy' : 'idle'}. Complete the ${ATTACK_FORCE_SIZE}-vehicle force and, when air threats are visible, at least ${ATTACK_AA_ESCORTS} mobile anti-air escorts so it can defend and then attack. Static guns cannot pursue flanking troops. Do not divert this reserve to more towers or technology.`;
+      g.criteria.wait = 'Wait only if this unit is already in production in the vehicle queue, or the factory cannot produce it at all. Affordability has already been checked, so do not hold back to accumulate more credits.';
+      if (!waitingSupported) for (const a of Object.values(g.actions)) if (a.type === 'produce' && a.name === plan.name && !Number.isFinite(a.auto)) a.auto = 2;
       continue;
     }
     if (id === 'vehicles' && catalog[s.strategy.investment?.name]?.harvester) {
@@ -646,7 +658,7 @@ function operationalGoals(api, catalog, snapshot, groups, memory = {}) {
         deficit: s.strategy.economyDeficit, priority: 'economy', affordableCandidates: candidates.filter(a => a.name === plan.name && s.uncommittedCredits >= a.cost).map(a => a.name),
         waitingSupported: !!q?.size || !candidates.some(a => a.name === plan.name) };
       g.instructions += ` ECONOMY FIRST: ${s.harvesters} miners are present; the target is ${s.economy?.targetMiners ?? 3}. The reserved investment is ${plan.name}, not a combat unit. Produce the offered miner now; defer discretionary army expansion until this economic deficit is filled.`;
-      g.criteria.wait = 'Wait only if the miner is already queued or unavailable, or its minimum starting budget is unavailable. Do not reserve this miner budget forever without starting the miner.';
+      g.criteria.wait = 'Wait only if the miner is already in production in the vehicle queue, or the factory cannot produce it. Affordability has already been checked, so do not hold back to accumulate more credits.';
       continue;
     }
     const blocked=s.strategy.recovery || s.harvesters<Math.min(2,s.economy?.targetMiners??2) || q?.size>0 || !affordable.length;

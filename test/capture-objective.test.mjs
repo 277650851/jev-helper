@@ -106,8 +106,19 @@ test('money piling up while the model waits: a combat unit is trained anyway; no
   assert.equal(catalog[produce[1].name].harvester, undefined, 'a combat vehicle, not a miner');
   assert.equal(produce[1].auto, 2, '14,000 credits: automatic after two declines');
   const modest = world({ own: own(), enemies: [u(1434, 'GACNST', T.Building, 107, 18)], credits: RICH_SPEND - 1000, offers });
-  ({ groups } = groupsOf(modest, ''));
-  for (const [k, a] of Object.entries(groups.vehicles?.actions ?? {})) if (k !== 'wait') assert.equal(a.auto, undefined, `${k}: left to the model below ${RICH_SPEND}`);
+  let snap; ({ groups, snap } = groupsOf(modest, ''));
+  // Two different things carry `auto` here, and only one is a judgement about money. The
+  // RICH_SPEND fallback asks "is this base rich enough that hoarding is pointless", so it stays
+  // credit-gated. The reserved counter is not a judgement: the engine picked it, and it is only
+  // offered once the queue is idle and the credits cover the down payment, so a decline means the
+  // model refused a fact 54 times out of 55 on the same kind of question.
+  const reserved = snap.state.strategy.investment?.name;
+  for (const [k, a] of Object.entries(groups.vehicles?.actions ?? {})) {
+    if (k === 'wait') continue;
+    if (a.name === reserved) assert.equal(a.auto, 2, `${k}: the reserved counter falls back after two declines`);
+    else assert.equal(a.auto, undefined, `${k}: left to the model below ${RICH_SPEND}`);
+  }
+  assert.ok(reserved, 'this world has a reserved investment to check against');
 });
 
 // 0.7.3 report (same mission, defeat again): the lab was recognized and about fifteen engineers were
