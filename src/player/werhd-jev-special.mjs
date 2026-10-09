@@ -324,13 +324,15 @@ export function specialGroups(api, catalog, snapshot, memory, groups) {
   // Technology is proposed in the existing construction category, keeping one queue owner. The
   // war factory is built, so technology should follow; waiting for three miners never happens in a
   // tight game and the air field is then missed entirely. One harvester and one factory are enough
-  // to start the tech line, and the option is tagged auto so it is queued even if the model waits.
+  // to start the tech line. The option is left as a plain choice: it used to carry `auto: 2`, but the
+  // strategy layer's category filter deleted every `AircraftType` option before the request, so the
+  // tag could never fire. That filter now keeps air support, so the model can choose it.
   if (snapshot.state.economy?.factories && snapshot.state.harvesters >= 1 && freeQueue(api.QueueType.Structures)) {
     for (const item of api.production.available(api.QueueType.Structures)) {
       const r = catalog[item.name];
       if (!r || !afford(r, 1000) || buildings.some((u) => u.name === item.name)) continue;
       if (isAirSupport(r))
-        addProduction(group('construction', ''), { ...item, queue: api.QueueType.Structures }, 'Build aircraft support to enable air strikes', undefined, { auto: 2 });
+        addProduction(group('construction', ''), { ...item, queue: api.QueueType.Structures }, 'Build aircraft support to enable air strikes');
       if (r.naval && r.factory === 'NavalUnitType' && water.length) {
         const placement = water.find((p) => api.canPlace(item.name, p.x, p.y));
         if (placement) addProduction(group('construction', ''), { ...item, queue: api.QueueType.Structures }, 'Build a naval yard on the revealed shore', placement, { auto: 2 });

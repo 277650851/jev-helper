@@ -328,9 +328,19 @@ export function investmentGroups(api, catalog, snapshot, memory, groups) {
   // still below its defensive floor and has a barracks to build from.
   if (!strategy.underPressure && !defenseFloor) { delete groups.defenses; defensePlan = undefined; }
   const cg = group('construction', 'Restore core infrastructure, then unlock higher technology. During suppression, build a firing line and develop a counter instead of spending forever on basic tanks. Aircraft factories and higher-tech buildings unlock new options. A repair dock is not an airfield.');
-  // Remove the old special-layer air-support guess and rebuild the tech options from rule categories.
-  for (const [key, a] of Object.entries(cg.actions)) if (a.type === 'produce' && !catalog[a.name]?.naval && !catalog[a.name]?.refinery && !(catalog[a.name]?.power > 0) && !['InfantryType', 'UnitType', 'BuildingType'].includes(catalog[a.name]?.factory)) {
-    delete cg.actions[key]; delete cg.criteria[key];
+  // Keep the technology options this layer rebuilds from rule categories, plus the ones the special
+  // layer and the opening plan offer: power, refineries, walls/strongpoints and air support. The filter
+  // used to drop everything whose factory was not one of the three ground types, and that silently
+  // deleted `isAirSupport` -- which is exactly the `AircraftType` factory -- so the special layer's
+  // air-support option could never reach the model even though it carried `auto: 2` and a comment
+  // promising it would be queued when the model waited. Two bugs cancelling out: the tag was dead
+  // because the option was gone. The option is now kept, so the takeover tag is gone instead, and the
+  // model gets the choice.
+  for (const [key, a] of Object.entries(cg.actions)) {
+    if (a.type !== 'produce') continue;
+    const r = catalog[a.name];
+    const groundTech = !r?.naval && ['InfantryType', 'UnitType', 'BuildingType'].includes(r?.factory);
+    if (!groundTech && !(r?.power > 0) && !r?.refinery && !r?.wall && !r?.isBaseDefense && !isAirSupport(r)) { delete cg.actions[key]; delete cg.criteria[key]; }
   }
   const armorCount = units.filter(u => u.type === api.ObjectType.Vehicle && catalog[u.name]?.category === 'AFV' && !catalog[u.name]?.harvester).length;
   const incomingMiners = s.queues.reduce((n, q) => n + q.items.reduce((sum, i) => sum + (catalog[i.name]?.harvester || catalog[i.name]?.refinery ? i.quantity : 0), 0), 0);
@@ -437,9 +447,15 @@ export function investmentGroups(api, catalog, snapshot, memory, groups) {
   for (const [id, g] of Object.entries(groups)) for (const [key, a] of Object.entries(g.actions)) {
     if (a.type !== 'produce' || a.name === plan?.name) continue;
     const r = catalog[a.name] ?? {};
+    // Income and refining are infrastructure, not a competing combat investment: a miner does not
+    // trade off against the reserved tank, it pays for it. Today this cannot be reached -- the plans
+    // whose purpose triggers the queue deletion below are the vehicle ones, and they only exist while
+    // the base is under pressure, which is also when the miner above is not offered. It is kept as a
+    // guard because that coincidence is what makes it safe: the two conditions live in different files.
+    const infrastructure = (r.harvester || r.refinery) && !s.strategy.recovery;
     // One queue cannot build the reserved ground reinforcement and an optional
     // helicopter/carrier simultaneously, even when both are affordable.
-    if (['mobilize','counter_range','counter_pressure'].includes(plan?.purpose) && a.queue === plan.queue) {
+    if (!infrastructure && ['mobilize','counter_range','counter_pressure'].includes(plan?.purpose) && a.queue === plan.queue) {
       delete g.actions[key]; delete g.criteria[key]; continue;
     }
     // A missing barracks belongs here with power, the first refinery and the first factory: it is

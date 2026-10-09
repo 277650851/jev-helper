@@ -445,3 +445,89 @@ console.log('Ground queue: airborne vehicles cannot fill or indefinitely delay t
   assert.ok(dchoices.length <= 5, `one multiple-choice question must stay small; got ${dchoices.join(', ')}`);
 }
 
+// Air support is offered by special.mjs in the construction group, and strategy.mjs rebuilds that
+// group from rule categories. Its filter deleted everything whose factory was not one of the three
+// ground types -- which is precisely `AircraftType` -- so the air-support option never reached the
+// model. It carried `auto: 2` with a comment promising it would be queued after two waits, so the
+// dead tag hid the dead option: no test could fail, because the option is only ever looked at after
+// the filter has run. The tag is now gone and the option survives.
+{
+  const acatalog = {
+    YARD: { yard: true, factory: 'BuildingType' }, POWER: { power: 200, cost: 800 },
+    REF: { refinery: true }, MINER: { harvester: true }, BARRACKS: { factory: 'InfantryType' },
+    FACTORY: { factory: 'UnitType' }, TANK: { category: 'AFV', cost: 750, weapon: { damage: 65, range: 5, ag: true } },
+    AIRFIELD: { factory: 'AircraftType', cost: 1000, label: 'Airforce Command HQ', buildCategory: 'Tech' },
+    REPAIR: { numberOfDocks: 1, cost: 800, label: 'Service Depot', buildCategory: 'Tech' },
+  };
+  const au = (id, name, type, x = 30, y = 30) => ({ id, name, type, tile: { rx: x, ry: y }, hitPoints: 100, maxHitPoints: 100, isIdle: true, primaryWeapon: acatalog[name]?.weapon });
+  const aown = [au(1,'YARD',2),au(2,'POWER',2,26,30),au(3,'REF',2,30,35),au(4,'MINER',7),au(5,'BARRACKS',2),au(6,'FACTORY',2)];
+  const aapi = {
+    units: (relation) => (relation === 'self' ? aown : []),
+    me: () => ({ credits: 8000, power: { total: 200, drain: 50 } }), tick: () => 5000, time: () => 300,
+    ObjectType: { Building: 2, Infantry: 3, Vehicle: 7, Aircraft: 1 },
+    QueueType: { Structures: 0, Armory: 1, Infantry: 2, Vehicles: 3, Aircrafts: 4, Ships: 5 },
+    OrderType: { DeploySelected: 10 }, ArmorType: { 5: 'Heavy' },
+    map: { size: () => ({ width: 60, height: 60 }), visible: () => true, tile: (x,y) => (x >= 0 && y >= 0 && x < 60 && y < 60 ? { rx:x, ry:y, landType:0 } : undefined) },
+    canPlace: (n, x, y) => x >= 20 && x <= 39 && y >= 20 && y <= 39 && !aown.some(u => Math.hypot(u.tile.rx - x, u.tile.ry - y) < 2),
+    order: () => {}, crates: () => [],
+    production: { queues: () => Array.from({length:6},(_,type)=>({type,size:0,maxSize:99,items:[]})),
+      available: (q) => (q === 0 ? ['AIRFIELD','REPAIR'] : q === 3 ? ['TANK'] : []).map(name => ({name})) },
+  };
+  const asnap = collectState(aapi, acatalog);
+  const agroups = candidateGroups(aapi, acatalog, asnap, {});
+  assert.ok(agroups.construction.actions.produce_AIRFIELD,
+    'air support must survive the construction filter: it is the only route to an air wing');
+  assert.ok(Number.isFinite(agroups.construction.actions.produce_AIRFIELD.auto) === false,
+    'and it is a choice, not a takeover: the tag it used to carry could never fire');
+}
+
+// A miner is income, not a competing combat purchase, so the shared-wallet pass must not delete it.
+// Checked while writing this: the plans whose purpose triggers that deletion are the vehicle ones, and
+// they only exist while the base is under pressure -- which is exactly when the economy branch does not
+// offer a miner in the first place. So the guard cannot be exercised today; this pins the peacetime
+// shape that does run, and would catch a later change that made the two conditions meet.
+{
+  const mcatalog = {
+    YARD: { yard: true, factory: 'BuildingType' }, POWER: { power: 200, cost: 800 },
+    REF: { refinery: true }, MINER: { harvester: true, cost: 1400, label: 'Chrono Miner' },
+    BARRACKS: { factory: 'InfantryType' }, FACTORY: { factory: 'UnitType' },
+    TANK: { category: 'AFV', cost: 750, weapon: { damage: 65, rof: 60, range: 5, ag: true, verses: [0.25,0.25,0.25,0.75,1,1,0.65,0.45,0.6,0.6,1] } },
+    SIEGE: { category: 'AFV', cost: 1200, weapon: { damage: 120, rof: 70, range: 9, ag: true, verses: [0.2,0.2,0.2,0.7,0.9,0.9,0.6,0.4,0.5,0.5,1] } },
+    ENEMY: { armor: 'heavy', weapon: { damage: 80, rof: 50, range: 8, ag: true } },
+  };
+  const mu = (id, name, type, x, y) => ({ id, name, type, tile: { rx: x, ry: y }, hitPoints: 100, maxHitPoints: 100, isIdle: true, primaryWeapon: mcatalog[name]?.weapon });
+  // One miner against a target of three: the economy branch offers one.
+  const mown = [mu(1,'YARD',2,30,30),mu(2,'POWER',2,26,30),mu(3,'REF',2,30,35),mu(4,'BARRACKS',2,32,30),mu(5,'FACTORY',2,34,30),mu(6,'MINER',7,28,32),mu(7,'TANK',7,31,31)];
+  // A standoff attacker far enough out that the base is NOT "under pressure" (`baseThreats` counts
+  // enemy weapons within 18 tiles of the base or one of its miners). That matters: a pressured base
+  // does not offer a miner at all, and the branch under test is the peacetime economy one.
+  const menemies = [mu(100,'ENEMY',7,56,30)];
+  // `starving` is credits < 1500 with a falling trend, and the trend is measured against the first
+  // sample of the window: stepping the balance down puts the base on that branch, which is the one
+  // that raises the miner target from 1 to 2 against a single harvester.
+  let mcredits = 1500;
+  const mapi = {
+    units: (relation) => (relation === 'self' ? mown : relation === 'allied' ? [] : menemies),
+    me: () => ({ credits: (mcredits -= 40), power: { total: 300, drain: 100 } }), tick: () => 4000, time: () => 250,
+    ObjectType: { Building: 2, Infantry: 3, Vehicle: 7, Aircraft: 1 },
+    QueueType: { Structures: 0, Armory: 1, Infantry: 2, Vehicles: 3, Aircrafts: 4, Ships: 5 },
+    OrderType: { DeploySelected: 10 }, ArmorType: { 5: 'Heavy' },
+    map: { size: () => ({ width: 60, height: 60 }), visible: () => true,
+      // Reachable ore next to the miner: without it the economy plan reads the miner as idle and
+      // stops raising the target ("another miner would be wasted"), which is a different branch.
+      tile: (x,y) => (x === 29 && y === 32 ? { rx:x, ry:y, landType:9 } : (x >= 0 && y >= 0 && x < 60 && y < 60 ? { rx:x, ry:y, landType:0 } : undefined)) },
+    canPlace: (n, x, y) => x >= 20 && x <= 39 && y >= 20 && y <= 39 && !mown.some(u => Math.hypot(u.tile.rx - x, u.tile.ry - y) < 2),
+    order: () => {}, crates: () => [],
+    production: { queues: () => Array.from({length:6},(_,type)=>({type,size:0,maxSize:99,items:[]})),
+      available: (q) => (q === 3 ? ['MINER','TANK','SIEGE'] : []).map(name => ({name})) },
+  };
+  const msnap = collectState(mapi, mcatalog);
+  const mgroups = candidateGroups(mapi, mcatalog, msnap, {});
+  assert.ok(msnap.state.economy.targetMiners > msnap.state.harvesters,
+    'the fixture needs an economy deficit: this is what raises the miner option');
+  assert.ok(mgroups.vehicles.actions.produce_MINER,
+    'the miner option is offered and survives the shared-wallet pass');
+}
+
+
+
