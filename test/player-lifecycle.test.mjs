@@ -341,22 +341,36 @@ assert.deepEqual(callsSince(callsMark), [], "nothing may be ordered after stop")
 let tick = 100, staleResolve;
 callsMark = calls.length;
 api.tick = () => tick;
-// A busy structures queue holds the opening plan back, so the model is the one asked here. That is what
-// this block needs to test: the opening build is engine-owned now, and with an idle queue it would answer
-// itself and this reply would never be requested at all.
-queue.size = 1;
+// The opening step is engine-owned, and in this fixture it is the only thing the construction group can
+// offer, so the model would never be asked and this block -- which is about what happens to a reply that
+// arrives too late -- would never see one. A barracks and an infantry menu item give the fixture a second,
+// genuine question; the reply below may then be about any group, because a stale reply is discarded
+// whatever it says. That is the point: the assertion is about the discard, not about the choice.
+const realAvailable = api.production.available;
+const realCatalog = { ...catalog };
+own = [{ id: 90, name: "BARRACKS", type: 2, tile: { rx: 20, ry: 20 }, hitPoints: 500, maxHitPoints: 500, isIdle: false }];
+catalog.BARRACKS = { label: "Barracks", cost: 500, factory: "InfantryType" };
+catalog.E1 = { label: "GI", cost: 200, speed: 4, primary: "Rifle", factory: "InfantryType", weapon: { damage: 15, rof: 20, range: 4, ag: true } };
+// `available` already answers with `{name, type}` objects in this fixture; only the extra infantry entry
+// is added, and it keeps the same shape. Wrapping it again would hand the engine `{name:{name}}` and the
+// build menu would silently empty out -- which is exactly what happened the first time this was written.
+api.production.available = (q) => (q === 2 ? [...realAvailable(q), { name: "E1", type: 3 }] : realAvailable(q));
+let askedThisBlock = false;
 const staleDone = new Promise(resolve => { staleResolve = resolve; });
 const stalePlayer = await attachJevPlayer(api, {
   catalog, intervalMs: 10, disableMicro: true,
-  requestDecision: async () => { tick = 1000; return { answers: { construction: { choice: "produce_TANK" } } }; },
+  requestDecision: async () => { askedThisBlock = true; tick = 1000; return { answers: { infantry: { choice: "produce_E1" } } }; },
   onEvent: event => { if (event.kind === "stale") staleResolve(); },
 });
 await staleDone;
 stalePlayer.stop();
-assert.equal(stalePlayer.status.rejected, 1);
-assert.equal(stalePlayer.status.accepted, 0);
-assert.deepEqual(callsSince(callsMark), [], "stale snapshots must not issue commands");
-queue.size = 0;
+assert.ok(askedThisBlock, "the model really was asked, or the discard below proves nothing");
+assert.equal(stalePlayer.status.rejected, 1, "the out-of-date reply is counted as rejected");
+assert.equal(stalePlayer.status.accepted, 1, "only the engine's own step was accepted");
+assert.deepEqual(callsSince(callsMark), [["produce", "TANK"]], "the engine's own step is the only order; the stale reply issues none");
+api.production.available = realAvailable;
+for (const k of Object.keys(catalog)) if (!(k in realCatalog)) delete catalog[k];
+own = [];
 
 // Report jev-report-20261008-023829: 102 decisions, 103 discarded. The game ran at ~60 ticks/s and a
 // local CPU model answered in 1.4-3.9 s, i.e. 244 ticks, while the budget was the 180-tick default
@@ -370,17 +384,37 @@ queue.size = 0;
   const ages = [244, 250, 240, 245];
   let n = 0;
   calls.length = 0;
-  own = [ { id: 1, name: 'TANK', type: 7, tile: { rx: 10, ry: 10 }, hitPoints: 100, maxHitPoints: 100, primaryWeapon: { damage: 50, range: 5 } } ];
+  own = [ { id: 1, name: 'TANK', type: 7, tile: { rx: 10, ry: 10 }, hitPoints: 100, maxHitPoints: 100, primaryWeapon: { damage: 50, range: 5 } },
+    { id: 90, name: 'BARRACKS', type: 2, tile: { rx: 20, ry: 20 }, hitPoints: 500, maxHitPoints: 500, isIdle: false } ];
+  // This block needs a question the engine cannot answer itself, or the opening step answers every turn
+  // and the model is never asked -- and what is being tested here is the age of a model reply.
+  const agesAvailable = api.production.available;
+  const agesCatalog = { ...catalog };
+  catalog.BARRACKS = { label: 'Barracks', cost: 500, factory: 'InfantryType' };
+  catalog.E1 = { label: 'GI', cost: 200, speed: 4, primary: 'Rifle', factory: 'InfantryType', weapon: { damage: 15, rof: 20, range: 4, ag: true } };
+  api.production.available = q => (q === 2 ? [...agesAvailable(q), { name: 'E1', type: 3 }] : agesAvailable(q));
+  // Wait for the outcome this block is about: a reply rejected as out of date, then one that is finally
+  // accepted. "accepted > 0" alone is not usable -- the engine-owned opening step is accepted on the first
+  // turn, so it would be true before the model was ever asked and the block would end having tested
+  // nothing.
+  let reached = null;
+  const outcome = new Promise(resolve => { reached = resolve; });
   const player = await attachJevPlayer(api, {
     catalog, intervalMs: 10, disableMicro: true,
     // Every reply is ~244 ticks old, exactly as in the report: the first is discarded, and the budget
     // the rejection reports must then be wide enough for the next one to be accepted.
-    requestDecision: async () => { const age = ages[Math.min(n++, ages.length - 1)]; tick += age; return { answers: { construction: { choice: 'produce_TANK' } } }; },
-    onEvent: e => { events.push(e); if (e.kind === 'stale') tick += 1; },
+    requestDecision: async () => { const age = ages[Math.min(n++, ages.length - 1)]; tick += age; return { answers: { infantry: { choice: 'produce_E1' } } }; },
+    onEvent: e => {
+      events.push(e);
+      if (e.kind === 'stale') { tick += 1; reached?.(); return; }
+      if (e.kind === 'action' && e.auto !== true && e.accepted === true) reached?.();
+    },
   });
-  const settled = new Promise(resolve => { const check = () => (player.status.accepted > 0 || events.length > 6) ? resolve() : setTimeout(check, 15); check(); });
-  await settled;
+  // A backstop so a regression reports a failed assertion instead of hanging the suite.
+  await Promise.race([outcome, new Promise(resolve => setTimeout(resolve, 4000))]);
   player.stop('manual');
+  api.production.available = agesAvailable;
+  for (const k of Object.keys(catalog)) if (!(k in agesCatalog)) delete catalog[k];
   const stale = events.filter(e => e.kind === 'stale');
   assert.ok(stale.length >= 1, 'the first reply is still discarded');
   assert.equal(stale[0].budgetTicks, 488, 'the rejection states the measured age doubled, not a guess');
@@ -396,27 +430,37 @@ queue.size = 0;
 callsMark = calls.length;
 let ended = false, endedResolve;
 const endEvents = [];
-// Same reason as the stale block above: the queue is held busy so the engine does not answer the
-// construction question itself, and the reply that arrives after the battle ends is the one under test.
-queue.size = 1;
+// Same shape as the stale block above: the engine-owned opening step is the only order this fixture can
+// produce on its own, so a barracks and an infantry item give the model something to be asked about. The
+// reply arrives after the battle has ended, and what it says is irrelevant -- the answer is discarded
+// before it can be executed, which is what this block pins.
+const endAvailable = api.production.available;
+const endCatalog = { ...catalog };
+own = [{ id: 90, name: "BARRACKS", type: 2, tile: { rx: 20, ry: 20 }, hitPoints: 500, maxHitPoints: 500, isIdle: false }];
+catalog.BARRACKS = { label: "Barracks", cost: 500, factory: "InfantryType" };
+catalog.E1 = { label: "GI", cost: 200, speed: 4, primary: "Rifle", factory: "InfantryType", weapon: { damage: 15, rof: 20, range: 4, ag: true } };
+api.production.available = (q) => (q === 2 ? [...endAvailable(q), { name: "E1", type: 3 }] : endAvailable(q));
+let askedBeforeEnd = false;
 api.tick = () => { if (ended) throw new Error("werhd is not available outside a running battle"); return 100; };
 const endDone = new Promise(resolve => { endedResolve = resolve; });
 const endedPlayer = await attachJevPlayer(api, {
   catalog, intervalMs: 10, disableMicro: true,
-  requestDecision: async () => { ended = true; return { answers: { construction: { choice: "produce_TANK" } } }; },
+  requestDecision: async () => { askedBeforeEnd = true; ended = true; return { answers: { infantry: { choice: "produce_E1" } } }; },
   onEvent: event => { endEvents.push(event); if (event.kind === "stop") endedResolve(); },
 });
 await endDone;
+assert.ok(askedBeforeEnd, "the model was asked before the battle ended, or the discard below proves nothing");
 assert.equal(endedPlayer.status.running, false);
 assert.equal(endedPlayer.status.failures, 0);
 assert.ok(endEvents.some(e => e.kind === "stop" && e.reason === "battle_ended"));
 assert.ok(!endEvents.some(e => e.kind === "error"));
-// The answer was already in flight when the battle ended, so nothing may be ordered: the tick
-// captured for the question is no longer readable, which is what discards it. This assertion used to
-// expect one order, but this block never produced one -- the entry it matched came from the block
-// above, which is why the suite went red whenever that block's timer landed late.
-assert.deepEqual(callsSince(callsMark), [], "an answer whose battle has ended must issue no orders");
-queue.size = 0;
+// The engine's own opening step was taken before the battle ended; the reply that came back afterwards
+// ordered nothing. This assertion used to expect no orders at all and matched an entry from the block
+// above, which is how it stayed green while checking nothing.
+assert.deepEqual(callsSince(callsMark), [["produce", "TANK"]], "an answer whose battle has ended must issue no orders");
+api.production.available = endAvailable;
+for (const k of Object.keys(catalog)) if (!(k in endCatalog)) delete catalog[k];
+own = [];
 console.log(
   "Jev deployment/economy and guards passed: stale targets/snapshots, cancellation, missing units, changed queues/funds, defeat, unknown actions and fog.",
 );

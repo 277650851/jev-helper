@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
 import { splitEngineOwned, requestGroupsFrom, MAX_REQUESTED_GROUPS } from '../src/player/werhd-jev-player.mjs';
+import { CATALOG, SCENARIOS } from '../src/synthetic-state.mjs';
+import { replayApi } from '../src/replay-state.mjs';
+import { collectState, candidateGroups } from '../src/player/werhd-jev-player.mjs';
 
 // Some options are not questions. When a producer has already established every premise of a decision --
 // the money is idle, the army is below its cap, the queue is empty, the unit is affordable -- the model
@@ -86,5 +89,21 @@ const group = (keys, engineOwned) => ({ instructions: 'i', criteria: criteria(ke
   assert.deepEqual(owned, [{ id: 'construction', choice: 'produce_GAPOWR' }]);
   assert.ok(!('construction' in asked), 'the engine-owned group is gone from the model request');
   for (const g of Object.values(asked)) assert.ok(Object.keys(g.criteria).length > 1, 'every sent group still has something to choose');
+}
+// 7. The opening step is the sharpest case of all: with a yard and a power plant down and nothing else,
+//    the development plan knows exactly what comes next, so the engine takes it and the model is asked
+//    nothing at all. Historically asking anyway cost 36 consecutive refusals of an affordable refinery.
+{
+  const state = { side: 'allied', ...SCENARIOS.opening() };
+  const api = replayApi(state, { ...CATALOG });
+  const catalog = { ...CATALOG };
+  const snap = collectState(api, catalog);
+  const groups = candidateGroups(api, catalog, snap, {});
+  const real = Object.keys(groups.construction?.actions ?? {}).filter((k) => k !== 'wait');
+  assert.equal(real.length, 1, `the opening offers one step at a time, got ${real.join(', ') || 'none'}`);
+  assert.equal(groups.construction.actions[real[0]].engineOwned, true, 'and the engine owns it');
+  const { asked, owned } = splitEngineOwned(requestGroupsFrom(groups, {}, snap.state.tick));
+  assert.deepEqual(owned, [{ id: 'construction', choice: real[0] }]);
+  assert.equal(asked.construction, undefined, 'so the opening question is not sent');
 }
 console.log('Engine-owned options: lifted only when they are the group\'s single real choice, carried through selection, and never left as a wait-only question');

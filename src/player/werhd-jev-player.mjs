@@ -575,14 +575,12 @@ export function candidateGroups(api, catalog, snapshot, memory) {
             // the down payment is covered -- so the model cannot improve on the answer, only refuse it. The
             // historical cost of asking anyway is recorded at the `auto: 1` note below (36 consecutive
             // refusals of an affordable refinery).
-            // Not engine-owned yet, and the reason is a test-framework one worth recording: this fixture
-            // builds a world in which the opening step is the ONLY question the decision layer can ask
-            // (no buildings, no units, a one-item build menu), so taking it away leaves the model with
-            // nothing to answer and the three lifecycle blocks that drive late, stale and ended-battle
-            // replies never see a request. Making this engine-owned requires rebuilding that fixture first,
-            // which is the next piece of work; until then the money-idle path below is the one measured to
-            // be pure waste.
-            engineOwned: false,
+            // The engine takes this one. Every premise the decision needs is established a few lines above:
+            // this step is the first whose precondition holds, the structures queue is idle, and the down
+            // payment is covered. The model cannot improve on the answer, only refuse it -- the historical
+            // cost of asking anyway is recorded at the `auto: 1` note below (36 consecutive refusals of an
+            // affordable refinery).
+            engineOwned: true,
           },
         );
     }
