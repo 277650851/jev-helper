@@ -636,20 +636,28 @@ function operationalGoals(api, catalog, snapshot, groups, memory = {}) {
       const plan = s.strategy.investment;
       const waitingSupported = !!q?.size || s.self.credits < Math.min(250, plan.cost);
       s.decisionReadiness[id] = { queueIdle: !q?.size, priority: plan.purpose, target: plan.name,
+        current, target: desired, deficit: Math.max(0, desired - current),
+        affordableCandidates: candidates.filter(a => a.name === plan.name && s.uncommittedCredits >= a.cost).map(a => a.name),
         minimumStartingCredits: Math.min(250, plan.cost), waitingSupported };
       // Measured over the 55 pristine captures in .preview/states-slim that pair this offer against
       // `wait`: the model answers wait 54 times, with P(wait) averaging 0.77 across 960 such
-      // questions. Replaying the same 55 states against three different phrasings of this branch --
-      // the shipped wording, an imperative rewrite, and one with the base instruction's "saving for
-      // the selected investment is intentional" tail removed as well -- moved the wait rate only
-      // between 98% and 95%. Wording is not the lever here, so the wait criterion no longer offers a
-      // reason the engine has already ruled out (it is only offered when the queue is idle and the
-      // credits cover the down payment) and the executor takes over after two declines. `auto: N`
-      // means "N consecutive declines and the engine acts", not "skip the model": executeCandidate
-      // still re-checks the queue and the credits, so a stale decision is refused, not forced.
-      g.instructions += ` MOBILE COUNTER FIRST: produce ${plan.name} now. It is the reserved investment and the vehicle queue is ${q?.size ? 'busy' : 'idle'}. Complete the ${ATTACK_FORCE_SIZE}-vehicle force and, when air threats are visible, at least ${ATTACK_AA_ESCORTS} mobile anti-air escorts so it can defend and then attack. Static guns cannot pursue flanking troops. Do not divert this reserve to more towers or technology.`;
+      // questions. Rewording alone does not move it -- three phrasings measured 98% / 95% / 96%.
+      //
+      // What does move it is stating the numbers. ra2web's own audit (docs/jev-player-goal-audit.md
+      // line 103) hit the same stall -- 107/107 vehicle waits with 12,765 credits and an idle queue --
+      // and replayed a saved snapshot with the force deficit, the idle queue and the affordable
+      // candidate made explicit: wait fell to 0% and the Mirage Tank was chosen 83%. This branch was
+      // handing the model a bare target ("complete the 8-vehicle force") while `current` and
+      // `desired` sat unused two lines up, so the model was told what to reach but never how far away
+      // it was. State the deficit the same way the general branch below does.
+      g.instructions += ` MOBILE COUNTER FIRST: produce ${plan.name} now. It is the reserved investment. We have ${current} of the ${desired} ground combat vehicles needed, so ${Math.max(0, desired - current)} more will close the deficit. The vehicle queue is ${q?.size ? `busy with ${q.size}` : 'idle'} and ${s.uncommittedCredits} credits are uncommitted against a cost of ${plan.cost}, so this build is affordable right now. ${current < desired ? `An idle queue and an affordable tank while ${Math.max(0, desired - current)} vehicles are missing is a stall, not a decision.` : `The force target is already met; this build replaces a loss.`} Complete the ${ATTACK_FORCE_SIZE}-vehicle force and, when air threats are visible, at least ${ATTACK_AA_ESCORTS} mobile anti-air escorts so it can defend and then attack. Static guns cannot pursue flanking troops. Do not divert this reserve to more towers or technology.`;
       g.criteria.wait = 'Wait only if this unit is already in production in the vehicle queue, or the factory cannot produce it at all. Affordability has already been checked, so do not hold back to accumulate more credits.';
-      if (!waitingSupported) for (const a of Object.values(g.actions)) if (a.type === 'produce' && a.name === plan.name && !Number.isFinite(a.auto)) a.auto = 2;
+      // No `auto` fallback here on purpose. With the numbers stated above the model builds on 44 of 55
+      // replayed captures, and every remaining wait had baseUnderAttack=true -- the enemy is already
+      // inside the base, where one more tank does not change anything. An engine-forced build would
+      // fire exactly there, overruling a defensible decision, and would mask whether the input fix is
+      // sufficient. docs/jev-player-goal-audit.md line 347 is explicit: do not remove legitimate
+      // waiting or force options on the model's behalf.
       continue;
     }
     if (id === 'vehicles' && catalog[s.strategy.investment?.name]?.harvester) {
