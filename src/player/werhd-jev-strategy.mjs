@@ -253,8 +253,18 @@ export function counterValue(rule, targets, catalog, api) {
   }, 0);
 }
 
-export function infantryProfile(rule, api) {
-  const infantry = [0,1,2].map(armor=>({type:api.ObjectType.Infantry,armor}));
+// The same "can this actually engage" gate as `counterValue`, averaged over the target list instead of
+// summed. `effectiveness` is the ungated version: it averages raw damage over the targets, so a unit that
+// cannot fire at ANY of them still counts as a full contributor. Force balance is where that matters --
+// `suppressed` is decided by `enemyPower > ownPower * 0.8`, so a defender that cannot touch the threat
+// inflates `ownPower` and hides that the local fight is being lost. Averaging keeps the existing scale, so
+// the 0.8 threshold keeps the calibration it was chosen with.
+export function counterAverage(rule, targets, catalog, api) {
+  if (!targets?.length) return effectiveness(rule, [], catalog, api);
+  return targets.reduce((sum, t) => sum + counterValue(rule, [t], catalog, api), 0) / targets.length;
+}
+
+export function infantryProfile(rule, api) {  const infantry = [0,1,2].map(armor=>({type:api.ObjectType.Infantry,armor}));
   const armor = [3,4,5].map(armor=>({type:api.ObjectType.Vehicle,armor}));
   const normal = weaponEffectiveness(rule?.weapon,infantry,{},api);
   const deployed = rule?.deployer ? weaponEffectiveness(rule.secondary,infantry,{},api) : normal;
@@ -324,8 +334,8 @@ export function assessStrategy(api, catalog, snapshot, memory) {
   // read `effectiveness(catalog[threat.name], threats, ...)` -- the threat's rule scored against the
   // threat list itself, so our power was measured with the ENEMY's weapons and the enemy's was too, and
   // the comparison that decides `suppressed` was between two numbers that both described the enemy.
-  const ownPower = defenders.reduce((s, u) => s + effectiveness(catalog[u.name], threats, catalog, api) * hp(u), 0);
-  const enemyPower = threats.reduce((s, e) => s + effectiveness(catalog[e.name], defenders, catalog, api) * hp(e), 0);
+  const ownPower = defenders.reduce((s, u) => s + counterAverage(catalog[u.name], threats, catalog, api) * hp(u), 0);
+  const enemyPower = threats.reduce((s, e) => s + counterAverage(catalog[e.name], defenders, catalog, api) * hp(e), 0);
   const underPressure = threats.length > 0;
   const sustained = underPressure && tick - history.since > 450;
   const suppressed = underPressure && (sustained || threats.length >= 3 && enemyPower > ownPower * 0.8);
