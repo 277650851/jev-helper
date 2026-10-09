@@ -2197,6 +2197,19 @@ export function splitEngineOwned(requestGroups) {
   }
   return { asked, owned };
 }
+// The action event a takeover emits. Pulled out as a named function because its two fields are the whole
+// point of the takeover work: `reason` names WHO decided (the engine, and which rule took it), and it must
+// not be overwritten by why the order was then refused. Before this, a refused engine takeover was logged
+// as `queue_changed` / `mission_locked` and the attribution -- the single most important fact about the
+// entry -- was gone. The executor's own reason travels in `rejectedBecause`.
+export function takeoverEvent({ id, choice, action, execution, reason, owned, tick, sourceTick }) {
+  return {
+    kind: "action", tick, sourceTick, question: id, choice, action, ...execution,
+    auto: true, ...(owned ? { engineOwned: true } : {}),
+    reason,
+    ...(execution?.accepted ? {} : { rejectedBecause: execution?.reason }),
+  };
+}
 export async function attachJevPlayer(api, options = {}) {
   if (!api) throw new Error("Enter a battle before attaching Jev.");
   const requestDecision = options.requestDecision;
@@ -2409,11 +2422,7 @@ export async function attachJevPlayer(api, options = {}) {
           status.decisions++;
           if (execution.accepted) afterAccepted(action, execution);
           rememberChoice(memory, id, choice, execution, tick, true);
-          emit({
-            kind: "action", tick, sourceTick: tick, question: id, choice, action, ...execution,
-            auto: true, ...(owned ? { engineOwned: true } : {}),
-            reason: execution.accepted ? reason : execution.reason,
-          });
+          emit(takeoverEvent({ id, choice, action, execution, reason, owned, tick, sourceTick: tick }));
         }
       };
       // The engine takes them now. With no answers only the owned options come back, and only where the

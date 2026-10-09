@@ -101,6 +101,43 @@ test('the ledger counts own losses exactly and enemy kills only inside our visio
   assert.equal(l.enemyBuildingsDestroyed, 0); assert.equal(memory.ledger.seenEnemy.size, 0, 'stale fog sightings are forgotten silently');
 });
 
+test('an engine takeover is logged as the engine\'s decision, not as the refusal that followed it', async () => {
+  const g = game();
+  // A barracks stands, the base is below its defensive floor, and the armory offers one tower. That makes
+  // the tower engine-owned (see the floor takeover), so it is taken without asking the model.
+  const c = { ...catalog(), GAPILE: { factory: 'InfantryType', cost: 500, label: 'Barracks' }, GAPILL: { isBaseDefense: true, cost: 500, label: 'Pillbox', weapon: { damage: 50, rof: 26, range: 5.5, ag: true, verses: [1,1,1,1,1,1] } } };
+  g.own.push({ id: 90, name: 'GAPILE', type: 2, tile: { rx: 11, ry: 11 }, hitPoints: 500, maxHitPoints: 500 });
+  // The structures queue holds a building, so the armory queue is the only free one and the tower is offered.
+  const armory = { type: 1, size: 0, maxSize: 99, items: [] };
+  g.api.production.available = (q) => (q === 1 ? [{ name: 'GAPILL', type: 2 }] : []);
+  g.api.production.queues = () => Array.from({ length: 6 }, (_, type) => (type === 1 ? armory : { type, size: 0, maxSize: 99, items: [] }));
+  const player = await attachJevPlayer(g.api, {
+    catalog: c, intervalMs: 1e9, wakeIntervalMs: 0, disableMicro: true, maxDecisions: 50,
+    requestDecision: async (body) => ({ answers: Object.fromEntries(Object.keys(body.groups).map((id) => [id, { type: 'choice', choice: 'wait', confidence: 1 }])) }),
+  });
+  try {
+    await settle();
+    const taken = player.status.events.filter((e) => e.kind === 'action' && e.auto);
+    assert.ok(taken.length >= 1, 'the engine took its own action');
+    for (const e of taken) {
+      // `reason` names the DECIDER and stays stable; the executor's own reason travels beside it. Logging a
+      // refused engine takeover as `queue_changed` loses the one fact the report exists to carry.
+      assert.match(e.reason, /^engine_decided$|^auto_/, `${e.question}: reason names the engine (${e.reason})`);
+      if (e.accepted === false) assert.ok(e.rejectedBecause, `${e.question}: the refusal reason is kept separately`);
+    }
+    // Now force a REFUSAL of an engine takeover and check that the attribution survives it. The model locks
+    // onto the visible building, so the engine's next attempt at the same kind of target is gated out with
+    // `mission_locked` -- exactly the shape of refusal that used to erase who decided.
+    player.memory.missionLock = { targetId: 900, x: 20, y: 20, tick: g.api.tick() };
+    g.advance(20); g.fire(); await settle();
+    const refused = player.status.events.filter((e) => e.kind === 'action' && e.auto && e.accepted === false);
+    for (const e of refused) {
+      assert.match(e.reason, /^engine_decided$|^auto_/, `${e.question}: a refused takeover still names the engine (${e.reason})`);
+      assert.ok(e.rejectedBecause, `${e.question}: and carries why it was refused (${e.rejectedBecause})`);
+    }
+  } finally { player.stop('manual'); }
+});
+
 test('with nothing in sight the army explores on its own, whether or not the model answers', async () => {
   const g = game();
   g.api.units = r => r === 'self' ? g.own : [];
