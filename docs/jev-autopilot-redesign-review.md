@@ -1740,3 +1740,44 @@ fetch 进任何提交都会让它成立）核对每份战报的 `match.meta.buil
 对方分支上**不存在**本评审的任何一项修复（`counterAverage` / `withRefusalReason` /
 `versesRow` / `canUnitHurt` / `rejectedBecause` 全部为 0）。所以"主线定在本分支"
 是正确的决定：**把修复放到功能更少但更正确的一条线上**，再逐项补功能。
+
+---
+
+## 0.37 方向修正：**不参考 `C:\jev-merge`**，按 API 文档重写
+
+用户明确指示：那条线**已经被改崩**，不要参考它，改为**直接参考 API 文档重写**。
+因此 §0.36 的"从那条线精选移植"作废——**移植的对象本身不可信**。
+
+### 已撤回
+
+我按那条线的实现开了 `crate_` 移植的头（常量、选项构造、执行器、任务记性四处），
+收到指示后**用 `git checkout` 全部撤回**，工作区回到已验证的绿色状态（`636485c`）。
+**没有留下任何半成品。**
+
+### 按本仓库 API 文档确认的权威契约
+
+| 来源 | 契约 |
+|---|---|
+| `werhd-player-api.d.ts:339` | `crates(): Array<{ id: number; name: string; tile: PlayerConsoleTile; water: boolean }>` |
+| `werhd-player-api.d.ts:342` | `gather(unitIds: number[], x: number, y: number): void` |
+| `werhd-player-api.d.ts:352` | `move(unitIds: number[], x: number, y: number): void` |
+| `docs/player-console-api.md:81` | `werhd.crates()` —**仅本地可见** |
+| `docs/player-console-api.md:178` | `werhd.gather(ids, x, y)` — **「采矿到明确地格；矿区搜索与选择由用户脚本完成」** |
+| `docs/player-console-api.md:249` | `Gather = 14` |
+| `docs/game-api-requests.md:237` | `unit.created` 的 `source` 可为 **`'crate'`** —— 箱子确实会生成单位 |
+
+**由文档得出的两个结论**（不是从那条线抄的）：
+
+1. **箱子拾取的动词是 `move`，不是 `gather`。** 文档把 `gather` 限定为"采矿到明确地格"，
+   没有任何一处说它能拾箱；而箱子是"单位站上去即拾取"，所以正确做法是把单位**移动到那格**。
+2. **`crates()` 是独立列表**（不在 `units()` 里）且仅本地可见，所以要靠它自己判断，不能走单位列表；
+   而 `source: 'crate'` 说明箱子里确实可能是基地车——这正是它值得单独处理的原因。
+
+### 下一步（按文档重写，不参考任何既有实现）
+
+1. 读 `api.crates()`，过滤 `water`，用**箱子 id**（不是单位列表）判断是否已在去往途中；
+2. 选项动作为 `{ type: 'move', ids: [unitId], x, y }`——**用文档认可的 `move`**；
+3. 执行前**重新读 `crates()`**（箱子可能已被别人拾走或消失），不在就拒 `crate_gone`；
+4. 任务生命周期：`rememberSpecial` 记入、`maintainSpecial` 负责超时与重发，
+   否则"已在去往途中"的标记永不释放，功能会卡死；
+5. 每条断言都用**变异检查**验证到能失败为止。
