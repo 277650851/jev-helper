@@ -424,6 +424,16 @@ export function investmentGroups(api, catalog, snapshot, memory, groups) {
   const attackers = baseThreats(api, catalog, buildings, enemies, units.filter(u => catalog[u.name]?.harvester));
   const defenseTargets = strategy.underPressure ? attackers : [];
   const targetDefenses = strategy.underPressure ? (strategy.suppressed ? 6 : 3) : defenseFloor ? MIN_BASE_DEFENSES : 1;
+  // What the tower CHOICE is ranked against, which is a different question from what the base is currently
+  // defending against. Gating on `underPressure` meant that with no attacker at the walls the ranking fell
+  // back to a generic infantry/vehicle average and the visible enemy was ignored -- so a base watching
+  // Kirovs approach picked a pillbox, and one watching tanks could pick the anti-air tower. The floor path
+  // is exactly this situation: it builds before the raid arrives, which is the point of having a floor.
+  //
+  // Coverage and placement keep using `defenseTargets`: counting a tower as "covering" an enemy across the
+  // map would make the base look defended, and placing against a distant enemy would try to build outside
+  // the base.
+  const defenseRanking = defenseTargets.length ? defenseTargets : enemies;
   let defensePlan, coverage = 0, floorTagged = false;
   if (s.harvesters >= Math.min(2, s.economy?.targetMiners ?? 2, strategy.underPressure ? 1 : 2) && free(api.QueueType.Armory)) {
     const options = api.production.available(api.QueueType.Armory).filter(i => catalog[i.name]?.isBaseDefense && !catalog[i.name]?.wall)
@@ -431,7 +441,7 @@ export function investmentGroups(api, catalog, snapshot, memory, groups) {
       // a tower that cannot engage them. This is what makes the answer to an air raid differ from the
       // answer to a tank push: an anti-air tower holds a nonzero damage figure against tanks and used to
       // outrank or lose to a pillbox by an average that ignored which of them can actually shoot.
-      .map(i => ({ ...i, queue: api.QueueType.Armory, value: counterValue(catalog[i.name], defenseTargets, catalog, api) }));
+      .map(i => ({ ...i, queue: api.QueueType.Armory, value: counterValue(catalog[i.name], defenseRanking, catalog, api) }));
     coverage = defenseUnits.filter(u => defenseTargets.length
       ? defenseTargets.some(e => canFireAt(api, catalog, u, e))
       : counterValue(catalog[u.name], [], catalog, api) > 0).length;

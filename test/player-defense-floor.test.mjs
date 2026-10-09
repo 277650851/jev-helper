@@ -59,4 +59,33 @@ const groupsFor = (scenario) => {
   for (const k of options) assert.notEqual(groups.defenses.actions[k].engineOwned, true, `${k}: no barracks, so no floor`);
   assert.equal(snap.state.strategy.underPressure, false);
 }
+
+// 4. The tower CHOICE follows the visible enemy even when nothing is at the walls yet. Ranking used to be
+//    gated on `underPressure`, so with no attacker in range it fell back to a generic infantry/vehicle
+//    average and the visible enemy was ignored -- a base watching Kirovs approach picked a pillbox, and one
+//    watching tanks could pick the anti-air tower. The floor path is exactly that situation: it builds
+//    before the raid arrives, which is what a floor is for.
+//
+//    Coverage and placement still use only the attackers at the base: counting a tower as "covering" an
+//    enemy across the map would make a base look defended, and placing against a distant enemy would try to
+//    build outside the base. This test pins the ranking, not the count.
+{
+  const distant = (name, kind, type, n, extra) => Array.from({ length: n }, (_, i) => ({ id: 900 + i, name, kind, type, tile: { rx: 44, ry: 44 }, ...extra }));
+  const shownValue = (visibleEnemies) => {
+    const state = { side: 'allied', ...SCENARIOS.defense_floor(), visibleEnemies };
+    const api = replayApi(state, { ...CATALOG });
+    const catalog = { ...CATALOG };
+    const snap = collectState(api, catalog);
+    const groups = candidateGroups(api, catalog, snap, {});
+    assert.equal(snap.state.strategy.underPressure, false, 'no attacker is in range: this is the peacetime path');
+    const key = Object.keys(groups.defenses.actions).find((k) => k !== 'wait');
+    assert.ok(key, 'a tower is still offered below the floor');
+    return Number((/estimated effectiveness (\d+)/.exec(groups.defenses.criteria[key]) ?? [])[1] ?? NaN);
+  };
+  const nothing = shownValue([]);
+  const armour = shownValue(distant('HTNK', 'HTNK', 7, 3, { armor: 'heavy' }));
+  assert.ok(Number.isFinite(nothing), 'the peacetime value is printed');
+  assert.ok(armour > nothing, `the visible armour raises the tower's score (${nothing} -> ${armour})`);
+}
 console.log('Defence floor: engine-owned only when it is the group\'s single real option, and only while a barracks stands');
+console.log('Defence ranking: the tower choice follows the visible enemy even before it reaches the base');
