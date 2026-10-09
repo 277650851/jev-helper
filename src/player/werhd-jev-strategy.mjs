@@ -88,6 +88,14 @@ export function deployRecommendation(api, catalog, unit, enemies) {
 }
 
 // Reversible deployment selects one slot; ordinary dual-purpose units can use both.
+//
+// Slots holding a tool rather than a weapon are dropped. An engineer's DefuseKit and
+// VirtualScanner, and an attack dog's VirtualScanner, are Damage=1 on the InvisibleAll placeholder
+// projectile, which rules.ini flags AA=yes/AG=yes (C:\ra2\代码词典和文字教程\2.单位属性rules词典 --
+// `Gunner` notes this is the IFV mechanic, and these slots are not guns at all). Every caller here
+// asks "can this shoot aircraft" or "how hard does it hit", and a tool answers yes to the first and
+// 1 damage to the second, so an engineer counted as an anti-air emplacement and scored like a tank.
+// Filtering at the source fixes all six call sites at once rather than six separate guards.
 export function activeWeapons(unit, catalog) {
   const rule = catalog[unit.name] ?? {};
   const slots = rule.deployer ? [unit.isDeployed ? 'secondary' : 'weapon'] : ['weapon', 'secondary'];
@@ -99,7 +107,7 @@ export function activeWeapons(unit, catalog) {
       range: actual.maxRange ?? actual.range ?? weapon?.range,
       minRange: actual.minRange ?? weapon?.minRange,
     } : {}) };
-  }).filter(Boolean);
+  }).filter(isRealWeapon);
 }
 
 export function currentWeapon(unit, catalog) {
@@ -140,15 +148,47 @@ export function baseThreats(api, catalog, buildings, enemies, harvesters = []) {
     (dist(e.tile, b.tile) < 18 || canFireAt(api, catalog, e, b))));
 }
 
+// Verses ordering, from the community rules dictionary (C:\ra2\代码词典和文字教程\6.武器系统代码词典
+// line 247): "11 个值用逗号隔开，顺序如下 None,Flak,Plate,Light,Medium,Heavy,Wood,Steel,Concrete,
+// Special_1,Special_2". The API's ArmorType enumerates exactly these 11 in that order, so a Verses
+// array indexes straight into it and no name lookup is needed for a live unit.
+//
+// Two things the same entry settles, both of which this function previously got wrong by omission:
+//   - the value IS the damage ratio, not a bonus. 75 means 0.75, so an un-normalised "75" would
+//     inflate every score by 100x;
+//   - 0, 1 and 2 are hardcoded flags rather than ratios: 0% cannot be forced to attack, cannot
+//     return fire and cannot attack at all; 1% cannot return fire; 2% does not acquire targets (a
+//     Westwood bug, listed as ineffective). Treating those as a multiplier, or as the `?? 1`
+//     fallback, scores a weapon the unit cannot legally use as a full-strength one.
+export const ARMOR_ORDER = ['none', 'flak', 'plate', 'light', 'medium', 'heavy', 'wood', 'steel', 'concrete', 'special_1', 'special_2'];
+
+// A tool that merely occupies a weapon slot -- an engineer's DefuseKit and VirtualScanner, an attack
+// dog's VirtualScanner -- is Damage=1 on the InvisibleAll placeholder projectile, which rules.ini
+// flags AA=yes/AG=yes. Every caller here asks "can this shoot aircraft" or "how hard does it hit",
+// and a tool answers yes to the first and 1 damage to the second, so an engineer counted as an
+// anti-air emplacement. Damage<=1 is what separates a tool from a weapon.
+const isRealWeapon = w => !!w && (w.damage ?? 0) > 1;
+const versesOf = (w, index) => {
+  const raw = w.versus?.[index] ?? w.verses?.[index];
+  if (raw === undefined || raw === null) return 1;
+  const n = typeof raw === 'string' ? parseFloat(raw) : raw;
+  return Number.isFinite(n) ? n : 1;
+};
+
 export function weaponEffectiveness(w, targets, catalog, api) {
-  if (!w) return 0;
+  if (!isRealWeapon(w)) return 0;
   const samples = targets.length ? targets : [{ type: api.ObjectType.Infantry }, { type: api.ObjectType.Vehicle }];
   return samples.reduce((sum, t) => {
     if (t.zone === (api.ZoneType?.Air ?? 1) ? !w.aa : w.ag === false) return sum;
     const armor = catalog[t.name]?.armor;
     const index = t.armor ?? Object.entries(api.ArmorType ?? {}).find(([k, v]) => /^\d+$/.test(k) && String(v).toLowerCase() === armor)?.[0]
       ?? (t.type === api.ObjectType.Infantry ? (api.ArmorType?.None ?? 0) : (api.ArmorType?.Heavy ?? 5));
-    const verses = w.verses?.[index] ?? w.versus?.[index] ?? 1;
+    // The dictionary lists 0%, 1% and 2% as hardcoded flags: 0 cannot attack at all, 1 cannot
+    // return fire, 2 does not acquire. Everything else is a plain multiplier, and values above 1
+    // are bonuses -- SIEGE carries Verses=2 against steel for double damage, so treating "above 1"
+    // as a percentage would scale a bonus down by 100x.
+    const verses = versesOf(w, index);
+    if (verses === 0) return sum;
     return sum + (w.damage || 0) * verses * 15 / (w.rof || 30) * Math.max(0.5, (w.range || 4) / 5);
   }, 0) / samples.length;
 }
@@ -369,7 +409,9 @@ export function investmentGroups(api, catalog, snapshot, memory, groups) {
     // counting it twice let the base stop at fewer defenses than it looked like it had.
     const answersAir = (u) => {
       const r = catalog[u.name] ?? {};
-      return [r.weapon, r.secondary].some(w => (w?.damage ?? 0) > 0 && w.aa !== false);
+      // isRealWeapon, not `damage > 0`: a building whose "weapon" is a Damage=1 tool on the
+      // InvisibleAll placeholder (AA=yes/AG=yes) otherwise counts as a tower that answers aircraft.
+      return [r.weapon, r.secondary].some(w => isRealWeapon(w) && w.aa !== false);
     };
     coverage = defenseUnits.filter(u => (defenseTargets.length
       ? defenseTargets.some(e => canFireAt(api, catalog, u, e))

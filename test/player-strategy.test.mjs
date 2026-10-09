@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { collectState, candidateGroups } from '../src/player/werhd-jev-player.mjs';
-import { chooseBuildingSite, isAirSupport, effectiveness } from '../src/player/werhd-jev-strategy.mjs';
+import { chooseBuildingSite, isAirSupport, effectiveness, activeWeapons } from '../src/player/werhd-jev-strategy.mjs';
 
 const catalog = {
   YARD: { yard: true, factory: 'BuildingType' }, POWER: { power: 200, cost: 800 },
@@ -408,3 +408,30 @@ api.production.queues=idleQueues;own.push(u(87,'TANK',7));
 snap=collectState(api,catalog);groups=candidateGroups(api,catalog,snap,{});
 assert.ok(groups.vehicles.actions.produce_HELI,'airborne options remain available when the ground-force prerequisite is satisfied');
 console.log('Ground queue: airborne vehicles cannot fill or indefinitely delay the required ground force');
+
+// C:\ra2\代码词典和文字教程\6.武器系统代码词典 line 247 fixes the Verses contract: eleven values in
+// the order None,Flak,Plate,Light,Medium,Heavy,Wood,Steel,Concrete,Special_1,Special_2, where the
+// value is the damage ratio and 0%, 1% and 2% are hardcoded flags (cannot attack / cannot return
+// fire / does not acquire). Three consequences, all asserted here at top level like the rest of
+// this file, which predates node:test.
+{
+  const steel = { name: 'FORT', type: 3, armor: 7 };
+  const plain = { damage: 100, rof: 100, range: 10, ag: true, verses: [1, 1, 1, 1, 1, 1, 1, 1, 1] };
+  const doubleSteel = { ...plain, verses: [1, 1, 1, 1, 1, 1, 1, 2, 1] };
+  assert.ok(effectiveness({ weapon: doubleSteel }, [steel], {}, api) >
+    effectiveness({ weapon: plain }, [steel], {}, api),
+  'Verses=2 against steel is double damage, so scaling "above 1" as a percent would invert it');
+
+  const unusable = { damage: 100, rof: 100, range: 10, ag: true, verses: [1, 1, 1, 1, 1, 1, 1, 0, 1] };
+  assert.equal(effectiveness({ weapon: unusable }, [steel], {}, api), 0,
+    'a weapon the unit cannot use against that armor must score 0, not fall back to a 1.0 bonus');
+
+  // rules.ini gives an engineer DefuseKit and VirtualScanner, and an attack dog VirtualScanner: all
+  // Damage=1 on InvisibleAll, which is flagged AA=yes/AG=yes. Counting those as weapons made an
+  // engineer read as an anti-air emplacement scoring like a tank.
+  const tool = { damage: 1, rof: 30, range: 5, aa: true, ag: true };
+  assert.equal(effectiveness({ weapon: tool }, [], {}, api), 0, 'a tool contributes no effectiveness');
+  assert.equal(activeWeapons({ name: 'ENGINEER' }, { ENGINEER: { weapon: tool, secondary: tool } }).length, 0,
+    'and it is not offered as a weapon slot at all');
+  console.log('Verses: bonuses above 1, the 0 cannot-attack flag, and Damage=1 tools');
+}
