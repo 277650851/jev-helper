@@ -323,7 +323,13 @@ export function specialGroups(api, catalog, snapshot, memory, groups) {
     // Neutral targets must be real technology buildings; lamp posts and pipes owned by a civilian
     // house cannot be captured and only trap the engineer in a retry loop.
     .filter((c) => c.neutral ? isCapturable(catalog[c.unit.name], c.unit.name) : (!c.defended && (catalog[c.unit.name]?.refinery || catalog[c.unit.name]?.factory || catalog[c.unit.name]?.yard || catalog[c.unit.name]?.power > 0 || (catalog[c.unit.name]?.techLevel ?? 0) >= 2)))
-    .sort((a, b) => Number(b.neutral) - Number(a.neutral) || Number(a.defended) - Number(b.defended) || a.dist - b.dist)
+    // Sort by cost of doing it, not by category first. Neutral-before-enemy was the rule for a long time
+    // and it sent engineers past a refinery four tiles from the base to reach a neutral outpost most of
+    // the map away, because the two are compared before distance is looked at. An engineer is consumed
+    // per capture and walks at infantry speed, so a capture 120 tiles out delays every later one and
+    // every building it unlocks. Distance leads; "undefended" still outranks "defended" at equal range,
+    // and a neutral building only wins a tie against an enemy building of the same distance.
+    .sort((a, b) => a.dist - b.dist || Number(a.defended) - Number(b.defended) || Number(b.neutral) - Number(a.neutral))
     .slice(0, 4);
   // The player's capture objective ("使用工程师占领盟军战略实验室") comes first even when defended:
   // the mission needs it, and waiting does not make it safer.

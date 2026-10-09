@@ -416,6 +416,14 @@ export function investmentGroups(api, catalog, snapshot, memory, groups) {
     coverage = defenseUnits.filter(u => (defenseTargets.length
       ? defenseTargets.some(e => canFireAt(api, catalog, u, e))
       : effectiveness(catalog[u.name], [], catalog, api) > 0) || (airTargets.length > 0 && answersAir(u))).length;
+    // Why a defence the rules allow is never offered. All nine IsBaseDefense emplacements need a
+    // prerequisite the opening plan never builds: the pillboxes and SAMs need a barracks (fine), but
+    // TESLA/ATESLA/CTESLA need RADAR, and Radar (GARADR) needs a *second* refinery while the plan
+    // deliberately caps refineries at one. So the Prism Cannon was unreachable for the whole match
+    // and the base answered with pillboxes alone. Recording the blocked chain lets the construction
+    // group ask for the building that unlocks them instead of silently offering nothing.
+    s.defenseBlocked = options.filter(i => i.value <= 0 || (catalog[i.name]?.power ?? 0) < 0 && (s.economy?.powerMargin ?? 0) < -(catalog[i.name]?.power ?? 0))
+      .map(i => ({ name: i.name, label: catalog[i.name]?.label ?? i.name, techLevel: catalog[i.name]?.techLevel ?? 0 }));
     if (coverage < targetDefenses && (defenseUnits.length < 8 || strategy.underPressure && coverage < 2)) for (const item of options.sort((a, b) => b.value / Math.sqrt(catalog[b.name].cost) - a.value / Math.sqrt(catalog[a.name].cost))) {
       if (Object.keys(dg.actions).length >= 3) break;
       if (item.value <= 0) continue;
@@ -634,10 +642,17 @@ export function investmentGroups(api, catalog, snapshot, memory, groups) {
     }
     // A missing barracks belongs here with power, the first refinery and the first factory: it is
     // the opening's defence, and the reserve must not hold it back.
+    //
+    // Everything the opening plan offers is essential by construction: `player.mjs` decides one step
+    // at a time and only offers a building it is actually asking for next. Recognising only the four
+    // basics here meant the technology buildings were deleted a few lines later by the reserve check,
+    // which is why the plan could never get past the war factory even once it started offering them.
     const essential = id === 'construction' && (r.power > 0
       || r.factory === 'InfantryType' && !buildings.some(b => catalog[b.name]?.factory === 'InfantryType')
       || r.refinery && !s.economy.refineries
-      || r.factory === 'UnitType' && !r.naval && !s.economy.factories);
+      || r.factory === 'UnitType' && !r.naval && !s.economy.factories
+      // A building the plan explicitly chose still has to survive the reserve check.
+      || r.wantsConstruction);
     if (!essential && s.uncommittedCredits - a.cost < strategy.reserve) { delete g.actions[key]; delete g.criteria[key]; }
   }
   // Explain upgraded unit advantages to the model using current target armor, range and rules.

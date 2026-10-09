@@ -515,27 +515,79 @@ export function candidateGroups(api, catalog, snapshot, memory) {
   // A step is skipped when this game build does not offer it, so the opening cannot stall on a
   // barracks that is not on the menu.
   const canBarracks = buildable.some((i) => catalog[i.name]?.factory === "InfantryType");
-  if (!queueOf(constructionType)?.size)
+  // What the base still owes itself, most urgent first. The first four are the opening the game's own
+  // AI uses and the order is load-bearing: a barracks before the refinery is what turns the first
+  // credits into something that can defend the base, while a refinery only widens the income channel.
+  //
+  // Past those four the old plan simply stopped, which left every technology building unreachable for
+  // the rest of the match -- and that is not a cosmetic gap. Radar is a prerequisite of TESLA/ATESLA/
+  // CTESLA, so with no radar the base could never field a Prism Cannon no matter how much it waited;
+  // the airfield gates the aircraft wing that `operationalGoals` asks for; the service depot, radar,
+  // outpost and tech level 8 are what `CombatDamage`/`AIAlternateProductionCreditCutoff` assume exist.
+  // Each entry is a predicate over what is standing, so a rule the match does not offer is skipped
+  // rather than blocking the ones after it.
+  const owns = pred => buildings.some(b => pred(catalog[b.name] ?? {}, b));
+  // Power first, and keep enough headroom for the next building. The old test was `powerMargin < 50`
+  // and nothing else, so a base sitting at exactly 0 margin re-satisfied the power step on every
+  // subsequent turn and never advanced past the war factory: the war factory draws -25, a radar -50, a
+  // battle lab -100, and each was permanently one step behind a power plant the base already had.
+  // "Keep at least 50 spare power" has to mean headroom over what the next building will draw.
+  // Only over the *next* one, though: pricing against the most expensive building on the menu (a
+  // -100 battle lab) leaves a base buying power plants forever while it waits for a factory it has.
+  const pendingDraw = () => {
+    const wanted = buildable.filter(i => { const r = catalog[i.name]; return r && !r.naval && (r.factory === "UnitType" || r.buildCategory === "Tech"); });
+    return Math.min(0, ...wanted.map(i => catalog[i.name]?.power ?? 0).filter(p => p < 0));
+  };
+  const powerStep = () => powerMargin < 50 + Math.abs(pendingDraw()) || !buildings.length;
+  // Building identities come from docs/ra2-unit-catalog.md (internal ID = catalog key = rules.ini
+  // section). Matching on `label` instead was wrong three times over: "Service Depot" is GADEPT/NADEPT,
+  // "Outpost" CAOUTP is a *neutral capturable* that never appears on the build menu, and the Allied
+  // radar building is GAAIRC -- which rules.ini lists as the RADAR prerequisite for ATESLA, so a base
+  // without it cannot field a Prism Cannon no matter how long it waits.
+  //
+  // GAAIRC serves both roles (the catalog lists it as Airforce Command Headquarters, unlocking aircraft,
+  // radar vision and paratroopers) while GAHPAD only parks aircraft, so the two are tracked separately:
+  // one building satisfies both, and asking for the radar first is what unlocks the defence tier.
+  const has = pred => owns(pred);
+  const RADAR_ONLY = r => /^NARADR$|^AMRADR$|^GASPYSAT$/.test(r.name ?? '') || /(^|\s)radar(\s|$)|spy satellite/i.test(r.label ?? '');
+  const AIR_HUB = r => /^GAAIRC$|^GAHPAD$|^NAHPAD$|^AFLD$/.test(r.name ?? '') || /airfield|helipad|airforce command/i.test(r.label ?? '');
+  const hasRadar = () => has(r => RADAR_ONLY(r) || AIR_HUB(r));
+  const REPAIR = r => /^GADEPT$|^NADEPT$/.test(r.name ?? '') || /repair|service depot/i.test(r.label ?? '');
+  const AIRFIELD = r => /^GAHPAD$|^NAHPAD$|^AFLD$/.test(r.name ?? '') || /airfield|helipad/i.test(r.label ?? '');
+  const LAB = r => /^GATECH$|^NATECH$|^YBLAB$/.test(r.name ?? '') || /battle lab|tech lab/i.test(r.label ?? '');
+  const opening = [
+    { why: "the base needs power, with headroom for the next building it will add", need: r => r.power > 0, when: powerStep },
+    { why: "the first credits need infantry and a turret to become a defence", need: r => r.factory === "InfantryType", when: () => !barracks && canBarracks },
+    { why: "income has no source yet", need: r => r.refinery, when: () => !refineries },
+    { why: "no tanks can be built without it", need: r => r.factory === "UnitType", when: () => !factories },
+    // rules.ini lists RADAR as a prerequisite of ATESLA/TESLA/CTESLA; this also opens the map.
+    { why: "radar: ATESLA/TESLA/CTESLA all list it as a prerequisite, and it opens the map for paratroopers", need: r => RADAR_ONLY(r) || AIR_HUB(r), when: () => !powerStep() && refineries > 0 && !hasRadar() },
+    // The wing operationalGoals targets. GAHPAD, unless the radar step already produced GAAIRC.
+    { why: "the attack plan calls for an aircraft wing", need: r => AIRFIELD(r), when: () => !powerStep() && factories >= 1 && !has(AIRFIELD) && !has(r => /^GAAIRC$/.test(r.name ?? '')) },
+    // Without it every vehicle lost is gone for the rest of the match.
+    { why: "repairs vehicles, which are otherwise lost permanently", need: r => REPAIR(r), when: () => !powerStep() && factories >= 1 && !has(REPAIR) },
+    { why: "higher technology needs a battle lab", need: r => LAB(r), when: () => !powerStep() && factories >= 1 && !has(LAB) },
+  ];
+  if (!queueOf(constructionType)?.size) {
+    // One step per turn, the first whose precondition still holds. Deciding this once outside the loop
+    // is what keeps the steps mutually exclusive: asking per building let every building that shared a
+    // category match the same step, and the opening offered power, barracks, refinery and factory at once.
+    const step = opening.find(s => s.when() && buildable.some(i => { const r = catalog[i.name]; return r && !r.naval && s.need(r); }));
     for (const item of buildable) {
       const r = catalog[item.name];
       if (!r || r.naval) continue;
-      let need = false;
-      // Power, then barracks, then refinery: the opening the game's own AI uses. A barracks early
-      // is what turns the first credits into something that can defend the base — infantry and a
-      // turret — while a refinery only widens the income channel. Putting the refinery second spent
-      // the opening on income and left nothing to fight the first raid with.
-      if (powerMargin < 50 || !buildings.length) need = r.power > 0;
-      else if (!barracks && canBarracks) need = r.factory === "InfantryType";
-      else if (!refineries) need = r.refinery;
-      else if (!factories) need = r.factory === "UnitType";
+      let need = !!step && step.need(r);
       // One refinery and one vehicle factory. A second of either was built automatically whenever
       // credits were surplus and the vehicle queue was busy, which spent the build orders on
       // duplicates (jev-report-20261008-054847 chose produce_GAWEAP three times). More income comes
       // from miners on the existing refinery, not from a second one.
-      if (need && state.self.credits >= Math.min(500, r.cost))
+      if (need && state.self.credits >= Math.min(500, r.cost)) {
+        // Flagged so the reserve check in investmentGroups keeps it: that check only whitelisted the
+        // four opening basics, and deleted anything else it was offered.
+        r.wantsConstruction = true;
         build(
           `produce_${item.name}`,
-          `Build ${r.label}; cost ${r.cost}; ${roleOf(r)}. Needed now by our development plan.`,
+          `Build ${r.label}; cost ${r.cost}; ${roleOf(r)}. Needed now because ${step.why}.`,
           {
             type: "produce",
             name: item.name,
@@ -555,7 +607,9 @@ export function candidateGroups(api, catalog, snapshot, memory) {
             auto: 1,
           },
         );
+      }
     }
+  }
   groups.construction.criteria.wait =
     "The construction queue is already occupied, or credits are below the cost of every offered building. Neither infrastructure recovery nor production expansion is affordable.";
   const vehicleType = api.QueueType?.Vehicles ?? 3;
@@ -697,7 +751,21 @@ export function candidateGroups(api, catalog, snapshot, memory) {
   const needsMovement = (u) =>
     memory.mission?.ids.includes(u.id) &&
     Math.hypot(u.tile.rx - memory.mission.x, u.tile.ry - memory.mission.y) > 4;
-  const nearbyTargets=u=>enemies.filter(e=>distance(u.tile,e.tile)<=Math.max(catalog[u.name]?.weapon?.range??0,catalog[u.name]?.secondary?.range??0));
+  // Targets this unit can actually hit, not merely ones standing nearby. Distance alone sent the attack
+  // dog at armour: rules.ini gives it GoodTeeth on the ADOGJUMP projectile (AA=no, Range=1.5,
+  // Armor=none), so it is an infantry-only sweeper. Ordering it to charge a tank produced the worst
+  // possible outcome -- the cheapest unit in the game spent on a target it cannot damage.
+  const hittableBy = (u, e) => {
+    const r = catalog[u.name] ?? {}, w = combatWeapon(u, catalog);
+    if (e.zone === 1 && !w.aa) return false;
+    if (e.zone !== 1 && w.ag === false) return false;
+    const range = w.range ?? 0;
+    return range > 0 && distance(u.tile, e.tile) <= range;
+  };
+  const nearbyTargets = u => {
+    const reach = Math.max(catalog[u.name]?.weapon?.range ?? 0, catalog[u.name]?.secondary?.range ?? 0);
+    return enemies.filter(e => distance(u.tile, e.tile) <= reach && hittableBy(u, e));
+  };
   const stanceScores=u=>{const targets=nearbyTargets(u),r=catalog[u.name];
     const score=w=>{if(!targets.length)return weaponEffectiveness(w,[],catalog,api);const reachable=targets.filter(e=>distance(u.tile,e.tile)<=(w?.range??0)&&distance(u.tile,e.tile)>=(w?.minRange??0));return reachable.length?weaponEffectiveness(w,reachable,catalog,api):0;};
     return {targets,normal:score(r.weapon),deployed:score(r.secondary)};};
@@ -1095,11 +1163,17 @@ export function candidateGroups(api, catalog, snapshot, memory) {
       memory.enemyBuildings.size
         ? "Wait only if a scout is already moving. The force is not ready to attack, so one expendable unit should keep revealing the map for objectives and enemy positions."
         : "Wait only if a scout is already moving or the enemy base has already been discovered. With idle troops and an unknown enemy base, choose one of the frontiers.";
-    if (scoutIsDog) groups.scouting.instructions += ` The scout that will be sent is the ${catalog[scout.name].label}: it is the fastest thing on the field, the cheapest to replace if the trip goes wrong, and it is the only unit that detects a Crazy Ivan before the bomb goes off. Do not send a rifleman instead.`;
-    for (const p of memory.points.slice(0, 2))
+    if (scoutIsDog) groups.scouting.instructions += ` The scout that will be sent is the ${catalog[scout.name].label}: it is the cheapest to replace if the trip goes wrong, and it is the only unit that detects a Crazy Ivan before the bomb goes off. It cannot attack armour or aircraft -- its bite is a 1.5-tile infantry-only sweep -- so it scouts and screens infantry, it does not hunt tanks.`;
+    // Every frontier, not just the best two, and always offered automatically. Two limits kept the dog
+    // parked: the option list stopped at two frontiers, so once those were fogged there was nothing left
+    // to choose and the group answered wait (91% across 86 questions in jev-report-20261009-223656,
+    // 24 of them falling through to the auto path); and `auto` was gated on a completely empty
+    // battlefield, so any single visible enemy cancelled it. A scout that must be re-asked every 450
+    // ticks and only walks two tiles of map does not explore the map.
+    for (const p of memory.points)
       scoutChoice(
         `explore_${p.x}_${p.y}`,
-        `${objectiveUnseen ? "Find the objective: " : ""}${mobilize ? "Advance " + tanks.length + " tanks" : "Scout with one expendable unit"} to the revealed frontier tile (${p.x},${p.y}), which has ${p.fog} unexplored adjacent tiles. Reveal the enemy base, attack any opposition.`,
+        `${objectiveUnseen ? "Find the objective: " : ""}${mobilize ? "Advance " + tanks.length + " tanks" : "Scout with one expendable unit"} to the revealed frontier tile (${p.x},${p.y}), which has ${p.fog} unexplored adjacent tiles. Reveal the enemy base and keep revealing the map; fight only what gets in the way.`,
         {
           type: "mission",
           mode: "explore",
@@ -1107,7 +1181,7 @@ export function candidateGroups(api, catalog, snapshot, memory) {
           ids: mobilize ? tanks.map((u) => u.id) : [scout.id],
           x: p.x,
           y: p.y,
-          auto: enemies.length === 0 && !memory.enemyBuildings.size ? 3 : undefined,
+          auto: 2,
         },
       );
   }
