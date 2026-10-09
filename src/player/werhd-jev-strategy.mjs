@@ -394,7 +394,24 @@ export function investmentGroups(api, catalog, snapshot, memory, groups) {
   const defenseFloor = hasBarracks && defenseUnits.length < MIN_BASE_DEFENSES;
   const attackers = baseThreats(api, catalog, buildings, enemies, units.filter(u => catalog[u.name]?.harvester));
   const defenseTargets = strategy.underPressure ? attackers : [];
-  const targetDefenses = strategy.underPressure ? (strategy.suppressed ? 6 : 3) : defenseFloor ? MIN_BASE_DEFENSES : 1;
+  // A count is not a statement about what the emplacements can answer. The gate below used to be
+  // `coverage < targetDefenses` alone, so three pillboxes satisfied it for the rest of the match
+  // whatever the enemy built -- jev-report-20261010-012710 is a base with three pillboxes facing an AI
+  // that mass-produced Prism tanks, and the defence group never spoke again. The opposing AI reads our
+  // base and sends what beats it, so the reverse has to hold: an enemy class that nothing we own can
+  // hurt is a gap, and a gap raises the requirement by one however many emplacements already stand.
+  // Pillboxes answer infantry and nothing else, so a tank column is exactly this case.
+  // `weaponEffectiveness` reads `target.armor` (see the sample list it builds at the top of this file),
+  // so the probe below has to use the same field name or the gap never fires.
+  const enemyArmor = new Set(enemies.filter(e => e.type !== api.ObjectType.Building)
+    .map(e => e.armor ?? e.armorType).filter(a => a != null));
+  const unanswered = [...enemyArmor].some(armor => defenseUnits.every(u =>
+    effectiveness(catalog[u.name], [{ type: api.ObjectType.Vehicle, armor: armor }], catalog, api) <= 0));
+  const noAirAnswer = defenseUnits.length > 0 && !defenseUnits.some(u => answersAirEmplacement(catalog[u.name] ?? {}))
+    && enemies.some(e => e.zone === (api.ZoneType?.Air ?? 1));
+  const defenseGap = unanswered || noAirAnswer;
+  const targetDefenses = defenseGap ? defenseUnits.length + 1
+    : strategy.underPressure ? (strategy.suppressed ? 6 : 3) : defenseFloor ? MIN_BASE_DEFENSES : 1;
   let defensePlan, coverage = 0, floorTagged = false;
   if (s.harvesters >= Math.min(2, s.economy?.targetMiners ?? 2, strategy.underPressure ? 1 : 2) && free(api.QueueType.Armory)) {
     // Ground value is what the ranking below used, and it is zero for every anti-air emplacement, so the
