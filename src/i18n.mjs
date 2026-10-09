@@ -14,6 +14,7 @@ export const messages = {
  battlefield:['战场','Battlefield'],trends:['趋势','Trends'],settings:['设置','Settings'],
  connecting:['正在连接游戏…','Connecting…'],running:['{name} 正在托管','{name} is in control'],stopped:['托管已停止','Autopilot stopped'],ready:['等待开启托管','Ready for autopilot'],switchGame:['请切换到游戏页面','Open a game tab'],game:['王二火大 · 在线对局','WannaFire · Online match'],
  decisions:['模型回答','Model replies'],credits:['对局资金','Credits'],latency:['响应耗时','Response time'],start:['开启托管','Start autopilot'],stop:['停止','Stop'],
+  rulesProbe:['导出规则快照','Export rules snapshot'],rulesProbeDone:['规则快照已下载。','Rules snapshot downloaded.'],rulesProbeFail:['规则快照失败：未检测到进行中的对局。','Rules snapshot failed: no live match detected.'],
  idleMission:['进入对局后，{name} 将接管当前玩家。','Enter a match, then let {name} take control.'],thinking:['观察战况，等待下一次决策。','Reading the battlefield and planning the next move.'],
  situation:['实时战场态势','Battlefield awareness'],live:['实时 · 只读观测','LIVE · read-only'],stale:['最后观测 · 非实时','Last observation · not live'],noBattle:['进入对局后显示战场态势。无需开启托管。','Enter a match to view the battlefield. Autopilot can stay off.'],
  clear:['未发现基地威胁','No visible base threats'],pressure:['基地正在受到威胁','Base under threat'],suppressed:['基地持续受压','Base under sustained pressure'],critical:['核心建筑危险','Core structures in danger'],

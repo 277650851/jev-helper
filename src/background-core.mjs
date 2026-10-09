@@ -367,6 +367,14 @@ export function createBackground(c, {fetchImpl = fetch, now = Date.now, uuid = (
       return serial(controlLocks,sender.tab.id,async()=> (await getSession(sender.tab.id))?.running?stop(sender.tab.id):start(sender.tab.id));
     }
     if(!trustExtension(sender))throw new Error('此操作只允许在插件窗口中执行。');
+    // Dumps the live rules contract (`versus` keys/values, `ag`/`aa`, ArmorType) from the MAIN world
+    // into a download, so the effectiveness scoring can be checked against the real match instead of
+    // against the .d.ts type declaration. Read-only; it never touches the game.
+    if(message.type==='RULES_PROBE'){
+      const tabId=message.tabId??sender.tab?.id;
+      if(!tabId)throw new Error('未指定游戏标签页。');
+      return pageCall(tabId,'probeRulesAndSave',{});
+    }
     if(message.type==='GET_SETTINGS')return settingsView(await getSettings());
     if(message.type==='LOG_STATS'){const entries=await readLog();return {stats:logStats(entries),chars:JSON.stringify(entries).length};}
     if(message.type==='LOG_EXPORT'){

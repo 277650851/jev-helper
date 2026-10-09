@@ -38,6 +38,48 @@ if(window.__werhdJevExtension?.version!==VERSION){
     }catch{return {available:false,error:'对局已经结束或尚未开始。'};}
   }
   function stop(reason='manual') {player?.stop(reason);return {running:false,reason};}
+  // Rules probe. `werhd-player-api.d.ts` types `versus` as `Record<number, number>`, but nothing
+  // states what the keys are or whether the values arrive as 0.75 or as the raw "75%" from
+  // rules.ini, and `weaponEffectiveness` indexes that record by ArmorType. If the key space or the
+  // value form differs, every armor bonus silently becomes NaN or falls back to 1, and the
+  // effectiveness number the model is shown is fiction. Only a live match can settle it.
+  function probeRules(names=['LTNK','ORCA','NASAM','NAFLAK','BGGY','120mm']) {
+    const a=window.werhd;if(!a)return {error:'no werhd'};
+    const out={at:new Date().toISOString(),enums:{},rules:{},liveUnits:{}};
+    for(const k of ['ArmorType','ZoneType','ObjectType','FactoryType','BuildCat']) {
+      const e=a[k];out.enums[k]=e?Object.fromEntries(Object.entries(e).filter(([n,v])=>typeof v==='number')):null;
+    }
+    for(const n of names) {
+      for(const t of [a.ObjectType?.Vehicle,a.ObjectType?.Aircraft,a.ObjectType?.Building,a.ObjectType?.Infantry].filter(v=>v!==undefined)) {
+        const r=a.rules?.(n,t);if(!r)continue;
+        const shape=v=>v===undefined?{present:false}:{present:true,keys:Object.keys(v),json:JSON.parse(JSON.stringify(v))};
+        out.rules[`${n}#${t}`]={name:r.name,label:r.label,cost:r.cost,armor:r.armor,category:r.category,techLevel:r.techLevel,
+          primary:shape(r.primary),secondary:shape(r.secondary)};
+      }
+    }
+    // What the code actually reads at strategy.mjs:148-151 -- catalog.armor words and unit .armor values.
+    const words=new Set(),armors=new Set();
+    for(const u of [...(a.units?.('self')??[]),...(a.units?.('hostile')??[])]) {
+      armors.add(u.armor===undefined?'(undefined)':typeof u.armor==='number'?`number:${u.armor}`:`string:${u.armor}`);
+      const r=a.rules?.(u.name,u.type);if(r?.armor!==undefined)words.add(String(r.armor));
+    }
+    out.liveUnits={armorFieldShapes:[...armors].slice(0,20),catalogArmorWords:[...words].slice(0,20),
+      sample:(a.units?.('hostile')??[]).slice(0,3).map(u=>({name:u.name,type:u.type,zone:u.zone,armorField:u.armor,ruleArmor:a.rules?.(u.name,u.type)?.armor}))};
+    return out;
+  }
+  // The page script runs in the MAIN world and the content script cannot read it, so the result is
+  // handed over the way the player can actually reach: a download into the browser's default folder.
+  async function probeRulesAndSave(names) {
+    const data=probeRules(names);
+    try{
+      const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'});
+      const url=URL.createObjectURL(blob),link=document.createElement('a');
+      link.href=url;link.download=`werhd-rules-probe-${new Date().toISOString().replace(/[:.]/g,'-')}.json`;
+      document.body.appendChild(link);link.click();link.remove();
+      setTimeout(()=>URL.revokeObjectURL(url),30000);
+      return {saved:true,file:link.download,enums:data.enums?.ArmorType,keys:Object.keys(data.rules??{})};
+    }catch(e){return {saved:false,error:String(e),data};}
+  }
   window.__werhdJevExtension={
     version:VERSION,
     observe:createObserver(()=>window.werhd),
@@ -63,6 +105,8 @@ if(window.__werhdJevExtension?.version!==VERSION){
       return {running:true};
     },
     stop,
+    probeRules,
+    probeRulesAndSave,
     dispose:()=>{stop('extension_updated');window.removeEventListener('message',receive);},
   };
   // Public API identity changes between matches: never carry control into a new battle.

@@ -239,5 +239,13 @@ $('clear-key').addEventListener('click',async()=>{try{const provider=selectedPro
 for(const [id,type]of [['start','START'],['stop','STOP']])$(id).addEventListener('click',async()=>{
  $(id).disabled=true;notice('');try{await rpc({type,tabId});await refresh();}catch(e){if(reportError(e.message))openSettingsPanel();$(id).disabled=false;}
 });
+// Read-only diagnostics: dumps the live rules contract from the game so the effectiveness scoring can
+// be checked against a real match instead of against the .d.ts type declaration. Issues no orders.
+$('rules-probe').addEventListener('click',async()=>{
+  const b=$('rules-probe');b.disabled=true;try{
+    const r=await rpc({type:'RULES_PROBE',tabId});
+    notice(r?.saved?tr('rulesProbeDone'):tr('rulesProbeFail'));
+  }catch(e){notice(tr('rulesProbeFail'));}finally{b.disabled=false;}
+});
 try{config=await rpc({type:'GET_SETTINGS'});translate();displayConfig();const [tab]=await chrome.tabs.query({active:true,currentWindow:true});tabId=tab?.id;await refresh();}catch(e){notice(e.message);$('status').textContent=tr('connectionFailed');}
 const timer=setInterval(()=>refresh().catch(e=>{if(lastStatus)displayStatus({...lastStatus,liveObservation:false});notice(e.message);}),1500);window.addEventListener('pagehide',()=>clearInterval(timer),{once:true});
