@@ -145,7 +145,13 @@ export function baseThreats(api, catalog, buildings, enemies, harvesters = []) {
   // bomber, and that is fixed where the answer is chosen, in `investmentGroups`.
   return enemies.filter(e => e.primaryWeapon && defended.some(b =>
     weaponEffectiveness(currentWeapon(e, catalog), [b], catalog, api) > 0 &&
-    (dist(e.tile, b.tile) < 18 || canFireAt(api, catalog, e, b))));
+    (dist(e.tile, b.tile) < 18 || canFireAt(api, catalog, e, b))) ||
+    // An infantry swarm around the base kills miners, blocks the yard and takes objectives even
+    // though its rifles score zero against buildings. jev-report-20261010-050945 lost its defenses
+    // group for 4000 ticks because the raid was all infantry: baseThreats stayed empty, so
+    // underPressure stayed false and the group was deleted. Armed enemies inside 12 tiles of core
+    // infrastructure are pressure no matter what they can shoot.
+    (e.primaryWeapon && core.some(b => dist(e.tile, b.tile) < 12)));
 }
 
 // Verses ordering, from the community rules dictionary (C:\ra2\代码词典和文字教程\6.武器系统代码词典

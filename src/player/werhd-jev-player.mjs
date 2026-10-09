@@ -1794,10 +1794,12 @@ export function maintainBattle(api, catalog, memory, emit) {
     for (const miner of idleMiners) {
       // A harvester cannot fight back: jev-report-20261010-044349 sent it back to the ore field while
       // enemy conscripts stood on it, and "恢复矿车采矿" repeated ~30 times until the miner died. With a
-      // hostile that can shoot it within 14 tiles it pulls back to the base instead of feeding in;
-      // the defending units intercept, and the miner resumes once the tile is clear.
+      // hostile within 14 tiles it pulls back to the base instead of feeding in; the defending units
+      // intercept, and the miner resumes once the tile is clear. Reach is not required: a conscript
+      // or IFV a few tiles outside its range walks into range while the miner gathers
+      // (jev-report-20261010-050945 repeated "恢复矿车采矿" 25 times as the raid stood beside the ore).
       const nearThreat = enemies.some(
-        (e) => e.primaryWeapon && distance(e.tile, miner.tile) < 14 && canFireAt(api, catalog, e, miner),
+        (e) => e.primaryWeapon && distance(e.tile, miner.tile) < 14,
       );
       if (nearThreat) {
         const safe = own.find((b) => catalog[b.name]?.yard) ?? own.find((b) => b.type === api.ObjectType.Building);
