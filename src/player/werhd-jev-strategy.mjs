@@ -58,6 +58,17 @@ export function currentWeapon(unit, catalog) {
   return activeWeapons(unit, catalog)[0] ?? {};
 }
 
+// Can this unit hurt that target, as it stands right now? The predicate this replaces was
+// `effectiveness(catalog[unit.name], [target], ...) > 0`, which is wrong in two ways at once: it scans
+// BOTH of a rule's weapons regardless of posture, and `activeWeapons` gives a deployable unit only the one
+// slot its posture allows. The live rules supply the counterexample: `[GGI]` is mobile with
+// `Primary=GuardianPara` (no AA) and deployed with `Secondary=GuardianMissile` (AA), so a moving Guardian GI
+// was judged able to shoot down aircraft it cannot fire at. Using the unit's own weapons asks the question
+// about the weapon it will actually fire.
+export function canUnitHurt(unit, target, catalog, api) {
+  return activeWeapons(unit, catalog).some((w) => weaponEffectiveness(w, [target], catalog, api) > 0);
+}
+
 export function canFireAt(api, catalog, attacker, target) {
   const weapons = activeWeapons(attacker, catalog).filter(w => weaponEffectiveness(w, [target], catalog, api) > 0);
   if (!weapons.length) return false;
@@ -606,7 +617,11 @@ export function investmentGroups(api, catalog, snapshot, memory, groups) {
   for (const id of ['vehicles', 'infantry', 'aircraft', 'navy']) {
     const g = groups[id]; if (!g) continue;
     g.instructions += ' Compare effective damage against the current enemy mix, range and technology level. Use newly unlocked counters instead of repeating the cheapest basic unit.';
-    for (const [key,a] of Object.entries(g.actions)) if (a.type === 'produce') g.criteria[key] += ` Tech ${catalog[a.name]?.techLevel ?? 0}; estimated current-target effectiveness ${Math.round(effectiveness(catalog[a.name], enemies, catalog, api))}.`;
+    // The number printed here has to be the one the choices were ranked with. It used to be
+    // `effectiveness`, which averages over the target set and gives credit for targets the unit cannot
+    // engage -- so the briefing could rate an option that cannot touch the enemy above one that can, while
+    // the engine offered the opposite. A briefing that disagrees with the choice is worse than none.
+    for (const [key,a] of Object.entries(g.actions)) if (a.type === 'produce') g.criteria[key] += ` Tech ${catalog[a.name]?.techLevel ?? 0}; effect against the visible enemy ${Math.round(counterValue(catalog[a.name], enemies, catalog, api))}.`;
   }
   if (groups.vehicles && s.harvesters >= Math.min(2, s.economy?.targetMiners ?? 2) && armorCount < 4 && !strategy.investment) {
     groups.vehicles.instructions += ' URGENT: the base has fewer than four mobile armored units. Build the offered combat reinforcement now when affordable; do not wait for an unplanned future technology investment.';

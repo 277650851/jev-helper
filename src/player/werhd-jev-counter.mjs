@@ -18,7 +18,7 @@
 // armour values also changed between that file and real YR: the Kirov went `light` -> `medium` and the
 // Flak Trooper `flak` -> `none`. Reading armour off the live rule (as this module does) is therefore
 // the only correct source; a table copied out of `docs/` would be wrong for at least those two.
-import { effectiveness, currentWeapon, counterValue } from './werhd-jev-strategy.mjs';
+import { currentWeapon, counterValue, versesRow, versesArePercent, canEngageTarget } from './werhd-jev-strategy.mjs';
 
 // The 11 armour words in `Verses` index order: None, Flak, Plate, Light, Medium, Heavy, Wood, Steel,
 // Concrete, Special_1, Special_2. The list is NOT in any rules INI (there is no `[ArmorTypes]`
@@ -33,27 +33,16 @@ const AIR_ZONE = 1;
 // values arrive either as a percentage (`75`, how the rules files write it) or as a proportion (`0.75`),
 // so both forms are read. 0/1/2 are flags rather than ratios -- 0% cannot fire, 1% force-fire only -- but
 // they are still the smallest multipliers, which is what a threat estimate wants.
-const rowOf = (w) => {
-  const row = w?.versus ?? w?.verses;
-  return Array.isArray(row) ? row : undefined;
-};
-// Which of the two written forms a row uses, decided from the row as a whole rather than per entry.
-// `Verses=25,25,25,75,100,100,...` cannot be read as proportions (the 100s would be 100x damage), and
-// `[0.25, 1]` cannot be read as percentages (1 would mean force-fire-only) -- but both are legal in this
-// codebase: the API documents `versus` only as `Record<number, number>` with no scale, the rules files use
-// percentages, and most test fixtures use proportions. Deciding per entry instead of per row is what gets
-// this wrong: a full-strength proportion of `1` is indistinguishable from the `1` flag, so the whole row
-// has to say which convention it is in. A row with a value above 2 can only be percentages.
-export function versesArePercent(w) {
-  const row = rowOf(w);
-  if (!row) return false;
-  return row.some((v) => Number(v) > 2);
-}
+//
+// The row reader and the form test come from `strategy.mjs` rather than being repeated here. This module had
+// its own copy and the copy was the older, wrong one: it read `versus` first and required an array, while
+// the API returns an object and the catalog's `verses` is the array -- so against real rules it reported
+// "no table" every time. One implementation cannot drift from itself.
 const versesOf = (w, armor) => {
   const i = ARMOR_ORDER.indexOf(String(armor ?? '').toLowerCase());
-  const row = rowOf(w);
+  const row = versesRow(w);
   if (i < 0 || !row) return 1;
-  const v = row[i];
+  const v = Array.isArray(row) ? row[i] : row?.[i];
   if (v === undefined || v === null) return 1;
   if (!versesArePercent(w)) return Number(v);
   // The flag entries stay flags: 0% cannot fire, 1% force-fire only, 2% inert. They are kept as tiny
@@ -89,31 +78,13 @@ export function enemyArchetype(rule, unit) {
 // force-fire only, 2% is the inert Westwood value. Counting them as mere low damage understates how
 // unusable they are, so they count as cannot-engage. The reading of the row is `versesArePercent` above,
 // so a proportional `1` (full damage) and a percentage `1` (force-fire only) are not confused.
-const verseOf = (w, armor) => {
-  const i = ARMOR_ORDER.indexOf(String(armor ?? '').toLowerCase());
-  const row = rowOf(w);
-  return i < 0 || !row ? undefined : row[i];
-};
+// The archetype-aware wrapper over the one engagement rule. This used to be a second implementation of it,
+// with its own row reader and its own flag test, and the two had already diverged (see the note on
+// `versesOf` above). It now translates its arguments and defers, so there is a single place where "can this
+// hurt that" is decided.
 export function canEngage(rule, unit, targetKind) {
-  const weapons = [rule?.weapon, rule?.secondary].filter((w) => w && w.damage > 0);
-  if (!weapons.length) return false;
-  const usable = (w) => {
-    if (targetKind === 'air') return w.aa === true;
-    if (targetKind === 'building' || targetKind === 'defense') return w.ag !== false || w.aa === true;
-    if (targetKind === 'infantry' || targetKind === 'vehicle' || targetKind === 'harvester' || targetKind === 'naval') return w.ag !== false;
-    return true;
-  };
   const armor = unit?.armor ?? rule?.armor;
-  return weapons.some((w) => {
-    if (!usable(w)) return false;
-    const v = verseOf(w, armor);
-    // No table means no restriction -- the same reason `versesOf` falls back to 1.
-    if (v === undefined || v === null) return true;
-    // 0 always means "cannot fire". 1 and 2 are flags only in the percentage form: a proportional table
-    // expresses full damage as 1 and has no way to write "inert" other than 0, so there they are ordinary
-    // multipliers. The two readings are kept apart by looking at the row as a whole.
-    return versesArePercent(w) ? Number(v) > 2 : Number(v) > 0;
-  });
+  return canEngageTarget(rule, { name: unit?.name, type: unit?.type, armor, zone: targetKind === 'air' ? 1 : 0 }, { [unit?.name]: unit }, { ZoneType: { Air: 1 } });
 }
 
 // How much this option actually hurts the force that is visible. This is the SAME judgement the engine

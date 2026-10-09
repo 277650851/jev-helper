@@ -1,6 +1,6 @@
 import { specialGroups, executeSpecial, rememberSpecial, maintainSpecial, refreshInfrastructure, SIEGE_RANGE } from "./werhd-jev-special.mjs";
 import { buildBrief, formSquads, squadUnits, sameIntent } from "./werhd-jev-commander.mjs";
-import { assessStrategy, investmentGroups, chooseBuildingSite, chooseRallySite, weaponEffectiveness, effectiveness, counterValue, infantryProfile, scoutScore, currentWeapon as combatWeapon, activeWeapons, canFireAt, baseThreats, ATTACK_FORCE_SIZE, ATTACK_AA_ESCORTS, vehicleOptions } from "./werhd-jev-strategy.mjs";
+import { assessStrategy, investmentGroups, chooseBuildingSite, chooseRallySite, weaponEffectiveness, counterValue, canUnitHurt, infantryProfile, scoutScore, currentWeapon as combatWeapon, activeWeapons, canFireAt, baseThreats, ATTACK_FORCE_SIZE, ATTACK_AA_ESCORTS, vehicleOptions } from "./werhd-jev-strategy.mjs";
 import { updateCamera } from "./werhd-jev-camera.mjs";
 import { refreshCatalog, isDecoration } from "./werhd-jev-catalog.mjs";
 import { trackObjective, isGuardedByObjective } from "./werhd-jev-objective.mjs";
@@ -1230,7 +1230,7 @@ export function executeCandidate(api, action, catalog) {
       const ids = [], undeployIds = [];
       for (const id of action.ids) {
         const u = own.find(u=>u.id===id);
-        const compatible = threats.filter(e=>effectiveness(catalog[u.name],[e],catalog,api)>0);
+        const compatible = threats.filter(e=>canUnitHurt(u, e, catalog, api));
         const target = compatible.find(e=>canFireAt(api,catalog,u,e)) ?? compatible[0];
         if (!target) continue;
         ids.push(id);
@@ -1594,7 +1594,7 @@ export function maintainBattle(api, catalog, memory, emit) {
     const last = memory.orders.get(u.id);
     if (last && tick - last.tick < 18) continue;
     if (defending && mission.ids.includes(u.id)) {
-      const targets = defenseThreats.filter(e=>effectiveness(catalog[u.name],[e],catalog,api)>0)
+      const targets = defenseThreats.filter(e=>canUnitHurt(u, e, catalog, api))
         .sort((a,b)=>Number(b.id===mission.targetId)-Number(a.id===mission.targetId) ||
           (combatWeapon(b,catalog).range??0)-(combatWeapon(a,catalog).range??0));
       const target = targets.find(e=>canFireAt(api,catalog,u,e)) ?? targets[0];
@@ -1634,7 +1634,7 @@ export function maintainBattle(api, catalog, memory, emit) {
       issued++;
     } else if (catalog[u.name]?.naval && u.isIdle && (!last || tick - last.tick > 90)) {
       // Idle ships close on nearby enemies they can hurt instead of waiting to be shot at.
-      const near = enemies.filter(e => canHit(e) && !spared.has(e.id) && distance(e.tile, u.tile) <= 12 && effectiveness(catalog[u.name], [e], catalog, api) > 0)
+      const near = enemies.filter(e => canHit(e) && !spared.has(e.id) && distance(e.tile, u.tile) <= 12 && canUnitHurt(u, e, catalog, api))
         .sort((a, b) => distance(a.tile, u.tile) - distance(b.tile, u.tile))[0];
       if (near) { api.attack([u.id], near.id); memory.orders.set(u.id, { targetId: near.id, tick }); issued++; }
     } else if (
@@ -1649,7 +1649,7 @@ export function maintainBattle(api, catalog, memory, emit) {
       if (Math.hypot(u.tile.rx - mission.x, u.tile.ry - mission.y) > 3) {
         const target = mission.mode === 'attack' && (enemies.find(e=>e.id===mission.targetId) ??
           (mission.objective ? (api.units('hostile') ?? []).find(e=>e.id===mission.targetId) : undefined));
-        if (target && effectiveness(catalog[u.name],[target],catalog,api)>0) {
+        if (target && canUnitHurt(u, target, catalog, api)) {
           api.attack([u.id],target.id);
           memory.orders.set(u.id,{tick,targetId:target.id});
         } else {
@@ -1732,7 +1732,7 @@ export function orderSquad(api, catalog, memory, squad, intent, first = false) {
       if (target) {
         intent.lastSeen = { x: target.tile.rx, y: target.tile.ry };
         const list = fresh.filter((u) => !fled(u) || first);
-        const able = list.filter((u) => effectiveness(catalog[u.name], [target], catalog, api) > 0), escort = list.filter((u) => !able.includes(u));
+        const able = list.filter((u) => canUnitHurt(u, target, catalog, api)), escort = list.filter((u) => !able.includes(u));
         if (able.length) api.attack(ids(able), target.id);
         // Units that cannot hurt it (anti-air, for example) come along instead of standing idle.
         if (escort.length) api.attackMove(ids(escort), target.tile.rx, target.tile.ry);
@@ -1792,7 +1792,7 @@ export function orderSquad(api, catalog, memory, squad, intent, first = false) {
         // Each defender takes a raider it can hurt, one in range first, else the closest.
         const sent = [];
         for (const u of fresh) {
-          const able = threats.filter((e) => effectiveness(catalog[u.name], [e], catalog, api) > 0).sort((a, b) => distance(a.tile, u.tile) - distance(b.tile, u.tile));
+          const able = threats.filter((e) => canUnitHurt(u, e, catalog, api)).sort((a, b) => distance(a.tile, u.tile) - distance(b.tile, u.tile));
           const target = able.find((e) => canFireAt(api, catalog, u, e)) ?? able[0];
           if (!target) continue;
           api.attack([u.id], target.id); sent.push(u);

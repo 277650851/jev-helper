@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { collectState, candidateGroups } from '../src/player/werhd-jev-player.mjs';
-import { buildEnemyProfile, enemyArchetype, counterBrief, canEngage, counterScore, versesArePercent } from '../src/player/werhd-jev-counter.mjs';
-import { counterValue } from '../src/player/werhd-jev-strategy.mjs';
+import { buildEnemyProfile, enemyArchetype, counterBrief, canEngage, counterScore } from '../src/player/werhd-jev-counter.mjs';
+import { counterValue, versesArePercent } from '../src/player/werhd-jev-strategy.mjs';
 
 // The decision layer used to see the enemy only as a count: `visibleEnemyCount`, `nearbyEnemyCount`,
 // `airThreatCount`. `collectState` did gather `visibleEnemies` with names and health, but nothing read
