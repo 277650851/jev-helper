@@ -1,6 +1,6 @@
 import { specialGroups, executeSpecial, rememberSpecial, maintainSpecial, refreshInfrastructure, SIEGE_RANGE } from "./werhd-jev-special.mjs";
 import { buildBrief, formSquads, squadUnits, sameIntent } from "./werhd-jev-commander.mjs";
-import { assessStrategy, investmentGroups, chooseBuildingSite, chooseRallySite, weaponEffectiveness, effectiveness, infantryProfile, scoutScore, scoutPreference, currentWeapon as combatWeapon, activeWeapons, canFireAt, baseThreats, ATTACK_FORCE_SIZE, ATTACK_AA_ESCORTS, vehicleOptions, armorIndexOf } from "./werhd-jev-strategy.mjs";
+import { assessStrategy, investmentGroups, chooseBuildingSite, chooseRallySite, weaponEffectiveness, effectiveness, infantryProfile, scoutScore, scoutPreference, currentWeapon as combatWeapon, activeWeapons, canFireAt, baseThreats, deployRecommendation, ATTACK_FORCE_SIZE, ATTACK_AA_ESCORTS, vehicleOptions, armorIndexOf } from "./werhd-jev-strategy.mjs";
 import { updateCamera } from "./werhd-jev-camera.mjs";
 import { refreshCatalog, isDecoration } from "./werhd-jev-catalog.mjs";
 import { trackObjective, isGuardedByObjective } from "./werhd-jev-objective.mjs";
@@ -1642,6 +1642,19 @@ export function respondToThreats(api, catalog, memory, emit, mobile, enemies, sk
     const shooter = (outranged.length ? outranged : hurt ? closest.filter((g) => g.d <= g.reach + 1.5 && hurts(g.e, u)) : [])[0];
     if (!shooter) continue;
     const e = shooter.e;
+    // Unfold when the deployed form answers the threat the mobile one cannot. jev-report-20261010
+    // feedback: a Guardian GI / GI that charges in with its rifle instead of unfolding is exactly the
+    // "runs up to the enemy before shooting" bug the user sees. deployRecommendation weighs the net
+    // gain (damage rate and reach) so a static form is only taken when it pays.
+    if (!u.isDeployed && catalog[u.name]?.deploysInto && deployRecommendation(api, catalog, u, enemies)?.deploy && !canFireAt(api, catalog, u, e)) {
+      api.deploy([u.id]);
+      memory.threatReplies.set(u.id, tick);
+      memory.orders.set(u.id, { tick, threatReply: true });
+      emit({ kind: "micro", tick, description: `部署 #${u.id}（${catalog[u.name]?.label}）以接敌 #${e.id}` });
+      replies.push({ ids: [u.id], targetId: e.id, name: catalog[e.name]?.label ?? e.name, reply: "deploy" });
+      handled.add(u.id);
+      continue;
+    }
     const squad = hurts(u, e) ? [u, ...mobile.filter((o) => o !== u && !handled.has(o.id) && !skip.has(o.id) && !o.isDeployed && !cooling(o) &&
       distance(o.tile, u.tile) <= THREAT_SQUAD_RADIUS && distance(o.tile, e.tile) > ownReach(o) && hurts(o, e))] : [];
     // A few soldiers charging a pillbox that outranges them only feed it (0.6.0 match). A fixed
@@ -1654,10 +1667,34 @@ export function respondToThreats(api, catalog, memory, emit, mobile, enemies, sk
     if (noRush(u)) squad.length = 0;
     else if (fixedDefense) for (let k = squad.length - 1; k > 0; k--) if (noRush(squad[k])) squad.splice(k, 1);
     if (squad.length && (!fixedDefense || squad.length >= DEFENSE_RUSH_SQUAD)) {
-      const ids = squad.map((o) => o.id);
-      api.attack(ids, e.id);
-      for (const id of ids) { handled.add(id); memory.threatReplies.set(id, tick); memory.orders.set(id, { tick, targetId: e.id, threatReply: true }); }
-      replies.push({ ids, targetId: e.id, name: catalog[e.name]?.label ?? e.name, reply: "close_in" });
+      // Range-aware reply instead of a blind charge into the enemy's reach: units whose own reach
+      // beats the shooter's advance to their firing edge (the game stops them at their own range);
+      // infantry keeps duelling infantry even when the enemy outranges it (a sniper is beaten by
+      // closing); a crowd of DEFENSE_RUSH_SQUAD or more rushes a fixed defense and wins by numbers;
+      // everyone else the shooter outranges pulls back. jev-report-20261010-044349 fed infantry
+      // into tank raids one by one because every reply closed in into the enemy's range.
+      const crowdRush = fixedDefense && squad.length >= DEFENSE_RUSH_SQUAD;
+      const infDuel = !fixedDefense && e.type === api.ObjectType.Infantry;
+      const advance = squad.filter((o) => crowdRush || ownReach(o) > shooter.reach || infDuel);
+      const retreat = squad.filter((o) => !advance.includes(o));
+      if (advance.length) {
+        const ids = advance.map((o) => o.id);
+        api.attack(ids, e.id);
+        for (const id of ids) { handled.add(id); memory.threatReplies.set(id, tick); memory.orders.set(id, { tick, targetId: e.id, threatReply: true }); }
+        replies.push({ ids, targetId: e.id, name: catalog[e.name]?.label ?? e.name, reply: "close_in" });
+      }
+      if (retreat.length) {
+        const dx = u.tile.rx - e.tile.rx, dy = u.tile.ry - e.tile.ry, len = Math.hypot(dx, dy) || 1;
+        const size = api.map.size?.() ?? { width: Infinity, height: Infinity }, back = shooter.reach + 3;
+        const x = Math.round(Math.max(0, Math.min(size.width - 1, e.tile.rx + dx / len * back)));
+        const y = Math.round(Math.max(0, Math.min(size.height - 1, e.tile.ry + dy / len * back)));
+        for (const o of retreat) {
+          api.move([o.id], x, y);
+          handled.add(o.id); memory.threatReplies.set(o.id, tick); memory.orders.set(o.id, { tick, threatReply: true });
+          memory.fallBack.set(o.id, { tick, x: e.tile.rx, y: e.tile.ry, reach: shooter.reach });
+          replies.push({ ids: [o.id], targetId: e.id, name: catalog[e.name]?.label ?? e.name, reply: "fall_back", target: { x, y } });
+        }
+      }
     } else {
       const dx = u.tile.rx - e.tile.rx, dy = u.tile.ry - e.tile.ry, len = Math.hypot(dx, dy) || 1;
       const size = api.map.size?.() ?? { width: Infinity, height: Infinity }, back = shooter.reach + 3;
@@ -1813,6 +1850,18 @@ export function maintainBattle(api, catalog, memory, emit) {
           (combatWeapon(b,catalog).range??0)-(combatWeapon(a,catalog).range??0));
       const target = targets.find(e=>canFireAt(api,catalog,u,e)) ?? targets[0];
       if (target) {
+        // Unfold to answer what the mobile form cannot: a GI / Guardian GI that would have to charge
+        // into the defender's range unfolds instead. deployRecommendation weighs the net gain, so a
+        // static form is only taken when it pays.
+        if (!u.isDeployed && catalog[u.name]?.deploysInto && !canFireAt(api,catalog,u,target) &&
+            deployRecommendation(api, catalog, u, defenseThreats)?.deploy &&
+            tick-(memory.postureOrders?.get(u.id)??-1000)>150) {
+          api.deploy([u.id]);
+          memory.postureOrders ??= new Map();
+          memory.postureOrders.set(u.id,tick);
+          emit({kind:'micro',tick,description:`部署 #${u.id}（${catalog[u.name]?.label}）以接敌 #${target.id}`,ids:[u.id],targetId:target.id});
+          continue;
+        }
         if (u.isDeployed && !canFireAt(api,catalog,u,target)) {
           if (tick-(memory.postureOrders?.get(u.id)??-1000)>150) {
             api.deploy([u.id]);
