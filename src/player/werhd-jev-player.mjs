@@ -1971,6 +1971,27 @@ export function applyOrders(api, catalog, memory, emit, reply, sourceTick, { ela
   return results;
 }
 
+// A group with only `wait` is not a question: there is nothing to choose, so it must never be sent. The
+// set that IS sent is also capped and ordered here, and this is the only place that decides it -- the
+// offline benchmark calls the same function, because a benchmark that re-implemented the selection would
+// measure a question set the match never sees.
+export const MAX_REQUESTED_GROUPS = 8;
+export function requestGroupsFrom(groups, memory = {}, tick = 0) {
+  return Object.fromEntries(
+    Object.entries(groups)
+      .filter(([, g]) => Object.keys(g.criteria).length > 1)
+      .sort(([a], [b]) => {
+        const priority = id => ["construction", "defenses", "tactics", "salvage"].includes(id) ? -1000000 : (memory.questionTicks?.get(id) ?? -100000);
+        return priority(a) - priority(b);
+      })
+      .slice(0, MAX_REQUESTED_GROUPS)
+      .map(([id, g]) => [
+        id,
+        { instructions: g.instructions, criteria: g.criteria },
+      ]),
+  );
+}
+
 export async function attachJevPlayer(api, options = {}) {
   if (!api) throw new Error("Enter a battle before attaching Jev.");
   const requestDecision = options.requestDecision;
@@ -2160,19 +2181,7 @@ export async function attachJevPlayer(api, options = {}) {
       }
       const snap = collectState(api, catalog),
         groups = candidateGroups(api, catalog, snap, memory);
-      const requestGroups = Object.fromEntries(
-        Object.entries(groups)
-          .filter(([, g]) => Object.keys(g.criteria).length > 1)
-          .sort(([a], [b]) => {
-            const priority = id => ["construction", "defenses", "tactics", "salvage"].includes(id) ? -1000000 : (memory.questionTicks?.get(id) ?? -100000);
-            return priority(a) - priority(b);
-          })
-          .slice(0, 8)
-          .map(([id, g]) => [
-            id,
-            { instructions: g.instructions, criteria: g.criteria },
-          ]),
-      );
+      const requestGroups = requestGroupsFrom(groups, memory, tick);
       if (!Object.keys(requestGroups).length) return;
       memory.questionTicks ??= new Map();
       for (const id of Object.keys(requestGroups)) memory.questionTicks.set(id, tick);
