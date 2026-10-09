@@ -17,6 +17,13 @@ export function stateSummary(state = {}) {
     army: number(state.ownArmyCount), tanks: number(state.mobileTankCount), antiAir: number(state.antiAirCount), harvesters: number(state.harvesters),
     health: number(state.averageArmyHealth), visibleEnemies: number(state.visibleEnemyCount), nearbyEnemies: number(state.nearbyEnemyCount),
     baseUnderAttack: state.baseUnderAttack === true,
+    // Composition, not just the count: "visibleEnemies: 6" cannot explain why a decision went the way
+    // it did, and the counter profile is scored from this list. Ids and tiles stay out of the log.
+    enemyProfile: state.enemyProfile ? {
+      label: short(state.enemyProfile.label, 40), total: number(state.enemyProfile.total),
+      groups: (state.enemyProfile.groups ?? []).slice(0, 6).map(g => ({ kind: short(g.kind, 12), count: number(g.count), threat: number(g.threat), armor: g.armor ? short(g.armor, 12) : null, maxRange: number(g.maxRange), names: (g.names ?? []).slice(0, 4).map(n => short(n, 24)) })),
+      counters: (state.enemyProfile.counters ?? []).slice(0, 4).map(c => ({ name: short(c.name, 24), value: number(c.value) })),
+    } : null,
     queues: (state.queues ?? []).slice(0, 8).map(q => ({ type: short(q.type, 12), items: (q.items ?? []).slice(0, 6).map(i => `${short(i.name, 20)}×${number(i.quantity) ?? 1}`) })),
     inventory: Object.fromEntries(Object.entries(state.inventory ?? {}).slice(0, 48).map(([k, u]) => [short(k, 20), number(u?.count) ?? 0])),
     investment: state.strategy?.investment ? { category: short(state.strategy.investment.category, 24), name: short(state.strategy.investment.name, 24) } : null,

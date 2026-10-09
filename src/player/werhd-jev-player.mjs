@@ -4,6 +4,7 @@ import { assessStrategy, investmentGroups, chooseBuildingSite, chooseRallySite, 
 import { updateCamera } from "./werhd-jev-camera.mjs";
 import { refreshCatalog, isDecoration } from "./werhd-jev-catalog.mjs";
 import { trackObjective, isGuardedByObjective } from "./werhd-jev-objective.mjs";
+import { buildEnemyProfile, counterBrief } from "./werhd-jev-counter.mjs";
 // Ordinary page-side player: every observation and command uses window.werhd.
 // Bundled into the browser extension; transport and credentials live outside the game page.
 
@@ -53,10 +54,19 @@ export function collectState(api, catalog) {
   const nearby = enemies.filter(
     (enemy) => base && distance(base.tile, enemy.tile) < 22,
   );
+  // `armor` and `owner` are what make the enemy list usable for counter reasoning: the armour word is
+  // the index into every weapon's `versus` table, and without it "which weapon hurts that thing" is
+  // unanswerable from the state the model sees. Both come from data already on hand -- `armor` off the
+  // cached rule, `owner` off the unit object -- and neither was being carried. `type` is kept so the
+  // list can be split into buildings, infantry, vehicles and aircraft instead of only counted.
+  // `garrison` matters because an occupied building is a different target from an empty one.
   const unitSummary = (u) => ({
     id: u.id,
     name: catalog[u.name]?.label ?? u.name,
     kind: u.name,
+    type: u.type,
+    armor: catalog[u.name]?.armor,
+    owner: u.owner,
     hp: u.hitPoints,
     hpFraction: round((u.hitPoints ?? 0) / (u.maxHitPoints || 1)),
     tile: { x: u.tile.rx, y: u.tile.ry },
@@ -64,6 +74,7 @@ export function collectState(api, catalog) {
     canDeploy: u.canDeploy,
     isDeployed: u.isDeployed,
     zone: u.zone,
+    ...(u.garrison?.count ? { garrisoned: u.garrison.count } : {}),
   });
   const queues = api.production.queues();
   const committedCredits = queues.reduce(
@@ -1032,6 +1043,19 @@ export function candidateGroups(api, catalog, snapshot, memory) {
         g.actions[key] = { type: "produce", name, queue, cost: catalog[name]?.cost, minCredits: Math.min(500, catalog[name]?.cost ?? 0), auto: 2 };
       }
     }
+  }
+  // What the enemy is made of, and which of our options answers it. This runs once the groups exist
+  // because the counter list is scored over what is actually on offer this turn. The profile is added
+  // to the state (so it travels with every question and into the log) and a short brief is appended
+  // to the production and defence questions, which is where the answer is chosen.
+  const producible = [];
+  for (const id of ["vehicles", "infantry", "defenses"]) for (const a of Object.values(groups[id]?.actions ?? {}))
+    if (a?.type === "produce" && a.name) producible.push({ name: a.name, queue: a.queue });
+  if (producible.length) {
+    const profile = buildEnemyProfile(api, catalog, state, producible);
+    state.enemyProfile = profile;
+    const brief = counterBrief(profile);
+    if (brief) for (const id of ["vehicles", "infantry", "defenses"]) if (groups[id]) groups[id].instructions += ` ${brief}`;
   }
   historyHints(groups, memory, state, assessment);
   return groups;
