@@ -2080,6 +2080,26 @@ export function applyOrders(api, catalog, memory, emit, reply, sourceTick, { ela
 // measure a question set the match never sees.
 export const MAX_REQUESTED_GROUPS = 8;
 export function requestGroupsFrom(groups, memory = {}, tick = 0) {
+  // Some options are offered before their full price is in hand: a survival rebuild is gated on
+  // `minCredits = Math.min(500, cost)` so it can be started the moment the base is close to affording it.
+  // The criteria text, however, quotes the catalogue price ("cost 750") while the group's `wait` text says
+  // "Affordability has already been checked" -- so a model holding 715 credits reads a contradiction, and
+  // the way it resolves one is to refuse. Measured on three reports: 10-13% of priced options were offered
+  // with the balance below the quoted cost, and they were almost always the group's ONLY option, so the
+  // refusal was the only answer available.
+  //
+  // Stating the gate the engine actually enforces removes the contradiction. It is added here, in one
+  // place, rather than at each of the two dozen strings that compose a criteria line.
+  const stateGate = (criteria, actions) => {
+    const out = {};
+    for (const [key, text] of Object.entries(criteria ?? {})) {
+      const a = actions?.[key];
+      if (a?.type !== "produce" || !Number.isFinite(a.minCredits) || !Number.isFinite(a.cost) || a.minCredits >= a.cost)
+        { out[key] = text; continue; }
+      out[key] = `${text} The engine starts this order from ${a.minCredits} credits even though the unit costs ${a.cost}; the queue will wait for the difference, so do not decline it for being just out of reach.`;
+    }
+    return out;
+  };
   return Object.fromEntries(
     Object.entries(groups)
       .filter(([, g]) => Object.keys(g.criteria).length > 1)
@@ -2092,7 +2112,7 @@ export function requestGroupsFrom(groups, memory = {}, tick = 0) {
         id,
         {
           instructions: g.instructions,
-          criteria: g.criteria,
+          criteria: stateGate(g.criteria, g.actions),
           // Which of the offered keys the engine would have taken anyway. Left out of the model's copy and
           // acted on directly; see `splitEngineOwned`.
           engineOwned: Object.fromEntries(Object.entries(g.actions ?? {})
