@@ -90,40 +90,34 @@ const opening = (buildings, extra = {}) => {
 // RADAR as a prerequisite in rules.ini, so with no radar the base could never field a Prism Cannon
 // however long it waited. These assert the plan keeps going, and that it still offers exactly one
 // step at a time -- asking per building let every building of the right category match at once.
-// NOT AN ASSERTION YET -- an open question, deliberately not failing the suite.
+// A developed base keeps being offered the next building.
 //
-// The opening plan was extended past the four basics (power, barracks, refinery, war factory) to
-// radar/airfield/repair depot/battle lab, because rules.ini makes RADAR a prerequisite of
-// ATESLA/TESLA/CTESLA and with none of them a base could never field a Prism Cannon. A real match
-// (jev-report-20261009-223656) built neither radar nor an airfield.
-//
-// The invariant this wants to pin is "the plan keeps moving and never rebuilds what already stands",
-// but on a complete base (yard, 2 plants, barracks, refinery, war factory, miner, plus the four
-// technology buildings on the menu) `groups.construction.actions` comes back as wait-only. Ruled out
-// by measurement, not by reading: the catalog entries are correct and `wantsConstruction` is set on
-// them, the predicates match GAAIRC for the radar step, powerMargin is 175 with the step's headroom
-// test satisfied, buildable has 8 entries, the structures queue is idle, credits are 5000 against a
-// 500 down payment, and `strategy.investment` is undefined so the same-queue exclusion does not apply.
-// Adding the miner also removes the `recovery` flag, which had been deleting every option -- correct
-// behaviour, and it was a fixture problem rather than a product one.
-//
-// It stays as a comment until the removal is located. A test that fails for an unknown reason trains
-// the reader to ignore red, which is how the earlier "103 decisions, 103 discarded" went unnoticed.
-// Delete this block when the cause is found and turn it back into real assertions.
-if (false) {
+// This was disabled while the cause was unknown. It is now known and fixed: `investmentGroups` cleaned
+// up stale construction options with a whitelist of factory *types*, and rules.ini gives GAAIRC
+// `Factory=AircraftType` while giving GADEPT and GATECH no Factory at all -- so the cleanup deleted
+// every technology building the opening plan had just offered. jev-report-20261010-005106 is what that
+// looked like in a real match: power, barracks, refinery and war factory, then no construction question
+// for 10,214 ticks. The fix honours the `wantsConstruction` flag the plan already sets.
+{
   const techExtra = {
-    GAAIRC: { name: 'GAAIRC', label: 'Airforce Command Headquarters', cost: 1000, power: -50, buildCategory: 'Tech' },
+    GAAIRC: { name: 'GAAIRC', label: 'Airforce Command Headquarters', cost: 1000, power: -50, factory: 'AircraftType', buildCategory: 'Tech' },
     GAHPAD: { name: 'GAHPAD', label: 'Airfield', cost: 1000, power: -25, buildCategory: 'Tech' },
     GADEPT: { name: 'GADEPT', label: 'Service Depot', cost: 800, power: -25, buildCategory: 'Tech' },
     GATECH: { name: 'GATECH', factory: 'TechType', label: 'Battle Lab', cost: 2000, power: -100, buildCategory: 'Tech' },
   };
+  // The miner matters: with no harvester at all, recoveryGroups takes over and deletes every
+  // construction option except "rebuild the miner", which is correct -- a base with no income has no
+  // business building a radar tower. That was the fixture's first mistake, not a product bug.
   const base = [b(1, 'CAHAND', 20, 20), b(2, 'CAPOWR', 21, 20), b(3, 'GAPILE', 22, 20),
     b(4, 'CAREFN', 23, 20), b(5, 'CAWEAP', 24, 20), b(6, 'CAPOWR', 25, 20), v(7, 'CMIN', 26, 26)];
   const step = opening(base, techExtra);
-  assert.equal(step.length, 1, `still one step at a time; got ${step.map(s => s[0])}`);
+  // "One step at a time" means one *step*, not one building: the radar step deliberately covers both
+  // airforce command and the airfield, and offering the model the choice between them is the point.
+  assert.ok(step.length >= 1, `the plan keeps moving; got ${JSON.stringify(step.map(s => s[0]))}`);
+  assert.ok(step.length <= 2, `one step offers at most its own candidates; got ${JSON.stringify(step.map(s => s[0]))}`);
   const already = new Set(base.map(x => x.name));
-  assert.ok(!already.has(step[0][0].replace('produce_', '')),
-    `the plan must not rebuild something standing; got ${step[0][0]}`);
+  for (const [key] of step) assert.ok(!already.has(key.replace('produce_', '')),
+    `the plan must not rebuild something standing; got ${key}`);
   const withRadar = opening([...base, b(8, 'GAAIRC', 26, 20)], techExtra);
   assert.equal(withRadar.length, 1);
   assert.notEqual(withRadar[0][0], 'produce_GAAIRC', 'radar is built once, not repeatedly');

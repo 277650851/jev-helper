@@ -460,7 +460,19 @@ export function investmentGroups(api, catalog, snapshot, memory, groups) {
   if (!strategy.underPressure && !defenseFloor) { delete groups.defenses; defensePlan = undefined; }
   const cg = group('construction', 'Restore core infrastructure, then unlock higher technology. During suppression, build a firing line and develop a counter instead of spending forever on basic tanks. Aircraft factories and higher-tech buildings unlock new options. A repair dock is not an airfield.');
   // Remove the old special-layer air-support guess and rebuild the tech options from rule categories.
-  for (const [key, a] of Object.entries(cg.actions)) if (a.type === 'produce' && !catalog[a.name]?.naval && !catalog[a.name]?.refinery && !(catalog[a.name]?.power > 0) && !['InfantryType', 'UnitType', 'BuildingType'].includes(catalog[a.name]?.factory)) {
+  //
+  // That cleanup used to be unconditional, and it deleted the opening plan's technology buildings as
+  // well: the whitelist below is a list of *factory* types, and a helipad, an airforce command
+  // headquarters, a service depot and a battle lab are not factories -- rules.ini gives GAAIRC
+  // `Factory=AircraftType` and gives GADEPT and GATECH no Factory at all. So every building the plan
+  // reaches for after the war factory was wiped here, and in jev-report-20261010-005106 the base built
+  // power, barracks, refinery and war factory and then never offered another building for the rest of
+  // the match: 10,214 ticks with no construction question at all, and no radar, airfield, repair depot
+  // or battle lab ever reaching the menu.
+  //
+  // `wantsConstruction` is the flag `player.mjs` sets on exactly the buildings the plan chose, and the
+  // reserve check below already honours it. Honouring it here too is what makes the two layers agree.
+  for (const [key, a] of Object.entries(cg.actions)) if (a.type === 'produce' && !catalog[a.name]?.wantsConstruction && !catalog[a.name]?.naval && !catalog[a.name]?.refinery && !(catalog[a.name]?.power > 0) && !['InfantryType', 'UnitType', 'BuildingType'].includes(catalog[a.name]?.factory)) {
     delete cg.actions[key]; delete cg.criteria[key];
   }
   const armorCount = units.filter(u => u.type === api.ObjectType.Vehicle && catalog[u.name]?.category === 'AFV' && !catalog[u.name]?.harvester).length;
@@ -647,12 +659,19 @@ export function investmentGroups(api, catalog, snapshot, memory, groups) {
     // at a time and only offers a building it is actually asking for next. Recognising only the four
     // basics here meant the technology buildings were deleted a few lines later by the reserve check,
     // which is why the plan could never get past the war factory even once it started offering them.
+    //
+    // With one exception, and it is the exception that matters. The reserve exists to protect the
+    // chosen investment budget, and when that budget is a military answer to a live threat it outranks
+    // the plan's preference: Battle 28 bought a third static gun while the base had no mobile response
+    // to enemies flanking it, and player-strategy.test.mjs pins that the tank wins. So a building the
+    // plan chose is exempt from a reserve held for something else, not from one held for the tank.
+    const planIsMilitary = ['mobilize', 'counter_range', 'counter_pressure'].includes(plan?.purpose);
     const essential = id === 'construction' && (r.power > 0
       || r.factory === 'InfantryType' && !buildings.some(b => catalog[b.name]?.factory === 'InfantryType')
       || r.refinery && !s.economy.refineries
       || r.factory === 'UnitType' && !r.naval && !s.economy.factories
       // A building the plan explicitly chose still has to survive the reserve check.
-      || r.wantsConstruction);
+      || r.wantsConstruction && !planIsMilitary);
     if (!essential && s.uncommittedCredits - a.cost < strategy.reserve) { delete g.actions[key]; delete g.criteria[key]; }
   }
   // Explain upgraded unit advantages to the model using current target armor, range and rules.
