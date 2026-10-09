@@ -118,6 +118,14 @@ export function trimMatchEntries(entries) {
 
 const inc = (map, key, by = 1) => { map[key] = (map[key] ?? 0) + by; };
 const top = (map, n = 8) => Object.fromEntries(Object.entries(map).sort(([, a], [, b]) => b - a).slice(0, n));
+// Why an order was refused. The current record keeps the decider in `reason` and the cause in
+// `rejectedBecause`; a record written before that change overloaded `reason` with the refusal, so an
+// unattributed one is reported as such rather than as the decider's name.
+export function refusalReason(e = {}) {
+  if (e.rejectedBecause) return e.rejectedBecause;
+  const r = String(e.reason ?? '');
+  return /^engine_decided$|^auto_/.test(r) ? 'unattributed' : (r || '?');
+}
 
 // Aggregate view for the popup and the export file.
 export function logStats(entries = []) {
@@ -155,7 +163,11 @@ export function logStats(entries = []) {
       s.actions.total++;
       if (e.accepted) { s.actions.accepted++; inc(s.actions.byType, e.actionType || '?'); if (e.actionType === 'produce') inc(s.actions.acceptedProduce, e.actionName || '?'); }
       else if (e.reason === 'wait') s.actions.waits++;
-      else { s.actions.skipped++; inc(s.actions.skippedReasons, e.reason || '?'); }
+      // WHY the order was refused, not WHO decided it. `reason` names the decider (`engine_decided` or
+      // `auto_*`) and a refused takeover carries its refusal in `rejectedBecause`; an older record put the
+      // refusal in `reason` itself. Reading only `reason` therefore reported `engine_decided` as a skip
+      // reason -- the decider's name standing in for a cause it does not describe.
+      else { s.actions.skipped++; inc(s.actions.skippedReasons, refusalReason(e)); }
     }
   }
   if (latencyCount) s.latency.avg = Math.round(latencySum / latencyCount);

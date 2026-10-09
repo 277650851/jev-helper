@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {decisionEntry,eventEntry,appendEntries,trimMatchEntries,logStats,stateSummary,LOG_MAX_ENTRIES,LOG_MAX_CHARS,MATCH_LOG_MAX_CHARS} from '../src/logbook.mjs';
+import {decisionEntry,eventEntry,appendEntries,trimMatchEntries,logStats,stateSummary,refusalReason,LOG_MAX_ENTRIES,LOG_MAX_CHARS,MATCH_LOG_MAX_CHARS} from '../src/logbook.mjs';
 
 const state={tick:5400,gameSeconds:360,self:{credits:8450,power:{total:500,drain:375}},uncommittedCredits:6650,committedCredits:1800,ownArmyCount:18,mobileTankCount:8,antiAirCount:4,harvesters:3,averageArmyHealth:.86,visibleEnemyCount:9,nearbyEnemyCount:3,baseUnderAttack:true,queues:[{type:0,items:[{name:'GATECH',quantity:1}]}],inventory:{MTNK:{count:8,name:'灰熊坦克'}},army:Array.from({length:24},(_,i)=>({id:i,tile:{rx:i,ry:i}})),visibleEnemies:[{id:1,tile:{rx:1,ry:1}}],strategy:{investment:{category:'construction',name:'GATECH'}}};
 const questions={construction:{type:'choice',instructions:'x'.repeat(1000),criteria:{wait:'Wait only if unnecessary.',produce_GAPOWR:'y'.repeat(500)}},tactics:{type:'choice',instructions:'Keep a mission',criteria:{wait:'Wait',attack_enemy_base:'Attack'}}};
@@ -60,4 +60,33 @@ test('statistics count decisions, wait rates per group, accepted and skipped act
   assert.deepEqual(s.actions,{total:3,accepted:1,skipped:1,waits:1,byType:{produce:1},skippedReasons:{enemy_no_longer_visible:1},acceptedProduce:{GAPOWR:1}});
   assert.deepEqual(s.outcomes,{victory:1});assert.deepEqual(s.providers,{local:2});
   assert.equal(logStats([]).decisions,0);assert.equal(logStats([null,{}]).entries,2);
+});
+
+test('a refused takeover is tallied by its refusal, not by the name of whoever decided it', () => {
+  // `reason` names the decider (`engine_decided` / `auto_*`); the cause travels in `rejectedBecause`. Reading
+  // only `reason` made the dashboard report `engine_decided` as a skip reason, which is the decider's name
+  // standing in for a cause it does not describe.
+  assert.equal(refusalReason({ reason: 'engine_decided', rejectedBecause: 'queue_changed' }), 'queue_changed');
+  assert.equal(refusalReason({ reason: 'auto_explore', rejectedBecause: 'unit_gone' }), 'unit_gone');
+  // A record written before that split overloaded `reason` with the refusal, so its cause is unknown.
+  assert.equal(refusalReason({ reason: 'engine_decided' }), 'unattributed');
+  assert.equal(refusalReason({ reason: 'auto_defenses' }), 'unattributed');
+  // An ordinary refusal keeps its own name, and an unnamed one is still counted.
+  assert.equal(refusalReason({ reason: 'enemy_no_longer_visible' }), 'enemy_no_longer_visible');
+  assert.equal(refusalReason({}), '?');
+  assert.equal(refusalReason(), '?', 'a missing entry does not throw');
+
+  // And the statistic that consumes it.
+  const entries = [
+    { kind: 'action', accepted: false, reason: 'engine_decided', rejectedBecause: 'queue_changed' },
+    { kind: 'action', accepted: false, reason: 'engine_decided' },
+    { kind: 'action', accepted: false, reason: 'unit_gone' },
+    { kind: 'action', accepted: true, actionType: 'produce', actionName: 'MTNK', reason: 'engine_decided' },
+    { kind: 'action', accepted: false, reason: 'wait' },
+  ];
+  const s = logStats(entries);
+  assert.deepEqual(s.actions.skippedReasons, { queue_changed: 1, unattributed: 1, unit_gone: 1 });
+  assert.equal(s.actions.skipped, 3, 'the wait is not a skip');
+  assert.equal(s.actions.accepted, 1);
+  assert.ok(!('engine_decided' in s.actions.skippedReasons), 'the decider is never a skip reason');
 });
