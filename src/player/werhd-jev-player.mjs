@@ -896,6 +896,17 @@ export function candidateGroups(api, catalog, snapshot, memory) {
           targetId: threatening[0].id,
           x: threatening[0].tile.rx,
           y: threatening[0].tile.ry,
+          // Engine-owned: this option only exists once the engine has already established that the base is
+          // under attack -- `threatening` is empty otherwise. When it is also the ONLY real option there is
+          // nothing left to judge: the force is not ready to attack, so the choice is between intercepting
+          // the attackers and watching them. Measured on `jev-report-20261010-061242`, that question was
+          // asked 8 times, twice refused, and in every case the model's answer was `wait` at ~55%
+          // probability -- declining to defend a base the engine had just reported as attacked.
+          //
+          // When the group also offers an attack or an assembly, the option stays a question: abandoning an
+          // offensive to fall back is a real trade, and 4 of that match's 8 tactics questions were of the
+          // other kind (`assemble_force` or `defend_base` alone) and are unaffected by this.
+          engineOwned: true,
         },
       );
     if (threatening.length) offerObjective();

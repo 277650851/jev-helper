@@ -100,9 +100,18 @@ export function replayApi(state = {}, catalog = {}, options = {}) {
   // --- the enemy -------------------------------------------------------------------------------
   const enemies = (state.visibleEnemies ?? []).map((e, i) => ({
     id: e.id ?? 2000 + i, name: e.kind ?? e.name, type: e.type ?? 7,
-    tile: { rx: e.tile?.x ?? baseTile.rx + 10, ry: e.tile?.y ?? baseTile.ry },
+    // `{ x, y }` is the summary's spelling and `{ rx, ry }` is the in-engine one. Reading only the first
+    // silently placed every hand-written scenario's enemy at base+10 and ignored the coordinates given --
+    // which is how a probe reports a plausible distance that is not the distance it set.
+    tile: { rx: e.tile?.x ?? e.tile?.rx ?? baseTile.rx + 10, ry: e.tile?.y ?? e.tile?.ry ?? baseTile.ry },
     hitPoints: e.hp, maxHitPoints: Math.round((e.hp ?? 100) / (e.hpFraction || 1)) || 100,
     isIdle: e.idle !== false, zone: e.zone,
+    // `baseThreats` requires a visible weapon before an enemy can threaten anything, and a hand-built
+    // summary carries it as `primaryWeapon`. Dropping it here made every reconstructed enemy look unarmed,
+    // so a base under attack never reported one -- and this module's own docstring promises the visible
+    // enemy list is carried faithfully.
+    ...(e.primaryWeapon ? { primaryWeapon: e.primaryWeapon } : {}),
+    ...(e.secondaryWeapon ? { secondaryWeapon: e.secondaryWeapon } : {}),
     ...(e.armor ? { armor: e.armor } : {}),
     ...(e.garrisoned ? { garrison: { count: e.garrisoned, capacity: e.garrisoned, canOccupy: false } } : {}),
   }));
