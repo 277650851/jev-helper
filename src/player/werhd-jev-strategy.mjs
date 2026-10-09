@@ -491,12 +491,16 @@ export function investmentGroups(api, catalog, snapshot, memory, groups) {
         : `counter-fire at (${placement.x},${placement.y}), enemy ranges ${reachableThreats.map(e=>currentWeapon(e,catalog).range).join(',') || 'no local target'}`;
       add(dg, item, `${strategy.underPressure ? 'URGENT' : 'PREPARE'}: ${answered}, estimated effectiveness ${Math.round(item.value)}`, Math.min(200, r.cost), placement);
       // Below the floor the first one is not a judgement call: after two waits the executor builds it.
-      // Under attack with a tower that can reach the attackers it is also not a judgement call:
-      // jev-report-20261010-042809 declined the URGENT Prism Cannon at 703.9s (4 threats in range,
-      // 2911 credits on hand) and lost 10 buildings. It is still not a reserved capital plan -- a
-      // peacetime turret must not take the money an objective (an engineer, a miner) is holding, so
-      // only a pressured base reserves for defenses.
-      if ((defenseFloor || strategy.underPressure && reachableThreats.length) && !floorTagged) { dg.actions[`produce_${item.name}`].auto = 2; floorTagged = true; }
+      // Under attack with a tower that can reach the attackers it is not even one: the executor builds
+      // it after the first wait. jev-report-20261010-042809 declined the URGENT Prism Cannon at 703.9s
+      // (4 threats in range, 2911 credits on hand); 044349 then declined the URGENT Pillbox once, and
+      // auto=2 never re-fired because the question was not asked again. Crisis gets auto=1 so one wait
+      // is enough. It is still not a reserved capital plan -- a peacetime turret must not take the
+      // money an objective (an engineer, a miner) is holding, so only a pressured base reserves.
+      if ((defenseFloor || strategy.underPressure && reachableThreats.length) && !floorTagged) {
+        dg.actions[`produce_${item.name}`].auto = strategy.underPressure && reachableThreats.length ? 1 : 2;
+        floorTagged = true;
+      }
       if (strategy.underPressure) defensePlan ??= { name: item.name, cost: r.cost, queue: item.queue };
     }
   }
@@ -568,7 +572,13 @@ export function investmentGroups(api, catalog, snapshot, memory, groups) {
     const counter = options[0];
     if (counter) {
       counterPlan = { name: counter.name, cost: counter.cost, queue: api.QueueType.Vehicles, category: 'vehicles', purpose: counterPurpose };
-      if(s.self.credits>=Math.min(250,counter.cost)) add(groups.vehicles, counter, standoff.length ? 'RANGE COUNTER: intercept exposed base attackers with a mobile counter; close the range gap or return fire at equal range' : 'MOBILE DEFENSE: build the missing mobile response; static guns cannot follow flanking attackers', Math.min(250, counter.cost));
+      if(s.self.credits>=Math.min(250,counter.cost)) {
+        add(groups.vehicles, counter, standoff.length ? 'RANGE COUNTER: intercept exposed base attackers with a mobile counter; close the range gap or return fire at equal range' : 'MOBILE DEFENSE: build the missing mobile response; static guns cannot follow flanking attackers', Math.min(250, counter.cost));
+        // A pressured base cannot wait out a mobile counter: jev-report-20261010-044349 declined the
+        // MOBILE DEFENSE IFV thirteen times in a row (queue empty, credits covering the 600 cost)
+        // while infantry fed into the raids one by one. Under pressure the first wait is enough.
+        if (strategy.underPressure) groups.vehicles.actions[`produce_${counter.name}`].auto = 1;
+      }
     }
   }
   let forcePlan;
