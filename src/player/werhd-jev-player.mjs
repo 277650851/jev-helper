@@ -833,6 +833,11 @@ export function candidateGroups(api, catalog, snapshot, memory) {
       tactics(`objective_${objectiveTarget.id}`,
         `OBJECTIVE PUSH: attack-move ${ids.length} units to (${x},${y}) beside ${objectiveTarget.label} #${objectiveTarget.id}, clearing its defenders so the engineer following the column can capture it. The target itself is never attacked.`,
         { type: "mission", mode: "attack", label: `掩护占领 ${objectiveTarget.label}`, ids, x, y, objective: true, capturePush: objectiveTarget.id,
+          // Left as `auto: 2` on purpose. Making it engine-owned looks like the same case as the money-idle
+          // and defence-floor paths, but it is not: those are one-shot purchases, while this re-issues a
+          // mission for the whole column, and four tests pin the intended timing ("the objective runs after
+          // two waits", "automatic only for a ready force"). Those are contracts about when the column
+          // commits, not artefacts -- so this needs its own evaluation, not a tag.
           ...(threatening.length || !pushReady ? {} : { auto: 2 }) });
     };
     const offerObjective = () => objectiveTarget && (captureMission ? offerCapturePush() : tactics(
@@ -847,6 +852,8 @@ export function candidateGroups(api, catalog, snapshot, memory) {
         x: objectiveTarget.x,
         y: objectiveTarget.y,
         objective: true,
+        // Same as the capture push above: the timing contract is pinned by tests and the mission is
+        // re-issued rather than bought once, so this stays a question with a fallback.
         ...(threatening.length || !ready ? {} : { auto: 2 }),
       },
     ));

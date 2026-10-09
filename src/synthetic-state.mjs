@@ -61,6 +61,7 @@ export const CATALOG = {
   ZEP: { cost: 2000, label: 'Kirov Airship', armor: 'light', aircraft: true, factory: 'AircraftType', buildCategory: 'Aircraft', techLevel: 8, weapon: w(250, 50, 1.5, [1, 0.85, 0.85, 0.75, 0.65, 0.45, 0.85, 0.75, 0.35, 1, 1]) },
   ORCA: { cost: 1200, label: 'Intruder', armor: 'light', aircraft: true, factory: 'AircraftType', buildCategory: 'Aircraft', techLevel: 4, ammo: 1, weapon: w(150, 10, 6, [1, 1, 1, 1, 1, 1, 1, 1, 0.75, 1, 1]) },
   // Enemy structures that matter to the question logic.
+  PENTAGON: { cost: 2000, label: 'Pentagon', armor: 'concrete', factory: 'BuildingType', buildCategory: 'Structure', techLevel: 1 },
   NACNST: { yard: true, cost: 2500, label: 'Soviet Construction Yard', armor: 'concrete', factory: 'BuildingType', buildCategory: 'Structure', techLevel: 1 },
   NAWEAP: { factory: 'UnitType', cost: 2000, label: 'Soviet War Factory', armor: 'wood', buildCategory: 'Structure', techLevel: 2 },
   NAREFN: { refinery: true, cost: 2000, label: 'Soviet Refinery', armor: 'wood', buildCategory: 'Structure', techLevel: 1 },
@@ -167,6 +168,22 @@ export const SCENARIOS = {
     inventory: stock([['GACNST', 1], ['GAPOWR', 2], ['GAREFN', 1], ['GAPILE', 1]]),
     army: [u(11, 'CMIN', TYPE.vehicle, 26, 24), u(12, 'CMIN', TYPE.vehicle, 27, 25), u(20, 'E1', TYPE.infantry, 24, 28)],
     visibleEnemies: [], queues: [],
+  }),
+  // A campaign objective with the force already at strength: the player asked for a specific building to
+  // go down, and the readiness gate is satisfied. Committing to it is the engine's conclusion, not a
+  // question -- the objective path used to wait for two model refusals before acting on it.
+  objective_ready: () => ({
+    tick: 12000, gameSeconds: 800, credits: 4000,
+    objective: '摧毁五角大楼',
+    power: { total: 600, drain: 150 }, harvesters: 3, base: { x: 20, y: 20 },
+    inventory: stock([['GACNST', 1], ['GAPOWR', 4], ['GAREFN', 1], ['GAPILE', 1], ['GAWEAP', 2]]),
+    army: [
+      u(11, 'CMIN', TYPE.vehicle, 26, 24), u(12, 'CMIN', TYPE.vehicle, 27, 25), u(13, 'CMIN', TYPE.vehicle, 28, 24),
+      ...Array.from({ length: 10 }, (_, i) => u(20 + i, 'MTNK', TYPE.vehicle, 30 + (i % 5), 30 + Math.floor(i / 5))),
+      u(60, 'E1', TYPE.infantry, 24, 28),
+    ],
+    visibleEnemies: [u(700, 'PENTAGON', TYPE.building, 48, 48), u(701, 'NALASR', TYPE.building, 47, 48)],
+    queues: [],
   }),
   // Money idle with production available and no force at all: the case the money-idle takeover exists for.
   idle_money: () => ({

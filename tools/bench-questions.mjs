@@ -19,9 +19,13 @@ const pct = (a, b) => (b ? `${Math.round((a / b) * 100)}%` : '—');
 // The build under test runs the same two steps the match runs: `requestGroupsFrom` picks and caps the
 // questions, `splitEngineOwned` removes the ones the engine answers itself. A benchmark that stopped after
 // the first step would report the old table and hide the change it exists to measure.
-const build = (api, catalog) => {
-  const groups = candidateGroups(api, catalog, collectState(api, catalog), {});
-  const request = requestGroupsFrom(groups, {}, api.tick());
+//
+// A scenario may name a campaign objective; the match keeps that on `memory`, which is where the objective
+// paths read it, so it is passed the same way.
+const build = (api, catalog, objective = '') => {
+  const memory = objective ? { objective } : {};
+  const groups = candidateGroups(api, catalog, collectState(api, catalog), memory);
+  const request = requestGroupsFrom(groups, memory, api.tick());
   const { asked, owned } = splitEngineOwned(request);
   return { asked: optionsOf(asked), owned, total: Object.keys(request).length };
 };
@@ -38,7 +42,7 @@ for (const name of SCENARIO_NAMES) {
   let failure = null;
   try {
     const api = replayApi(state, { ...CATALOG });
-    built = build(api, { ...CATALOG });
+    built = build(api, { ...CATALOG }, state.objective ?? '');
   } catch (e) {
     // A scenario that cannot be replayed must be loud: a silent empty result would read as "no questions",
     // which is the most flattering possible answer and therefore the most dangerous one.
