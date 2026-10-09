@@ -1698,3 +1698,45 @@ fetch 进任何提交都会让它成立）核对每份战报的 `match.meta.buil
 空目标列表保持原有含义而**不退化为 0**），再端到端断言
 四个打不动重型坦克的防守单位使 `localStrengthEstimate = 0`、`enemyStrengthEstimate > 0`、
 `suppressed` 翻成 `true`。换回 `effectiveness` 可复现红。
+
+---
+
+## 0.36 整合方案被数据改写：是**精选移植**，不是整体合并
+
+上一节说"把那两个功能合入本分支"，当时的依据是"18 个提交"。**先量了一下，两个数字都不对。**
+
+### 事实
+
+`git rev-list --count 7f6d63a..jm/wip/reserved-counter-auto` = **35 个**（不是 18）。
+而且这 35 个的主题与本评审的早期工作**高度重合**：
+"钱闲兜底的门槛改成相对判断"、"开局建造步骤改为引擎自动执行"、"常驻守家部队"、
+"选项预算 256→512"、"只读规则探针：导出活体 rules() 契约"、"三处托管缺陷：防守永远只有碉堡…"。
+抽查确认它们**不在**本分支上——**两条线是同一路线图的两套并行实现。**
+
+### 标记对照（`Select-String` 计数）
+
+| 标记 | 本分支 | 对方 |
+|---|---|---|
+| `RICH_SPEND_MULTIPLE` | 2 | **2** |
+| `BASE_GARRISON_SPARE` | 1 | **1** |
+| `crate_` / `CRATE_RESEND` / `minerEscape` | 0 / 0 / 0 | **5 / 2 / 3** |
+| `counterAverage` / `withRefusalReason` / `versesRow` / `canUnitHurt` / `rejectedBecause` | **3 / 3 / 5 / 8 / 13** | 0 / 0 / 0 / 0 / 0 |
+
+**真正独有的只有 3 个记号**：升级箱拾取（`crate_` / `CRATE_RESEND`）与矿车撤离（`minerEscape`）。
+`RICH_SPEND_MULTIPLE` 与 `BASE_GARRISON_SPARE` 两边都在；本分支的 5 组修复在对方**一处都没有**。
+
+### 结论：改整体合并为精选移植
+
+整体合并（`git merge-tree` 试算 10 个文件冲突）会把**同一批概念的另一种实现**并进来，
+而冲突的恰恰是双方都改过的 `player.mjs` / `-strategy.mjs` / `-special.mjs` ——
+**解得不好就会把本分支已测试的版本回退掉**，那正是这 30 多轮要避免的事。
+
+因此改为**按功能精选移植**：只把 `crate_`（升级箱拾取）与 `minerEscape`（矿车撤离）
+这两项对方独有的功能移植过来，逐个跑通全量测试；对方的其余 33 个提交**不复用**
+（它们的功能本分支已有自己的、且带回归测试的实现）。
+
+### 一条仍然成立的结论
+
+对方分支上**不存在**本评审的任何一项修复（`counterAverage` / `withRefusalReason` /
+`versesRow` / `canUnitHurt` / `rejectedBecause` 全部为 0）。所以"主线定在本分支"
+是正确的决定：**把修复放到功能更少但更正确的一条线上**，再逐项补功能。
