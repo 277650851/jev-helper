@@ -90,3 +90,28 @@ test('a refused takeover is tallied by its refusal, not by the name of whoever d
   assert.equal(s.actions.accepted, 1);
   assert.ok(!('engine_decided' in s.actions.skippedReasons), 'the decider is never a skip reason');
 });
+test('the record keeps the attribution: a refused takeover survives serialisation with its cause', () => {
+  // The serializer is the third party in the attribution chain -- writer, reader, and the thing that stores
+  // it. It kept only `reason`, so `rejectedBecause` and `engineOwned` never reached a saved report at all:
+  // measured on jev-report-20261010-061242, 0 of 63 action entries carried either. Everything downstream
+  // therefore classified every refused takeover as unattributable, no matter how the event was emitted.
+  const raw = {
+    kind: 'action', tick: 1349, question: 'construction', choice: 'produce_GAREFN',
+    accepted: false, reason: 'engine_decided', rejectedBecause: 'queue_changed', engineOwned: true, auto: true,
+    action: { type: 'produce', name: 'GAREFN', cost: 2000 },
+  };
+  const stored = eventEntry(raw, 123);
+  assert.equal(stored.reason, 'engine_decided', 'who decided is kept');
+  assert.equal(stored.rejectedBecause, 'queue_changed', 'and why it was refused');
+  assert.equal(stored.engineOwned, true, 'and that the option was engine-owned');
+  assert.equal(stored.auto, true, 'the takeover marker is still there');
+
+  // End to end, which is what the panel actually shows.
+  assert.equal(refusalReason(stored), 'queue_changed', 'so the cause is named rather than unattributable');
+  assert.deepEqual(logStats([stored]).actions.skippedReasons, { queue_changed: 1 });
+
+  // An accepted order has no refusal to carry, and a model-chosen one is not engine-owned.
+  const ok = eventEntry({ kind: 'action', tick: 2, accepted: true, reason: 'engine_decided', action: { type: 'produce', name: 'MTNK' } }, 1);
+  assert.equal(ok.rejectedBecause, undefined);
+  assert.equal(ok.engineOwned, undefined);
+});

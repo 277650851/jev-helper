@@ -80,7 +80,13 @@ export function eventEntry(e, at) {
   const base = { at, kind, tick: number(e?.tick) };
   // `auto` marks an action the extension executed without a usable answer (the page emits it when
   // the model declines repeatedly). Kept so the fallback is visible in the panel and to analyze-log.
-  if (kind === 'action') return { ...base, question: short(e.question, 40), choice: short(e.choice, 60), accepted: e.accepted === true, reason: short(e.reason, 40), actionType: short(e.action?.type, 24), actionName: short(e.action?.name ?? e.action?.mode, 40), cost: number(e.action?.cost), confidence: number(e.confidence), latencyMs: number(e.latencyMs), ageTicks: number(e.ageTicks), ...(e.auto ? { auto: true } : {}) };
+  //
+  // `engineOwned` and `rejectedBecause` are carried too, and they were missing here: this serializer kept
+  // only `reason`, so the two fields the attribution work added never reached a saved report at all --
+  // measured on `jev-report-20261010-061242`, 0 of 63 action entries had either. A record that drops the
+  // reason for a refusal cannot show whether the engine's own choice was refused by the game or the model
+  // declined a real question, which is the distinction the whole takeover mechanism exists to create.
+  if (kind === 'action') return { ...base, question: short(e.question, 40), choice: short(e.choice, 60), accepted: e.accepted === true, reason: short(e.reason, 40), ...(e.rejectedBecause ? { rejectedBecause: short(e.rejectedBecause, 40) } : {}), ...(e.engineOwned ? { engineOwned: true } : {}), actionType: short(e.action?.type, 24), actionName: short(e.action?.name ?? e.action?.mode, 40), cost: number(e.action?.cost), confidence: number(e.confidence), latencyMs: number(e.latencyMs), ageTicks: number(e.ageTicks), ...(e.auto ? { auto: true } : {}) };
   // The page's side of a commander turn: what was executed and why not. `executed` tells it apart
   // from the background's entry for the same turn.
   if (kind === 'command') return { ...base, executed: true, sourceTick: number(e.sourceTick), note: short(e.note, 400), orders: orderLines(e.results), rejected: orderLines(e.rejected), auto: orderLines(e.auto) };
