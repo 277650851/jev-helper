@@ -1536,6 +1536,23 @@ export function findVisibleOre(api, origin) {
   return undefined;
 }
 
+// The nearest visible ore patch is the one an enemy raid tends to stand on; picking it again and
+// again was the 053712 "恢复矿车采矿" loop. Return the closest Tiberium tile that is not within
+// ORE_CAMP_TILES of an armed enemy, or undefined when every visible patch is camped.
+export function findSafeOre(api, origin, enemies, camped) {
+  const { width, height } = api.map.size();
+  let best;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const tile = api.map.tile(x, y);
+      if (tile?.landType !== (api.LandType?.Tiberium ?? 9) || camped(x, y)) continue;
+      const d = Math.hypot(x - origin.rx, y - origin.ry);
+      if (!best || d < best.d) best = { rx: x, ry: y, d };
+    }
+  }
+  return best;
+}
+
 // Units shot from beyond their own reach used to stand and take it (a conscript, range 4, next to a
 // pillbox, range 5.5, kept firing at something else). Each one now either closes in on the shooter,
 // with nearby comrades, when it can hurt it, or steps out of its range when it cannot.
@@ -1645,8 +1662,14 @@ export function respondToThreats(api, catalog, memory, emit, mobile, enemies, sk
     // Unfold when the deployed form answers the threat the mobile one cannot. jev-report-20261010
     // feedback: a Guardian GI / GI that charges in with its rifle instead of unfolding is exactly the
     // "runs up to the enemy before shooting" bug the user sees. deployRecommendation weighs the net
-    // gain (damage rate and reach) so a static form is only taken when it pays.
-    if (!u.isDeployed && catalog[u.name]?.deploysInto && deployRecommendation(api, catalog, u, enemies)?.deploy && !canFireAt(api, catalog, u, e)) {
+    // gain (damage rate and reach) so a static form is only taken when it pays. Deployers whose
+    // deployed form is a TickTank building (platform Grizzly MTNK -> DMTK) are left to the strategy
+    // layer: api.deploy on them crashes the game page (jevreport-20261010-053355 died with
+    // `Cannot read properties of undefined (reading 'x')` right after `部署 #1542`), and only
+    // infantry-style deployment is what the micro instinct should be deciding anyway.
+    const depRule = catalog[u.name]?.deploysInto ? catalog[catalog[u.name].deploysInto] : undefined;
+    if (!u.isDeployed && catalog[u.name]?.deploysInto && depRule && !depRule.tickTank && !depRule.yard &&
+        deployRecommendation(api, catalog, u, enemies)?.deploy && !canFireAt(api, catalog, u, e)) {
       api.deploy([u.id]);
       memory.threatReplies.set(u.id, tick);
       memory.orders.set(u.id, { tick, threatReply: true });
@@ -1812,9 +1835,45 @@ export function maintainBattle(api, catalog, memory, emit) {
       }
       const ore = findVisibleOre(api, miner.tile);
       if (!ore) continue;
+      // jev-report-20261010-053712 repeated "恢复矿车采矿" 120+ times while the raid stood beside the
+      // ore: findVisibleOre returns the nearest patch, which is the one being camped. Only gather to a
+      // patch that is not under an armed enemy; otherwise stay put (idle at base) and wait for the
+      // field to clear instead of walking into the camp every few ticks.
+      const oreThreat = (x, y) => enemies.some(
+        (e) => e.primaryWeapon && Math.hypot(e.tile.rx - x, e.tile.ry - y) < 14,
+      );
+      if (oreThreat(ore.rx, ore.ry)) {
+        const safeOre = findSafeOre(api, miner.tile, enemies, oreThreat);
+        if (safeOre) {
+          api.gather([miner.id], safeOre.rx, safeOre.ry);
+          emit({ kind: "micro", tick, description: `矿车 #${miner.id} 避开被围矿场，转采 (${safeOre.rx},${safeOre.ry})`,
+            target: { x: safeOre.rx, y: safeOre.ry } });
+        }
+        continue;
+      }
       api.gather([miner.id], ore.rx, ore.ry);
       emit({ kind: "micro", tick, description: `恢复矿车 #${miner.id} 采矿`,
         target: { x: ore.rx, y: ore.ry } });
+    }
+    // A miner already gathering is not `isIdle`, so the block above never sees it. When an armed enemy
+    // closes on the field, pulling it out early beats losing the miner: the field can be re-mined once
+    // the tile clears (053712 kept a non-idle miner working next to the raid while "恢复矿车采矿"
+    // looped 120+ times for the idle one).
+    for (const miner of own.filter(
+      (u) => catalog[u.name]?.harvester && !u.isIdle,
+    )) {
+      const nearThreat = enemies.some(
+        (e) => e.primaryWeapon && distance(e.tile, miner.tile) < 14,
+      );
+      if (!nearThreat) continue;
+      const safe = own.find((b) => catalog[b.name]?.yard) ?? own.find((b) => b.type === api.ObjectType.Building);
+      if (!safe) continue;
+      if (tick - (memory.minerEscape?.get(miner.id) ?? -Infinity) < 90) continue;
+      api.move([miner.id], safe.tile.rx, safe.tile.ry);
+      memory.minerEscape ??= new Map();
+      memory.minerEscape.set(miner.id, tick);
+      emit({ kind: "micro", tick, description: `矿车 #${miner.id} 采集中遇敌，撤离矿场`,
+        target: { x: safe.tile.rx, y: safe.tile.ry } });
     }
     for (const building of own.filter(
       (u) => u.type === api.ObjectType.Building,
@@ -1854,8 +1913,12 @@ export function maintainBattle(api, catalog, memory, emit) {
       if (target) {
         // Unfold to answer what the mobile form cannot: a GI / Guardian GI that would have to charge
         // into the defender's range unfolds instead. deployRecommendation weighs the net gain, so a
-        // static form is only taken when it pays.
-        if (!u.isDeployed && catalog[u.name]?.deploysInto && !canFireAt(api,catalog,u,target) &&
+        // static form is only taken when it pays. TickTank deployers (Grizzly -> DMTK building) stay
+        // out of the micro instinct for the same reason as in respondToThreats: api.deploy on them
+        // crashes the game page.
+        const defenderDepRule = catalog[u.name]?.deploysInto ? catalog[catalog[u.name].deploysInto] : undefined;
+        if (!u.isDeployed && catalog[u.name]?.deploysInto && defenderDepRule && !defenderDepRule.tickTank && !defenderDepRule.yard &&
+            !canFireAt(api,catalog,u,target) &&
             deployRecommendation(api, catalog, u, defenseThreats)?.deploy &&
             tick-(memory.postureOrders?.get(u.id)??-1000)>150) {
           api.deploy([u.id]);
