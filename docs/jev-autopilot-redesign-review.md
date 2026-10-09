@@ -55,6 +55,7 @@
 | `342ef97` | 反制简报与引擎选择共用同一评分（`counterScore` 委托 `counterValue`） |
 | `10a3604` | 为 `effectiveness` 的语义加测试（参数顺序、平均与求和、拒绝与稀释） |
 | `d1b174b` | **修复 `Verses` 读取错误（F2）**：两种形状都读；溅射上移到 `counterValue`（F4） |
+| `c4c62b7` | **修 F1**：六处「能否打它」的谓词改为姿态感知；F5 简报与选择统一；F6 消除重复实现 |
 
 **核实后判定不可达、因此不改**：S5（矿车目标两套默认值）、S14（矿车选项被同轮清理删掉）——
 两条的详细推翻过程写在各节里，留着是为了避免下一个人按「高严重度缺陷」去改。
@@ -357,6 +358,43 @@
 
 **结论**：独立审计抓到了作者（我）看不见的错误，因为它不受「我刚写的代码应该是对的」这一预设影响。
 这类「静默返回合理数字」的缺陷，正是最需要外部核对的。
+
+---
+
+## 0.14 F1 落地：姿态感知的「能否打它」，以及 F5/F6
+
+**F1（已修）**：`player.mjs` 有六处用 `effectiveness(catalog[u.name], [target], …) > 0` 作
+「本单位能否伤害该目标」的谓词。参数顺序正确，但 `effectiveness` **同时扫两个武器、忽略姿态**，
+而 `activeWeapons` 对可部署单位只给一个槽位。实证来自真实规则：
+
+```
+[GGI]  Deployer=yes  Primary=GuardianPara (无对空)  Secondary=GuardianMissile (有对空)
+```
+
+**移动中的 Guardian GI 因此被判定为能打飞机，而它根本打不到。**
+后果是具体的：`orderSquad` 把它放进 `able` 走 `api.attack(飞机)` 而不是 `escort` 路径；
+另外几处「能伤害的袭击者」过滤器放进飞机，再被 `?? compatible[0]` 兜底派去打它，
+**留下真正的地面袭击者无人应答**。
+
+改为共享谓词 `canUnitHurt`（内部用 `activeWeapons`）——仓里 `mobileAntiAirCount` 与
+`hurts`/`canFireAt` 早已是正确做法，六处只是没跟上。
+
+`test/player-posture.test.mjs` 的第一条断言**同时**断言旧谓词为真、新谓词为假，
+把该 bug 直接复现出来；把 `canUnitHurt` 改回旧实现可复现红。
+
+**F5（已修）**：`strategy` 打印的「estimated current-target effectiveness」用
+`effectiveness` 对全图敌人取平均，而**同一处的选择**用 `counterValue`——
+简报可能把打不到敌人的选项评得比打得到的更高，**与引擎给出的选项相反**。
+这违反我自己写下的原则「与选择矛盾的简报比没有简报更糟」，已统一为 `counterValue`。
+
+**F6（已修）**：`counter.mjs` 里的 `versesArePercent`/`canEngage` 是 strategy 同名物的**第二份实现**，
+而且是**较旧、较错**的那份（偏好 `versus` 并要求数组，对真实规则恒判「无表格」——
+正是 §0.13 F2 同一缺陷的另一个副本）。已改为从 strategy 导入；`canEngage` 退化为
+按原型翻译参数后委托 `canEngageTarget`。`player.mjs` 的 `effectiveness` 死导入一并移除。
+
+**这一轮的方法论**：审计给出的清单里，F2 是「让已有功能失效」、F1 是「让决策用错单位」、
+F5 是「让简报与选择相反」、F6 是「同一逻辑的第二份副本」——四类问题都**不报错**。
+它们的共同解药不是更小心的编码，而是**单一实现 + 用真实数据形状写的测试**。
 
 ---
 
