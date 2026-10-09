@@ -91,7 +91,10 @@ export function createBackground(c, {fetchImpl = fetch, now = Date.now, uuid = (
   const logKey=id=>`matchlog:${id}`;
   const sanitizeMeta=e=>({pageTitle:String(e.pageTitle??'').slice(0,120),url:String(e.url??'').slice(0,300),me:e.me?{name:String(e.me.name??'').slice(0,40),country:e.me.country?String(e.me.country).slice(0,24):undefined}:null,
     players:(Array.isArray(e.players)?e.players:[]).slice(0,16).map(p=>({name:String(p?.name??'').slice(0,40),country:p?.country?String(p.country).slice(0,24):undefined,allied:!!p?.allied,isAi:!!p?.isAi,combatant:!!p?.combatant,isObserver:!!p?.isObserver,defeated:!!p?.defeated})),
-    playerCount:Number.isFinite(e.playerCount)?e.playerCount:null,opponents:Number.isFinite(e.opponents)?e.opponents:null,map:e.map&&Number.isFinite(e.map.width)?{width:e.map.width,height:e.map.height}:null,startTick:Number.isFinite(e.startTick)?e.startTick:null,startTime:Number.isFinite(e.startTime)?e.startTime:null});
+    playerCount:Number.isFinite(e.playerCount)?e.playerCount:null,opponents:Number.isFinite(e.opponents)?e.opponents:null,map:e.map&&Number.isFinite(e.map.width)?{width:e.map.width,height:e.map.height}:null,startTick:Number.isFinite(e.startTick)?e.startTick:null,startTime:Number.isFinite(e.startTime)?e.startTime:null,
+    // Which build produced this match. Attribution has to read this field, not compare timestamps:
+    // jev-report-20261009-214501 was misread twice because nothing in the report said which code ran.
+    build:typeof e.build==='string'?e.build.slice(0,40):null});
   const readMatches=async()=>{const list=(await c.storage.local.get('matches')).matches;return Array.isArray(list)?list:[];};
   // Text → base64 data URL for chrome.downloads; service workers have no object URLs.
   const dataUrl=text=>{const bytes=new TextEncoder().encode(text);let bin='';for(let i=0;i<bytes.length;i+=0x8000)bin+=String.fromCharCode(...bytes.subarray(i,i+0x8000));return 'data:application/json;base64,'+btoa(bin);};

@@ -301,11 +301,14 @@ test('a finished match saves a battle report to Downloads/jev-reports unless dis
 
 test('match metadata from the page is kept, each match stores its own log, and records can be labelled, deleted or cleared',async()=>{
   const x=await setup(async()=>answer());
-  await x.app.handle({type:'EVENT',token:x.s.token,event:{kind:'meta',pageTitle:'王二火大 · 战役 3',url:'https://ra2web.github.io/#c3',me:{name:'Me',country:'America'},players:[{name:'Me',allied:true,combatant:true},{name:'AI',isAi:true,combatant:true}],playerCount:2,opponents:1,map:{width:120,height:100},startTick:1600,startTime:100,apiKey:'leak'}},sender);
+  await x.app.handle({type:'EVENT',token:x.s.token,event:{kind:'meta',pageTitle:'王二火大 · 战役 3',url:'https://ra2web.github.io/#c3',me:{name:'Me',country:'America'},players:[{name:'Me',allied:true,combatant:true},{name:'AI',isAi:true,combatant:true}],playerCount:2,opponents:1,map:{width:120,height:100},startTick:1600,startTime:100,build:'abc1234-dirty',apiKey:'leak'}},sender);
   await x.app.handle(x.request,sender);
   await x.app.handle({type:'STOP',tabId:7},extension);
   const {matches}=await x.app.handle({type:'MATCHES_LIST'},extension);const m=matches[0];
   assert.equal(m.meta.pageTitle,'王二火大 · 战役 3');assert.equal(m.meta.players.length,2);assert.equal(m.meta.map.width,120);assert.equal(m.meta.opponents,1);assert.equal(m.meta.apiKey,undefined);
+  // Which build produced the match has to be readable off the record: the manifest version is 0.7.5
+  // for every change on this branch, so attribution cannot fall back to comparing timestamps.
+  assert.equal(m.meta.build,'abc1234-dirty');
   assert.equal(m.logEntries>=2,true);
   const log=await x.app.handle({type:'MATCH_LOG_GET',id:m.id},extension);
   assert.deepEqual(log.entries.map(e=>e.kind),['session','meta','decision','session']);assert.equal(log.entries[1].pageTitle,'王二火大 · 战役 3');

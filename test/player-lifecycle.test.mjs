@@ -294,6 +294,13 @@ own = [];
 enemy = [];
 api.QueueType = { Structures: 0, Armory: 1 };
 const catalog = { TANK: { label: "Tank", cost: 750, speed: 5, primary: "Cannon", power: 100 } };
+// `calls` is shared by the blocks below, and a late timer from one block can land inside the next
+// one. Each assertion therefore counts what its own block added, instead of the whole array: read as
+// a total, the entry left behind by an earlier block satisfied every later assertion, so none of them
+// was actually checking anything and the suite went red about one full-suite run in ten whenever a
+// previous block's trailing timer had not landed yet.
+const callsSince = since => calls.slice(since);
+let callsMark = calls.length;
 let finish, entered;
 const pending = new Promise(resolve => { entered = resolve; });
 const player = await attachJevPlayer(api, {
@@ -312,9 +319,13 @@ finish();
 await new Promise(resolve => setTimeout(resolve, 20));
 assert.equal(player.status.running, false);
 assert.equal(player.status.accepted, 0);
-assert.deepEqual(calls, [["produce", "TANK"]], "late responses must not issue commands");
+// The reply lands after stop() aborted the controller, so it must be dropped. The assertion here
+// used to expect one order, which is the opposite of what the message says: that entry came from the
+// block below and made this check a tautology.
+assert.deepEqual(callsSince(callsMark), [], "late responses must not issue commands");
 
 let tick = 100, staleResolve;
+callsMark = calls.length;
 api.tick = () => tick;
 const staleDone = new Promise(resolve => { staleResolve = resolve; });
 const stalePlayer = await attachJevPlayer(api, {
@@ -326,7 +337,7 @@ await staleDone;
 stalePlayer.stop();
 assert.equal(stalePlayer.status.rejected, 1);
 assert.equal(stalePlayer.status.accepted, 0);
-assert.deepEqual(calls, [["produce", "TANK"]], "stale snapshots must not issue commands");
+assert.deepEqual(callsSince(callsMark), [], "stale snapshots must not issue commands");
 
 // Report jev-report-20261008-023829: 102 decisions, 103 discarded. The game ran at ~60 ticks/s and a
 // local CPU model answered in 1.4-3.9 s, i.e. 244 ticks, while the budget was the 180-tick default
@@ -361,6 +372,9 @@ assert.deepEqual(calls, [["produce", "TANK"]], "stale snapshots must not issue c
   console.log(`Staleness: a 244-tick reply on a 180 budget is discarded once, then accepted (rejections ${stale.length}, accepted ${player.status.accepted})`);
 }
 
+// The block above clears `calls` and then stops on a wall-clock poll, so a decision already in
+// flight can still land its accepted order here: this block again counts only what it adds itself.
+callsMark = calls.length;
 let ended = false, endedResolve;
 const endEvents = [];
 api.tick = () => { if (ended) throw new Error("werhd is not available outside a running battle"); return 100; };
@@ -375,7 +389,11 @@ assert.equal(endedPlayer.status.running, false);
 assert.equal(endedPlayer.status.failures, 0);
 assert.ok(endEvents.some(e => e.kind === "stop" && e.reason === "battle_ended"));
 assert.ok(!endEvents.some(e => e.kind === "error"));
-assert.deepEqual(calls, [["produce", "TANK"]]);
+// The answer was already in flight when the battle ended, so nothing may be ordered: the tick
+// captured for the question is no longer readable, which is what discards it. This assertion used to
+// expect one order, but this block never produced one -- the entry it matched came from the block
+// above, which is why the suite went red whenever that block's timer landed late.
+assert.deepEqual(callsSince(callsMark), [], "an answer whose battle has ended must issue no orders");
 console.log(
   "Jev deployment/economy and guards passed: stale targets/snapshots, cancellation, missing units, changed queues/funds, defeat, unknown actions and fog.",
 );

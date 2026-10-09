@@ -38,6 +38,12 @@ if(window.__werhdJevExtension?.version!==VERSION){
     }catch{return {available:false,error:'对局已经结束或尚未开始。'};}
   }
   function stop(reason='manual') {player?.stop(reason);return {running:false,reason};}
+  // Which build produced this session. The manifest version cannot answer it -- 0.7.5 spans every
+  // change on this branch -- and reconstructing it from timestamps is how jev-report-20261009-214501
+  // got misread twice. The esbuild `define` replaces this identifier at build time; the fallback
+  // matters because test/page-transport.test.mjs evaluates this file as source, where no define ran.
+  // "dev" then reads as "not built", rather than as a wrong answer.
+  const BUILD = typeof BUILD_STAMP === 'string' ? BUILD_STAMP : 'dev';
   window.__werhdJevExtension={
     version:VERSION,
     observe:createObserver(()=>window.werhd),
@@ -54,7 +60,7 @@ if(window.__werhdJevExtension?.version!==VERSION){
       const meta=(()=>{try{
         const players=(api.players?.()??[]).slice(0,16).map(p=>({name:String(p.name??'').slice(0,40),country:p.country?String(p.country).slice(0,24):undefined,allied:!!p.allied,isAi:!!p.isAi,combatant:!!p.combatant,isObserver:!!p.isObserver,defeated:!!p.defeated}));
         const me=api.me();
-        return {pageTitle:String(document.title).slice(0,120),url:(location.origin+location.pathname+location.hash).slice(0,300),me:{name:String(me?.name??'').slice(0,40),country:me?.country?String(me.country).slice(0,24):undefined},players,playerCount:players.filter(p=>p.combatant&&!p.isObserver).length,opponents:players.filter(p=>!p.allied&&p.combatant&&!p.isObserver).length,map:api.map?.size?.(),startTick:api.tick(),startTime:api.time()};
+        return {pageTitle:String(document.title).slice(0,120),url:(location.origin+location.pathname+location.hash).slice(0,300),me:{name:String(me?.name??'').slice(0,40),country:me?.country?String(me.country).slice(0,24):undefined},players,playerCount:players.filter(p=>p.combatant&&!p.isObserver).length,opponents:players.filter(p=>!p.allied&&p.combatant&&!p.isObserver).length,map:api.map?.size?.(),startTick:api.tick(),startTime:api.time(),build:BUILD};
       }catch{return null;}})();
       if(meta)post({type:'EVENT',event:{kind:'meta',...meta}});
       player=await attachJevPlayer(api,{maxDecisions:options.maxDecisions,autoCamera:options.autoCamera,objective:options.objective,commander:options.commander===true,...(Number.isInteger(options.maxStaleTicks)?{maxStaleTicks:options.maxStaleTicks}:{}),requestDecision,onEvent:event=>{
