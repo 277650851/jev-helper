@@ -361,6 +361,15 @@ export function chooseBuildingSite(api, catalog, name, own, memory, limit = 200,
   return undefined;
 }
 
+// What an emplacement is worth when nothing is in range to score it against: the range it covers, and
+// whether it answers aircraft at all. Both are properties of the building, so they hold with an empty
+// horizon. Without them every tower scores zero and the pillbox wins on cost alone, and a base spends a
+// whole match with nothing but pillboxes.
+export const STANDOFF_VALUE = 3, STANDALONE_VALUE = 12;
+// isRealWeapon, not `damage > 0`: a building whose "weapon" is a Damage=1 tool on the InvisibleAll
+// placeholder (AA=yes/AG=yes) otherwise counts as a tower that answers aircraft.
+const answersAirEmplacement = (r) => [r.weapon, r.secondary].some(w => isRealWeapon(w) && w.aa !== false);
+
 export function investmentGroups(api, catalog, snapshot, memory, groups) {
   if (!api.QueueType || !api.canPlace) return;
   const { units, buildings, enemies } = snapshot.raw, s = snapshot.state, strategy = s.strategy;
@@ -398,21 +407,26 @@ export function investmentGroups(api, catalog, snapshot, memory, groups) {
         const r = catalog[i.name];
         const ground = effectiveness(r, defenseTargets, catalog, api);
         const vsAir = airTargets.length ? effectiveness(r, airTargets, catalog, api) : 0;
+        // With nothing in range `ground` is zero for every emplacement alike, and the ranking below
+        // then reduces to value/sqrt(cost) over zeros -- which only the pillbox can win, because it is
+        // the cheapest and the only one that draws no power. That is how a base ends its whole match
+        // with pillboxes: on jev-report-20261010-012710 fifteen of seventeen defence questions offered
+        // `produce_GAPILL` alone, while the Prism Cannon appeared once and the Patriot once, both at
+        // the very end and both declined. So when there is no target to score against, score what the
+        // emplacement is *for*: the range it covers and the air it answers. Those are the two things a
+        // tower is bought for, and they are properties of the building rather than of the moment.
+        const standoff = defenseTargets.length ? 0 : (r.weapon?.range ?? 0) * STANDOFF_VALUE;
+        const standing = defenseTargets.length ? 0 : answersAirEmplacement(r) ? STANDALONE_VALUE : 0;
         // An air answer is worth more than its size suggests: transports and the bombers that carry
         // Crazy Ivan are the one threat that reaches the refinery and the war factory directly, and a
         // tower cannot be outrun by the aircraft it is shooting at.
-        return { ...i, queue: api.QueueType.Armory, value: ground + vsAir * 2.2, groundValue: ground, vsAir };
+        return { ...i, queue: api.QueueType.Armory, value: ground + vsAir * 2.2 + standoff + standing, groundValue: ground, vsAir };
       });
     // Coverage has to count the tower that answers aircraft, not only the one that answers ground: with
     // an air raid inbound, "two defenses can reach it" is false of both pillboxes. Counted as a set of
     // units, not as two tallies added together -- a tower that answers both is one emplacement, and
     // counting it twice let the base stop at fewer defenses than it looked like it had.
-    const answersAir = (u) => {
-      const r = catalog[u.name] ?? {};
-      // isRealWeapon, not `damage > 0`: a building whose "weapon" is a Damage=1 tool on the
-      // InvisibleAll placeholder (AA=yes/AG=yes) otherwise counts as a tower that answers aircraft.
-      return [r.weapon, r.secondary].some(w => isRealWeapon(w) && w.aa !== false);
-    };
+    const answersAir = (u) => answersAirEmplacement(catalog[u.name] ?? {});
     coverage = defenseUnits.filter(u => (defenseTargets.length
       ? defenseTargets.some(e => canFireAt(api, catalog, u, e))
       : effectiveness(catalog[u.name], [], catalog, api) > 0) || (airTargets.length > 0 && answersAir(u))).length;

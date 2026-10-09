@@ -159,6 +159,10 @@ export const moneyIdle = (credits, cheapestCombatCost) =>
   && credits >= Math.max(RICH_SPEND, cheapestCombatCost * RICH_SPEND_MULTIPLE);
 // Capture objectives: the column pushes with this many units, to a point this far short of the target.
 export const CAPTURE_PUSH_UNITS = 6, CAPTURE_STAGE_TILES = 4;
+// How far from the base a scout has to be before a base defence stops calling it back, in tiles.
+export const SCOUT_RECALL_TILES = 18;
+// Combat infantry already at home before one more is withheld in favour of the scout.
+export const SCOUT_BLOCKS_FOOT = 6;
 // How old an answer may be before it is thrown away, in game ticks. The starting point only: the
 // budget adapts to the latency actually observed (see attachJevPlayer), because the same number of
 // ticks is 3 s on a fast game and 12 s on a slow one.
@@ -729,11 +733,20 @@ export function candidateGroups(api, catalog, snapshot, memory) {
       const r = catalog[item.name];
       const isScout=needsScout&&item.name===preferredScout.name;
       const profile=infantryProfile(r,api);
+      // A base that already has this many conscripts at home does not need another one while nobody is
+      // looking at the map. The scout's `auto` only advances when the model answers "wait", so offering
+      // a ninth conscript alongside it guarantees the answer is "build the conscript", the counter
+      // resets, and the scout is never trained: jev-report-20261010-012710 built eight E1 between ticks
+      // 1723 and 4115 and its first dog at 6770, three game minutes later. Withholding the redundant
+      // conscript is not forcing the model -- "wait" stays legal -- it just stops offering a unit whose
+      // only role would be to stand in the barracks.
+      const redundantFoot = !isScout && needsScout && combatFoot >= SCOUT_BLOCKS_FOOT;
       if (
         !r ||
         r.engineer ||
         r.cost > 1500 ||
         r.weapon?.damage <= 0 ||
+        redundantFoot ||
         (!isScout && (r.weapon?.range < 3 || roles[profile.role] >= (profile.role==='antiInfantry'?roleCap:state.infantryRoles.targetAntiArmor))) ||
         r.cost > state.self.credits
       )
@@ -958,8 +971,18 @@ export function candidateGroups(api, catalog, snapshot, memory) {
     threatening.push(...minerThreats);
   }
   if (active.length) {
-    const ids = striking.map((u) => u.id);
-    if (!ids.length) ids.push(...active.map((u) => u.id));
+    // A base defence does not recall the scout. The dog is cheap to replace and is the only thing
+    // revealing the map, and a conscript already forty tiles away cannot arrive before the attacker
+    // does -- calling it back spends the walk and still gets there after the refinery is gone. Close
+    // enough to matter it does come home. Everything else keeps its old behaviour: an attacking column
+    // is recalled, because a column that is already on its way is closer than it looks.
+    const isScoutUnit = (u) => u.id === memory.scoutId || !!catalog[u.name]?.attackDog;
+    const tooFarToRecall = (u) => baseTile
+      && Math.hypot(u.tile.rx - baseTile.rx, u.tile.ry - baseTile.ry) > SCOUT_RECALL_TILES;
+    const recallable = active.filter((u) => !(isScoutUnit(u) && tooFarToRecall(u)));
+    const recallableStriking = striking.filter((u) => !(isScoutUnit(u) && tooFarToRecall(u)));
+    const ids = recallableStriking.map((u) => u.id);
+    if (!ids.length) ids.push(...recallable.map((u) => u.id));
     // The objective is offered whatever the force size: the player asked for it. It comes first,
     // except that a threatened base is defended first. It is automatic only when the force is ready
     // (or the stall rule applies): otherwise it would feed small groups in one after another.
@@ -1026,7 +1049,7 @@ export function candidateGroups(api, catalog, snapshot, memory) {
           label: "保卫基地",
           // The home guard exists for exactly this: an assault that left them behind must be able to
           // call them in, or "defend the base" is a mission with nobody standing on it.
-          ids: [...ids, ...state.homeGuard.map((u) => u.id), ...navalDefenders],
+          ids: [...ids, ...state.homeGuard.map((u) => u.id).filter((id) => recallable.some((u) => u.id === id)), ...navalDefenders],
           targetId: threatening[0].id,
           x: threatening[0].tile.rx,
           y: threatening[0].tile.ry,
