@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { auditReport, classifyQuestion, reportMeta, topChoice, takeoversOf, LOW_CONFIDENCE } from '../src/report-audit.mjs';
+import { auditReport, classifyQuestion, reportMeta, topChoice, takeoversOf, formatAuditReport, LOW_CONFIDENCE } from '../src/report-audit.mjs';
 import { logStats } from '../src/logbook.mjs';
 
 // The audit turns a saved battle report into the one number the rewrite rests on: how often the engine
@@ -210,4 +210,33 @@ console.log('Report audit: forced-question share, refusal rate, per-group split,
   const mt = a.refusedForcedOptions.find((o) => o.option === 'vehicles:produce_MTNK');
   assert.deepEqual(mt, { option: 'vehicles:produce_MTNK', above: 1, below: 0 }, 'the per-option split separates the two directions');
   assert.ok(lower < LOW_CONFIDENCE && higher > LOW_CONFIDENCE, 'the fixture brackets the threshold');
+}
+// 6. The rendering is a pure function so a test can reach it. When it lived in tools/audit-report.mjs a
+//    broken string replacement made that script unparseable while the whole suite stayed green -- a tool is
+//    only ever run by hand. These assertions are about the two things that actually broke or could break:
+//    the report still contains its sections, and it survives an audit with none of the optional fields.
+{
+  const entries = [
+    decision(100, { tactics: q(['defend_base', 'wait'], 'wait', { confidence: 0.004 }) }),
+    decision(160, { vehicles: q(['produce_MTNK', 'wait'], 'produce_MTNK', { confidence: 0.7 }) }),
+  ];
+  const lines = formatAuditReport(auditReport(entries, reportMeta({ meta: { build: 'abc123' }, providerName: 'Laya', model: 'm', strategyMode: 'choices', outcome: 'victory' })), takeoversOf(entries), 'x.json');
+  const text = lines.join('\n');
+  assert.match(text, /战报 x\.json/, 'the file is named');
+  assert.match(text, /构建 abc123/, 'the build stamp is shown, so a report can be tied to a commit');
+  assert.match(text, /候选数分布/, 'the option-count distribution is shown');
+  assert.match(text, /唯一选项题的结局/, 'the forced-question split is shown');
+  assert.match(text, /接管归因/, 'the attribution section is shown');
+  assert.match(text, /各组明细/, 'the per-group table is shown');
+  assert.ok(lines.every((l) => typeof l === 'string'), 'every line is a string, so console.log renders it verbatim');
+
+  // The shapes that reach this function in practice include an audit with no takeovers, no refused
+  // examples and no optional metadata; reading an absent array must not throw.
+  const bare = auditReport([], {});
+  const bareText = formatAuditReport(bare, takeoversOf([]), '').join('\n');
+  assert.match(bareText, /接管归因/, 'an empty audit still renders its sections');
+  assert.doesNotMatch(bareText, /undefined/, 'and does not leak `undefined` into the output');
+  assert.doesNotMatch(bareText, /NaN/);
+  // Missing metadata renders as a placeholder rather than as the word "undefined".
+  assert.match(bareText, /构建 （无指纹/);
 }
