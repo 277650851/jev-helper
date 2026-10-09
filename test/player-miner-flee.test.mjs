@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { specialGroups, executeSpecial, MINER_FLEE_RADIUS, MINER_FLEE_COOLDOWN } from '../src/player/werhd-jev-special.mjs';
+import { askableGroups, requestGroupsFrom, engineOwnedMarks, collectTakeovers } from '../src/player/werhd-jev-player.mjs';
 
 // The harvester is the whole income. `baseThreats` already counts one near the base as core infrastructure
 // worth defending -- but nothing ever moved one out of the way, so it stood in the open and died while the
@@ -112,5 +113,22 @@ const yard = { id: 1, name: 'YARD', kind: 'YARD', type: 2, tile: { rx: 20, ry: 2
   assert.equal(executeSpecial(api, action).accepted, true);
   assert.deepEqual(moves, [{ ids: [50], x: 36, y: 30 }]);
   assert.equal(executeSpecial(api, { ...action, ids: [999] }).reason, 'unit_gone');
+}
+// 6. And the loop it feeds actually acts on it. An option that is offered but never taken is dead code: the
+//    takeover pass picks it up only when it is the group's single real choice, which is exactly the case here
+//    (no crates, nothing to sell), and `askableGroups` must drop the question rather than ask it.
+{
+  own = [yard, miner(50, 30, 30)];
+  enemies = [enemyAt(904, 'HTNK', 30 + MINER_FLEE_RADIUS - 1, 30)];
+  tick = 9000; memory.minerFleeAt = new Map();
+  const groups = run();
+  const asked = askableGroups(requestGroupsFrom(groups, memory, tick));
+  assert.ok(!('salvage' in asked), 'the engine does not ask about an emergency it has already decided');
+  const taken = collectTakeovers(groups, null, engineOwnedMarks(groups), memory, tick).filter((x) => !(x.id in asked));
+  const flee = taken.find((x) => x.id === 'salvage');
+  assert.ok(flee, 'and the takeover pass takes it');
+  assert.equal(flee.choice, 'flee_miner_50');
+  assert.equal(flee.reason, 'engine_decided');
+  assert.equal(flee.action.kind, 'flee_miner', 'so the escape reaches the executor rather than staying an option');
 }
 console.log('Harvester escape: a miner an attacker can actually hurt is moved out of reach, without a round trip');
