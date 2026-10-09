@@ -141,5 +141,17 @@ const q = (options, choice, extra = {}) => ({ optionCount: options.length, optio
   assert.deepEqual(t.refusals, { queue_changed: 2, unit_gone: 1 });
   assert.deepEqual(t.byGroup.scouting, { taken: 2, accepted: 1, refused: 1 });
   assert.deepEqual(t.byGroup.defenses, { taken: 1, accepted: 1, refused: 0 });
+
+  // Transport trouble is reported beside the tally: a degraded match must not read as one with nothing to do.
+  const trouble = takeoversOf([
+    { kind: 'error', message: 'Laya 请求超时' },
+    { kind: 'error', message: 'Laya 请求超时' },
+    { kind: 'degraded', untilTick: 1800 },
+    { kind: 'action', auto: true, reason: 'engine_decided', question: 'defenses', choice: 'x', accepted: true },
+  ]);
+  assert.equal(trouble.errors, 2, 'errors are counted');
+  assert.deepEqual(trouble.errorMessages, ['Laya 请求超时'], 'distinct messages, not repeats');
+  assert.equal(trouble.degraded, 1, 'and the degradation is visible');
+  assert.equal(trouble.taken, 1, 'while the takeovers are unaffected');
 }
 console.log('Report audit: forced-question share, refusal rate, per-group split, all-wait decisions and attribution');

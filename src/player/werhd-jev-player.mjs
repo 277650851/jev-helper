@@ -1139,6 +1139,9 @@ export function candidateGroups(api, catalog, snapshot, memory) {
 // Mission bookkeeping. The clock of an attack (mission.since, used to detect a stalled assault) only
 // restarts when the target changes: re-issuing the same attack every turn used to reset it forever.
 export const MISSION_LOCK_TICKS = 450;
+// How long the engine runs without asking after the decision transport fails repeatedly: long enough for a
+// stalled local model to be restarted, short enough that a recovered one is picked up in the same match.
+export const DEGRADED_TICKS = 1800;
 const sameTarget = (a, b) => !!a && !!b && (a.targetId !== undefined || b.targetId !== undefined
   ? a.targetId === b.targetId : Math.hypot(a.x - b.x, a.y - b.y) < 5);
 export function acceptMission(memory, action, execution, tick) {
@@ -2261,6 +2264,10 @@ export async function attachJevPlayer(api, options = {}) {
     accepted: 0,
     rejected: 0,
     failures: 0,
+    // When the decision transport keeps failing, the engine stops asking and runs on its own takeovers
+    // instead of ending the match. Set to the tick at which asking may resume.
+    degradedUntil: 0,
+    degradedFor: 0,
     last: undefined,
     observations: [],
     events: [],
@@ -2433,6 +2440,12 @@ export async function attachJevPlayer(api, options = {}) {
         if (status.accepted > acceptedBeforeOwned) memory.quietTurns = 0;
         return;
       }
+      // Degraded: the transport is down, so nothing is asked this turn. The engine's own takeovers still ran
+      // above, which is the whole reason the match can continue.
+      if (status.degradedUntil > tick) {
+        if (status.accepted > acceptedBeforeOwned) memory.quietTurns = 0;
+        return;
+      }
       memory.questionTicks ??= new Map();
       for (const id of Object.keys(asked)) memory.questionTicks.set(id, tick);
       status.busy = true;
@@ -2440,6 +2453,10 @@ export async function attachJevPlayer(api, options = {}) {
       const acceptedBefore = status.accepted;
       const result = await requestDecision({ state: snap.state, groups: asked }, { signal: controller.signal });
       status.decisions++;
+      // A turn that came back proves the transport works, so the failure streak was transient rather than a
+      // service that is gone. Without this a busy model that times out once every few turns would still
+      // accumulate to the degrade threshold and never recover.
+      status.failures = 0;
       status.last = { tick, ...result };
       if (!status.running) return;
       const ageTicks = api.tick() - tick;
@@ -2532,8 +2549,22 @@ export async function attachJevPlayer(api, options = {}) {
       if (status.running) {
         status.failures++;
         emit({ kind: "error", message: e.message });
+        // Five failures used to end the match. That was written when the engine could do very little on its
+        // own, but it now takes over more than half of all accepted orders, so stopping because the MODEL is
+        // unreachable means throwing away a match that could have continued. `jev-report-20261010-061242` is
+        // the case: the Laya service began timing out at tick 8643, five consecutive timeouts ended the
+        // autopilot at 15 minutes, and the base was left undefended by a transport fault.
+        //
+        // So the engine degrades instead: it stops asking, keeps acting on its own takeovers, and tries the
+        // model again after a cooldown. A model that comes back is picked up; one that does not costs speed
+        // and judgement, not the match.
+        if (status.failures >= 5) {
+          status.degradedUntil = api.tick() + DEGRADED_TICKS;
+          status.degradedFor++;
+          status.failures = 0;
+          emit({ kind: "degraded", tick: api.tick(), untilTick: status.degradedUntil, seconds: Math.round(DEGRADED_TICKS / 15), message: e.message });
+        }
       }
-      if (status.failures >= 5) stop("repeated_errors");
     } finally {
       status.busy = false;
       if (status.running)

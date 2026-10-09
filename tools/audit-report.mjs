@@ -54,6 +54,10 @@ console.log('');
 console.log('★ 接管归因（引擎自己决定的指令 vs 模型选的）：');
 console.log(`  动作 ${t.actions} 条 · 引擎接管 ${t.taken}（${pct(t.taken, t.taken + t.modelChosen)} 占已受理指令）· 受理 ${t.accepted} · 被拒 ${t.refused}`);
 console.log(`  模型选且受理 ${t.modelChosen} 条`);
+if (t.errors || t.degraded) {
+  console.log(`  传输故障 ${t.errors} 次 · 降级 ${t.degraded} 次${t.degraded ? '（降级期间引擎单独行动，不再提问）' : ''}`);
+  for (const m of t.errorMessages) console.log(`    ⚠ ${m}`);
+}
 if (t.unattributed) {
   console.log(`  ⚠ 其中 ${t.unattributed} 条 reason 被拒绝原因覆盖（旧战报形态）：无法从日志分辨它是哪条接管规则`);
 }

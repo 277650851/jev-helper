@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { attachJevPlayer, maintainBattle, updateLedger, collectState, candidateGroups } from '../src/player/werhd-jev-player.mjs';
+import { attachJevPlayer, maintainBattle, updateLedger, collectState, candidateGroups, DEGRADED_TICKS } from '../src/player/werhd-jev-player.mjs';
 const require_player = () => ({ updateLedger });
 const u = (id, name, type, x, y) => ({ id, name, type, tile: { rx: x, ry: y }, isIdle: true, hitPoints: 100, maxHitPoints: 100, primaryWeapon: {} });
 
@@ -99,6 +99,51 @@ test('the ledger counts own losses exactly and enemy kills only inside our visio
   assert.equal(l.ownUnitsLost, 1); assert.equal(l.enemyBuildingsDestroyed, 0, 'a building last seen in fog is not claimed');
   tick += 4000; l = updateLedger(api, {}, memory);
   assert.equal(l.enemyBuildingsDestroyed, 0); assert.equal(memory.ledger.seenEnemy.size, 0, 'stale fog sightings are forgotten silently');
+});
+
+test('a transport that keeps failing degrades the player to engine-only instead of ending the match', async () => {
+  const g = game();
+  // The tactics group always has a real choice here, so the model is asked on every turn.
+  const player = await attachJevPlayer(g.api, {
+    catalog: catalog(), intervalMs: 1e9, wakeIntervalMs: 0, disableMicro: true, maxDecisions: 200,
+    requestDecision: async () => { throw new Error('Laya 请求超时，请检查网络或 API 服务。'); },
+  });
+  try {
+    // Five consecutive failures used to call stop('repeated_errors'). The match then ended on a transport
+    // fault even though the engine can now decide most turns on its own.
+    for (let i = 0; i < 8; i++) { g.advance(20); g.fire(); await settle(); }
+    assert.equal(player.status.running, true, 'the autopilot is still running after the model times out');
+    const degraded = player.status.events.filter((e) => e.kind === 'degraded');
+    assert.ok(degraded.length >= 1, 'and the degradation is recorded');
+    assert.ok(degraded[0].untilTick > g.api.tick() || degraded[0].seconds > 0, 'with the window it applies for');
+    assert.ok(!player.status.events.some((e) => e.kind === 'stop' && e.reason === 'repeated_errors'), 'the old stop reason is gone');
+    // While degraded the model is not asked at all, so the failures stop accumulating.
+    const errorsAfterDegrade = player.status.events.filter((e) => e.kind === 'error').length;
+    g.advance(20); g.fire(); await settle();
+    g.advance(20); g.fire(); await settle();
+    assert.equal(player.status.events.filter((e) => e.kind === 'error').length, errorsAfterDegrade, 'no further requests are made while degraded');
+  } finally { player.stop('manual'); }
+});
+
+test('a recovered transport is picked up again after the cooldown', async () => {
+  const g = game();
+  let fail = true, asked = 0;
+  const player = await attachJevPlayer(g.api, {
+    catalog: catalog(), intervalMs: 1e9, wakeIntervalMs: 0, disableMicro: true, maxDecisions: 200,
+    requestDecision: async (body) => {
+      if (fail) throw new Error('timeout');
+      asked++;
+      return { answers: Object.fromEntries(Object.keys(body.groups).map((id) => [id, { type: 'choice', choice: 'wait', confidence: 1 }])) };
+    },
+  });
+  try {
+    for (let i = 0; i < 6; i++) { g.advance(20); g.fire(); await settle(); }
+    assert.ok(player.status.degradedFor >= 1, 'degraded once');
+    fail = false;
+    // Past the cooldown the model is asked again: a service that comes back must be used, not abandoned.
+    g.advance(DEGRADED_TICKS + 40); g.fire(); await settle();
+    assert.ok(asked >= 1, 'the model is asked again after the cooldown');
+  } finally { player.stop('manual'); }
 });
 
 test('an engine takeover is logged as the engine\'s decision, not as the refusal that followed it', async () => {

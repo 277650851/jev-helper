@@ -128,6 +128,11 @@ export function takeoversOf(entries = []) {
     } else g.accepted++;
   }
   const modelChosen = actions.filter((e) => e.auto !== true && e.accepted === true);
+  // Transport trouble is the other half of "who decided": when the model is unreachable the engine runs
+  // alone, and that shows up as a question count that stops rising rather than as actions. Reporting it
+  // beside the tally keeps a degraded match from being read as a match with nothing to do.
+  const errors = entries.filter((e) => e?.kind === 'error');
+  const degraded = entries.filter((e) => e?.kind === 'degraded');
   return {
     actions: actions.length,
     taken: takeovers.length,
@@ -139,6 +144,9 @@ export function takeoversOf(entries = []) {
     refusals,
     // Orders the model chose that were accepted, for the engine-vs-model ratio.
     modelChosen: modelChosen.length,
+    errors: errors.length,
+    errorMessages: [...new Set(errors.map((e) => String(e.message ?? '')))].slice(0, 4),
+    degraded: degraded.length,
   };
 }
 
