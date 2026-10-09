@@ -759,7 +759,13 @@ export function candidateGroups(api, catalog, snapshot, memory) {
     posture(
       "deploy_combat",
       `Deploy ${toDeploy.length} units now: they are holding base defense or an enemy is within deployed range; deployment improves sustained damage/range. The scout is excluded from idle base deployment. See per-unit weapon comparison in state.deployment.`,
-      { type: "set_deployed", deployed: true, ids: toDeploy.map((u) => u.id) },
+      // Engine-owned: the option exists only because the engine has already computed that deploying these
+      // units is the better posture (`stanceScores(u).deployed > stanceScores(u).normal`), so when it is also
+      // the only real option there is nothing to judge. Measured on `jev-report-20261010-061242`: the
+      // deployment group asked 8 questions and 7 were single-option (5 of them this one), and the model
+      // agreed with every one of them -- 0 refusals. A question whose answer is never disputed is a round
+      // trip spent to hear "yes".
+      { type: "set_deployed", deployed: true, ids: toDeploy.map((u) => u.id), engineOwned: true },
     );
   if (toUndeploy.length)
     posture(
@@ -769,6 +775,7 @@ export function candidateGroups(api, catalog, snapshot, memory) {
         type: "set_deployed",
         deployed: false,
         ids: toUndeploy.map((u) => u.id),
+        engineOwned: true,
       },
     );
   groups.deployment.criteria.wait =
