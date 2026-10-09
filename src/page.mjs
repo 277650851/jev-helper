@@ -67,6 +67,14 @@ if(window.__werhdJevExtension?.version!==VERSION){
       sample:(a.units?.('hostile')??[]).slice(0,3).map(u=>({name:u.name,type:u.type,zone:u.zone,armorField:u.armor,ruleArmor:a.rules?.(u.name,u.type)?.armor}))};
     return out;
   }
+  // Which build produced this session. The manifest version alone cannot answer it -- 0.7.5 spans
+// every change on this branch -- and guessing from timestamps is how jev-report-20261009-214501 got
+// misread twice (first as old code, then as new).
+// Injected at build time rather than fetched: dist/ must stay self-contained, and
+// test/package.test.mjs fails the bundle on any `fetch(`/`eval(`/`Authorization`.
+// The fallback matters: test/page-transport.test.mjs evaluates this file as source, where the
+// esbuild `define` has not run. "dev" then reads as "not built", rather than as a wrong answer.
+const BUILD = typeof BUILD_STAMP === 'string' ? BUILD_STAMP : 'dev';
   // The page script runs in the MAIN world and the content script cannot read it, so the result is
   // handed over the way the player can actually reach: a download into the browser's default folder.
   async function probeRulesAndSave(names) {
@@ -96,7 +104,7 @@ if(window.__werhdJevExtension?.version!==VERSION){
       const meta=(()=>{try{
         const players=(api.players?.()??[]).slice(0,16).map(p=>({name:String(p.name??'').slice(0,40),country:p.country?String(p.country).slice(0,24):undefined,allied:!!p.allied,isAi:!!p.isAi,combatant:!!p.combatant,isObserver:!!p.isObserver,defeated:!!p.defeated}));
         const me=api.me();
-        return {pageTitle:String(document.title).slice(0,120),url:(location.origin+location.pathname+location.hash).slice(0,300),me:{name:String(me?.name??'').slice(0,40),country:me?.country?String(me.country).slice(0,24):undefined},players,playerCount:players.filter(p=>p.combatant&&!p.isObserver).length,opponents:players.filter(p=>!p.allied&&p.combatant&&!p.isObserver).length,map:api.map?.size?.(),startTick:api.tick(),startTime:api.time()};
+        return {pageTitle:String(document.title).slice(0,120),url:(location.origin+location.pathname+location.hash).slice(0,300),me:{name:String(me?.name??'').slice(0,40),country:me?.country?String(me.country).slice(0,24):undefined},players,playerCount:players.filter(p=>p.combatant&&!p.isObserver).length,opponents:players.filter(p=>!p.allied&&p.combatant&&!p.isObserver).length,map:api.map?.size?.(),startTick:api.tick(),startTime:api.time(),build:BUILD};
       }catch{return null;}})();
       if(meta)post({type:'EVENT',event:{kind:'meta',...meta}});
       player=await attachJevPlayer(api,{maxDecisions:options.maxDecisions,autoCamera:options.autoCamera,objective:options.objective,commander:options.commander===true,...(Number.isInteger(options.maxStaleTicks)?{maxStaleTicks:options.maxStaleTicks}:{}),requestDecision,onEvent:event=>{
