@@ -13,9 +13,16 @@ export function stateSummary(state = {}) {
   return {
     tick: number(state.tick), gameSeconds: number(state.gameSeconds),
     credits: number(state.self?.credits), freeCredits: number(state.uncommittedCredits), committedCredits: number(state.committedCredits),
-    power: { total: number(state.self?.power?.total), drain: number(state.self?.power?.drain) },
+    power: { total: number(state.self?.power?.total), drain: number(state.self?.power?.drain), margin: number(state.economy?.powerMargin) },
     army: number(state.ownArmyCount), tanks: number(state.mobileTankCount), antiAir: number(state.antiAirCount), harvesters: number(state.harvesters),
     health: number(state.averageArmyHealth), visibleEnemies: number(state.visibleEnemyCount), nearbyEnemies: number(state.nearbyEnemyCount),
+    airThreats: number(state.airThreatCount),
+    // What the enemy is actually fielding, by armour class. The defence group decides whether it has a
+    // gap from this (`defenseGap` in werhd-jev-strategy.mjs asks whether any owned emplacement answers
+    // every armour class on the field), and the report is the only record of it after the match: the
+    // `observed` and `micro` entries are prose summaries, so nothing else carries `armor`.
+    enemyArmor: Object.fromEntries([...new Set((state.enemyArmor ?? []))].map(a => [short(a, 12), 1])),
+    enemyArmorCounts: (state.enemyArmorCounts ?? {}),
     baseUnderAttack: state.baseUnderAttack === true,
     queues: (state.queues ?? []).slice(0, 8).map(q => ({ type: short(q.type, 12), items: (q.items ?? []).slice(0, 6).map(i => `${short(i.name, 20)}×${number(i.quantity) ?? 1}`) })),
     inventory: Object.fromEntries(Object.entries(state.inventory ?? {}).slice(0, 48).map(([k, u]) => [short(k, 20), number(u?.count) ?? 0])),

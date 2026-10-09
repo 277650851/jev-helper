@@ -524,6 +524,16 @@ export function candidateGroups(api, catalog, snapshot, memory) {
   };
   assessStrategy(api, catalog, snapshot, memory);
   state.airThreatCount = enemies.filter((u) => u.zone === 1).length;
+  // The armour classes actually on the field, by count. The defence group compares this against what our
+  // emplacements can answer (strategy.mjs `defenseGap`), and the match report records it so the question
+  // stays answerable after the match -- `observed` and `micro` entries are prose and carry no `armor`.
+  state.enemyArmorCounts = {};
+  for (const e of enemies) {
+    const a = e.armor ?? e.armorType;
+    if (a == null) continue;
+    state.enemyArmorCounts[a] = (state.enemyArmorCounts[a] ?? 0) + 1;
+  }
+  state.enemyArmor = Object.keys(state.enemyArmorCounts).map(Number);
   state.antiAirCount = army.filter((u) => activeWeapons(u, catalog).some(w=>w.aa)).length;
   state.mobileAntiAirCount = army.filter(u=>u.type===api.ObjectType.Vehicle&&!catalog[u.name]?.naval&&catalog[u.name]?.category!=='AirPower'&&activeWeapons(u,catalog).some(w=>w.aa)).length;
   state.mission = memory.mission?.label ?? "待命";
@@ -756,9 +766,14 @@ export function candidateGroups(api, catalog, snapshot, memory) {
         !r ||
         r.engineer ||
         r.cost > 1500 ||
-        r.weapon?.damage <= 0 ||
+        // `!(damage > 0)`, not `damage <= 0`. A unit with no Weapon= field at all has `damage` of
+        // undefined, and `undefined <= 0` is false -- so the SPY walked straight through a filter
+        // written to require a weapon. Two spies were built in jev-report-20261010-020745 for a base
+        // that has no code that uses one: nothing issues an infiltration order, and the attack dogs
+        // this build now prioritises kill a spy on sight, which the catalogue lists as what a dog does.
+        !(r.weapon?.damage > 0) ||
         redundantFoot ||
-        (!isScout && (r.weapon?.range < 3 || roles[profile.role] >= (profile.role==='antiInfantry'?roleCap:state.infantryRoles.targetAntiArmor))) ||
+        (!isScout && ((r.weapon?.range ?? 0) < 3 || roles[profile.role] >= (profile.role==='antiInfantry'?roleCap:state.infantryRoles.targetAntiArmor))) ||
         r.cost > state.self.credits
       )
         continue;
