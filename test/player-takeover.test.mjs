@@ -29,13 +29,16 @@ const at = (actions, ...keys) => Object.fromEntries(keys.map((k) => [k, { id: 'q
 }
 
 // 2. The same group, sent to the model, is taken when the model answers `wait` and left alone when it
-//    answers something else: handed to the model, the answer is what decides.
+//    answers something else: handed to the model, the answer is what decides. The memory is shared, as the
+//    decide loop shares it, because it also carries the once-per-turn record tested below.
 {
   const actions = { wait: { type: 'wait' }, produce_TANK: action({ engineOwned: true }) };
   const groups = { vehicles: groupOf(actions) };
   const marks = engineOwnedMarks(groups);
   assert.deepEqual(collectTakeovers(groups, { vehicles: { choice: 'wait' } }, marks, {}, 0).length, 1);
-  assert.deepEqual(collectTakeovers(groups, { vehicles: { choice: 'produce_TANK' } }, marks, {}, 0), [], 'the caller runs the model\'s own pick');
+  const memory = {};
+  assert.deepEqual(collectTakeovers(groups, { vehicles: { choice: 'produce_TANK' } }, marks, memory, 0), [], 'the caller runs the model\'s own pick');
+  assert.deepEqual(collectTakeovers(groups, { vehicles: { choice: 'produce_TANK' } }, marks, memory, 1), [], 'and again on a later tick');
 }
 
 // 3. A real alternative keeps the question: the owned option does not fire on the turn the model chooses
@@ -118,5 +121,23 @@ const at = (actions, ...keys) => Object.fromEntries(keys.map((k) => [k, { id: 'q
   const marks = engineOwnedMarks(groups);
   const t = collectTakeovers(groups, { defenses: { choice: 'wait' } }, marks, {}, 0);
   assert.deepEqual(t.map((x) => [x.id, x.choice, x.owned]), [['defenses', 'produce_GAPILL', true]], 'the owned option still falls back');
+}
+// 10. A group is taken ONCE per turn. The decide loop calls this twice: once with no answers (the options
+//     the engine owns outright) and once after the model replies (the `auto:` fallbacks). The second pass
+//     re-evaluates the same groups, and by then another group's action may have rewritten `memory.mission`,
+//     which defeats the running-mission guard. `jev-report-20261010-061242` shows the consequence: the same
+//     `explore_104_65` mission issued twice at tick 1611, and pairs again at 3022 and 4037.
+{
+  const actions = { wait: { type: 'wait' }, explore_4_4: action({ type: 'mission', mode: 'explore', engineOwned: true }) };
+  const groups = { scouting: groupOf(actions) };
+  const marks = engineOwnedMarks(groups);
+  const memory = {};
+  const first = collectTakeovers(groups, null, marks, memory, 700);
+  assert.deepEqual(first.map((t) => t.choice), ['explore_4_4'], 'the engine takes it on the first pass');
+  const second = collectTakeovers(groups, { scouting: { choice: 'wait' } }, marks, memory, 700);
+  assert.deepEqual(second, [], 'and does not take it again in the same turn');
+  // A new tick starts clean: the same option is available again next turn.
+  const next = collectTakeovers(groups, null, marks, memory, 701);
+  assert.deepEqual(next.map((t) => t.choice), ['explore_4_4'], 'a new turn is not blocked by the previous one');
 }
 console.log('Takeovers: one decision point for ownership and the auto fallback, counted per option, with a real alternative left to the model');

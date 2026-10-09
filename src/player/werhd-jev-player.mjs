@@ -2118,7 +2118,13 @@ export function engineOwnedMarks(groups) {
 export function collectTakeovers(groups, answers, engineOwned = {}, memory = {}, tick = 0) {
   const takeovers = [];
   memory.takeoverDeclines ??= {};
+  // The caller runs this twice per turn: once with no answers (the options the engine owns outright) and
+  // once after the model replies (the `auto:` fallbacks). The second pass re-evaluates the same groups, and
+  // by then another group's action may have rewritten `memory.mission` -- which defeats the running-mission
+  // tested directly; it is keyed by tick so a new turn starts clean.
+  if (memory.takeoversAtTick !== tick) { memory.takeoversAtTick = tick; memory.takenThisTick = new Set(); }
   for (const [id, g] of Object.entries(groups ?? {})) {
+    if (memory.takenThisTick.has(id)) continue;
     const actions = g.actions ?? {};
     const real = Object.keys(g.criteria ?? {}).filter((k) => k !== "wait");
     const own = engineOwned?.[id] ?? {};
@@ -2128,8 +2134,10 @@ export function collectTakeovers(groups, answers, engineOwned = {}, memory = {},
     // the request, and when the group was sent (criteria still hold a real alternative, so it was not
     // dropped) still taken if the model declined the owned option.
     if (real.length === 1 && own[real[0]] === true) {
-      if (!sent || answer.choice === "wait")
+      if (!sent || answer.choice === "wait") {
+        memory.takenThisTick.add(id);
         takeovers.push({ id, choice: real[0], action: actions[real[0]], reason: "engine_decided", owned: true });
+      }
       continue;
     }
     // The `auto: N` fallback arms for EVERY option the engine would take on its own, not only for the ones
@@ -2169,6 +2177,7 @@ export function collectTakeovers(groups, answers, engineOwned = {}, memory = {},
     }
     // `owned` records that the engine, not a declared threshold, is what took it -- the log keeps them
     // distinct so a match can be read back.
+    memory.takenThisTick.add(id);
     takeovers.push({ id, choice, action: actions[choice], reason: id === "scouting" ? "auto_explore" : `auto_${id}`, plain: true, owned: own[choice] === true });
   }
   return takeovers;
@@ -2452,8 +2461,11 @@ export async function attachJevPlayer(api, options = {}) {
       };
       // The engine takes them now. With no answers only the owned options come back, and only where the
       // group was dropped from the request -- a group sent to the model was asked about.
-      runTakeovers(collectTakeovers(groups, null, ownedMarks, memory, tick).filter((t) => !(t.id in asked)));
-      // Nothing left to ask the model: the engine's own decisions were the whole turn.
+      const preTakeovers = collectTakeovers(groups, null, ownedMarks, memory, tick).filter((t) => !(t.id in asked));
+      runTakeovers(preTakeovers);
+      // A group the engine already acted on this turn must not be taken AGAIN by the post-answer pass. That
+      // pass re-evaluates the same groups, and between the two calls `memory.mission` may have been
+      // rewritten by another group's action -- which defeats the running-mission guard that would otherwise
       if (!Object.keys(asked).length) {
         if (status.accepted > acceptedBeforeOwned) memory.quietTurns = 0;
         return;
