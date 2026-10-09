@@ -1,9 +1,13 @@
-import { isAirSupport, effectiveness, counterValue, canAnswerVisible } from './werhd-jev-strategy.mjs';
+import { isAirSupport, effectiveness, counterValue, canAnswerVisible, canEngageTarget } from './werhd-jev-strategy.mjs';
 import { isCapturable } from './werhd-jev-catalog.mjs';
 export const ATTACK_STUCK_TICKS = 2700, CAPTURE_RESENDS = 3, SIEGE_RANGE = 8, BASE_GARRISON_SPARE = 8;
 // A crate is a single tile on the ground, so walking there is quick and the resend window is short. The
 // timeout is generous on purpose: a crate across the map behind a bridge is still worth the trip.
 export const CRATE_RESEND = 120, CRATE_TIMEOUT = 1800;
+// A harvester under fire: the miner is the whole income, and `baseThreats` already treats one near the base
+// as core infrastructure to defend -- but until now nothing ever moved it out of the way, so it stood there
+// and was killed while the engine counted it as something worth defending.
+export const MINER_FLEE_RADIUS = 5, MINER_FLEE_COOLDOWN = 300;
 // Leaving a building once its job is done: no armed enemy within RELEASE_RADIUS for this long.
 export const ENTRY_RESENDS = 3;
 export const RELEASE_RADIUS = 10, RELEASE_TICKS = { siege: 150, forward: 900, base: 2700 }, REENTER_COOLDOWN = 1800;
@@ -143,9 +147,50 @@ export function specialGroups(api, catalog, snapshot, memory, groups) {
     visibleBridgePieces: bridges.length, shoreNearBase: !!water.length,
     // Crates are a separate listing; the count is what explains a unit that walked off.
     crates: crates.length,
+    // Harvesters under fire, so the state says why a miner left its field.
+    fleeingHarvesters: (memory.minerFleeAt ? [...memory.minerFleeAt.keys()] : []).length,
     aircraft: units.filter((u) => catalog[u.name]?.aircraft).map((u) => ({ id: u.id, ammo: u.ammo, idle: u.isIdle })),
     transports: units.filter((u) => u.transport).map((u) => ({ id: u.id, ...u.transport })),
   };
+  // Harvester self-preservation. `baseThreats` counts a miner near the base as core infrastructure worth
+  // defending, but nothing ever moved one out of the way, so it stood in the open and was killed while the
+  // engine was busy defending it. The miner is the entire income, so this is not a judgement call: the
+  // option is marked `engineOwned`, which means the engine issues the move itself without a round trip --
+  // a model answer that arrives seconds later is worth nothing to a unit dying now.
+  //
+  // Destination: the own base, which is where the defence already is. If the enemy is nearer the base than
+  // the miner is, going home would run toward it, so the miner instead steps away from the threat, clamped
+  // to the map. Ore-field choice is explicitly the user script's job (`docs/player-console-api.md:178`), so
+  // no ore scan is attempted here -- the existing harvest logic sends the miner back out once it is safe.
+  {
+    const miners = units.filter((u) => catalog[u.name]?.harvester && !u.onBridge);
+    const flee = miners.filter((m) => {
+      if ((memory.minerFleeAt?.get(m.id) ?? -1e9) + MINER_FLEE_COOLDOWN > tick) return false;
+      return enemies.some((e) => (catalog[e.name]?.weapon?.damage ?? 0) > 0
+        && distance(e.tile, m.tile) <= MINER_FLEE_RADIUS
+        && canEngageTarget(catalog[e.name], m, catalog, api));
+    });
+    if (flee.length) {
+      const safety = group('salvage', 'Move a harvester out of an attacker\'s reach. It is the whole income, so losing one costs more than the ore it was mining.');
+      memory.minerFleeAt ??= new Map();
+      for (const m of flee.slice(0, 3)) {
+        const threat = enemies.reduce((best, e) => (best && distance(best.tile, m.tile) <= distance(e.tile, m.tile) ? best : e), undefined);
+        const homeFarther = base && distance(base.tile, threat.tile) > distance(m.tile, threat.tile);
+        const tile = homeFarther ? base.tile : (() => {
+          const dx = m.tile.rx - threat.tile.rx, dy = m.tile.ry - threat.tile.ry;
+          const len = Math.hypot(dx, dy) || 1;
+          const size = api.map.size();
+          return {
+            rx: Math.max(0, Math.min(size.width - 1, Math.round(m.tile.rx + (dx / len) * MINER_FLEE_RADIUS * 2))),
+            ry: Math.max(0, Math.min(size.height - 1, Math.round(m.tile.ry + (dy / len) * MINER_FLEE_RADIUS * 2))),
+          };
+        })();
+        memory.minerFleeAt.set(m.id, tick);
+        safety(`flee_miner_${m.id}`, `Move harvester #${m.id} to (${tile.rx},${tile.ry}) away from the attacker #${threat.id}. It is our only income; standing in the open loses it.`,
+          { type: 'special', kind: 'flee_miner', ids: [m.id], tile: { x: tile.rx, y: tile.ry }, threatId: threat.id, engineOwned: true });
+      }
+    }
+  }
   const posture = group('deployment', 'Choose a useful deployment posture. Static weapon forms may protect a threatened choke, but must unfold back into mobile units when the battle moves away.');
   for (const u of units.filter((u) => u.canDeploy && idle(u, memory, tick))) {
     const r = catalog[u.name];
@@ -448,6 +493,15 @@ export function specialGroups(api, catalog, snapshot, memory, groups) {
 }
 
 export function executeSpecial(api, action) {
+  // Harvester escape: a plain move to the tile the caller chose, re-checked so a miner that is already gone
+  // is not ordered. Deliberately `move` and not `gather` -- the docs leave ore-field choice to the caller
+  // (`docs/player-console-api.md:178`), and this order is about leaving, not about mining.
+  if (action.kind === 'flee_miner') {
+    const miner = (api.units('self') ?? []).find((u) => action.ids.includes(u.id));
+    if (!miner) return { accepted: false, reason: 'unit_gone' };
+    api.move(action.ids, action.tile.x, action.tile.y);
+    return { accepted: true, ids: action.ids };
+  }
   // Crate pickup: a unit standing on the crate tile collects it, so this is the documented `move` verb
   // (`docs/player-console-api.md:178` defines `gather` as mining to a named tile, which is a different thing).
   // The crate is re-read here rather than trusted from the option, because one looted or despawned in between
