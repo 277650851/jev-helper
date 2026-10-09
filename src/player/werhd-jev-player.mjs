@@ -1,6 +1,6 @@
 import { specialGroups, executeSpecial, rememberSpecial, maintainSpecial, refreshInfrastructure, SIEGE_RANGE } from "./werhd-jev-special.mjs";
 import { buildBrief, formSquads, squadUnits, sameIntent } from "./werhd-jev-commander.mjs";
-import { assessStrategy, investmentGroups, chooseBuildingSite, chooseRallySite, weaponEffectiveness, effectiveness, infantryProfile, scoutScore, scoutPreference, currentWeapon as combatWeapon, activeWeapons, canFireAt, baseThreats, ATTACK_FORCE_SIZE, ATTACK_AA_ESCORTS, vehicleOptions } from "./werhd-jev-strategy.mjs";
+import { assessStrategy, investmentGroups, chooseBuildingSite, chooseRallySite, weaponEffectiveness, effectiveness, infantryProfile, scoutScore, scoutPreference, currentWeapon as combatWeapon, activeWeapons, canFireAt, baseThreats, ATTACK_FORCE_SIZE, ATTACK_AA_ESCORTS, vehicleOptions, armorIndexOf } from "./werhd-jev-strategy.mjs";
 import { updateCamera } from "./werhd-jev-camera.mjs";
 import { refreshCatalog, isDecoration } from "./werhd-jev-catalog.mjs";
 import { trackObjective, isGuardedByObjective } from "./werhd-jev-objective.mjs";
@@ -527,13 +527,15 @@ export function candidateGroups(api, catalog, snapshot, memory) {
   // The armour classes actually on the field, by count. The defence group compares this against what our
   // emplacements can answer (strategy.mjs `defenseGap`), and the match report records it so the question
   // stays answerable after the match -- `observed` and `micro` entries are prose and carry no `armor`.
+  // The unit API exposes no armor field (it lives on the rules), so the readable word comes from the
+  // catalog; the numeric list keeps the index contract the defence group's effectiveness expects.
   state.enemyArmorCounts = {};
   for (const e of enemies) {
-    const a = e.armor ?? e.armorType;
-    if (a == null) continue;
-    state.enemyArmorCounts[a] = (state.enemyArmorCounts[a] ?? 0) + 1;
+    const word = catalog[e.name]?.armor;
+    if (word == null) continue;
+    state.enemyArmorCounts[word] = (state.enemyArmorCounts[word] ?? 0) + 1;
   }
-  state.enemyArmor = Object.keys(state.enemyArmorCounts).map(Number);
+  state.enemyArmor = [...new Set(enemies.map((e) => armorIndexOf(e, catalog, api)))];
   state.antiAirCount = army.filter((u) => activeWeapons(u, catalog).some(w=>w.aa)).length;
   state.mobileAntiAirCount = army.filter(u=>u.type===api.ObjectType.Vehicle&&!catalog[u.name]?.naval&&catalog[u.name]?.category!=='AirPower'&&activeWeapons(u,catalog).some(w=>w.aa)).length;
   state.mission = memory.mission?.label ?? "待命";

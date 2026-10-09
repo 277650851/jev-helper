@@ -175,14 +175,26 @@ const versesOf = (w, index) => {
   return Number.isFinite(n) ? n : 1;
 };
 
+// The public unit API (PlayerConsoleUnit) carries no `armor` field -- armour lives on the rules
+// (PlayerConsoleRule.armor). weaponEffectiveness used to resolve it through the catalog, but the
+// defence gap (below) and the match report read it off the unit object instead, so both saw nothing:
+// enemyArmorCounts stayed {} and "enemy class nothing we own can hurt" never fired. This is the one
+// resolver, mirroring the old inline fallbacks: unit value when present, else catalog word -> ArmorType
+// index, else the type default weaponEffectiveness already used.
+export function armorIndexOf(e, catalog, api) {
+  if (e.armor != null) return e.armor;
+  const word = catalog[e.name]?.armor;
+  const idx = word == null ? null : Object.entries(api.ArmorType ?? {})
+    .find(([k, v]) => /^\d+$/.test(k) && String(v).toLowerCase() === word)?.[0];
+  return idx ?? (e.type === api.ObjectType.Infantry ? (api.ArmorType?.None ?? 0) : (api.ArmorType?.Heavy ?? 5));
+}
+
 export function weaponEffectiveness(w, targets, catalog, api) {
   if (!isRealWeapon(w)) return 0;
   const samples = targets.length ? targets : [{ type: api.ObjectType.Infantry }, { type: api.ObjectType.Vehicle }];
   return samples.reduce((sum, t) => {
     if (t.zone === (api.ZoneType?.Air ?? 1) ? !w.aa : w.ag === false) return sum;
-    const armor = catalog[t.name]?.armor;
-    const index = t.armor ?? Object.entries(api.ArmorType ?? {}).find(([k, v]) => /^\d+$/.test(k) && String(v).toLowerCase() === armor)?.[0]
-      ?? (t.type === api.ObjectType.Infantry ? (api.ArmorType?.None ?? 0) : (api.ArmorType?.Heavy ?? 5));
+    const index = armorIndexOf(t, catalog, api);
     // The dictionary lists 0%, 1% and 2% as hardcoded flags: 0 cannot attack at all, 1 cannot
     // return fire, 2 does not acquire. Everything else is a plain multiplier, and values above 1
     // are bonuses -- SIEGE carries Verses=2 against steel for double damage, so treating "above 1"
@@ -404,7 +416,7 @@ export function investmentGroups(api, catalog, snapshot, memory, groups) {
   // `weaponEffectiveness` reads `target.armor` (see the sample list it builds at the top of this file),
   // so the probe below has to use the same field name or the gap never fires.
   const enemyArmor = new Set(enemies.filter(e => e.type !== api.ObjectType.Building)
-    .map(e => e.armor ?? e.armorType).filter(a => a != null));
+    .map(e => armorIndexOf(e, catalog, api)).filter(a => a != null));
   const unanswered = [...enemyArmor].some(armor => defenseUnits.every(u =>
     effectiveness(catalog[u.name], [{ type: api.ObjectType.Vehicle, armor: armor }], catalog, api) <= 0));
   const noAirAnswer = defenseUnits.length > 0 && !defenseUnits.some(u => answersAirEmplacement(catalog[u.name] ?? {}))
