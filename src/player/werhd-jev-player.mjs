@@ -2057,6 +2057,92 @@ export function requestGroupsFrom(groups, memory = {}, tick = 0) {
   );
 }
 
+// The engine has two ways to take an option out of the model's hands, and they are one mechanism with two
+// triggers:
+//
+//   * `engineOwned: true` -- the producer has already established every premise, so there is no question.
+//   * `auto: N`           -- objective-critical but genuinely choosable, so it is a question that falls
+//                            back to the engine if the model declines it N times running.
+//
+// Historically these were two separate scans: ownership was decided before the request, in
+// `splitEngineOwned`, and the `auto:` fallback was decided afterwards, iterating every group and picking
+// "the tagged option with the smallest N". That left the declared threshold and the value actually used in
+// two different places -- the defect recorded in §3.2 -- and it made the fallback depend on which of two
+// equally-tagged options happened to come first.
+//
+// This collects both in one pass, per option, and returns them in the order they were decided. The
+// per-option key also means a group that tags two options no longer lets the smaller threshold silently
+// speak for both.
+//
+// `engineOwned` is still not inferred from "this group has only one option": affording something is not the
+// same as having decided to buy it, and only the producer knows which of its offers answers its own
+// precondition.
+export function engineOwnedMarks(groups) {
+  return Object.fromEntries(Object.entries(groups ?? {}).map(([id, g]) => [
+    id,
+    Object.fromEntries(Object.entries(g.actions ?? {}).filter(([, a]) => a?.engineOwned === true).map(([k]) => [k, true])),
+  ]));
+}
+
+export function collectTakeovers(groups, answers, engineOwned = {}, memory = {}, tick = 0) {
+  const takeovers = [];
+  memory.takeoverDeclines ??= {};
+  for (const [id, g] of Object.entries(groups ?? {})) {
+    const actions = g.actions ?? {};
+    const real = Object.keys(g.criteria ?? {}).filter((k) => k !== "wait");
+    const own = engineOwned?.[id] ?? {};
+    const answer = answers?.[id];
+    const sent = Object.prototype.hasOwnProperty.call(answers ?? {}, id);
+    // A single option the engine owns is not a question: taken outright when the group was dropped from
+    // the request, and when the group was sent (criteria still hold a real alternative, so it was not
+    // dropped) still taken if the model declined the owned option.
+    if (real.length === 1 && own[real[0]] === true) {
+      if (!sent || answer.choice === "wait")
+        takeovers.push({ id, choice: real[0], action: actions[real[0]], reason: "engine_decided", owned: true });
+      continue;
+    }
+    // The `auto: N` fallback arms for EVERY option the engine would take on its own, not only for the ones
+    // that survived into the request -- an option that is engine-owned but has a real alternative beside it
+    // was lifted out of the model's copy and would otherwise never be counted or triggered.
+    // An owned option carries no declared threshold, because ownership means "no question at all"; when it
+    // does have to fall back -- it has a real alternative beside it -- it falls back on the first decline.
+    const thresholdOf = (k) => (Number.isFinite(actions[k]?.auto) ? actions[k].auto : own[k] === true ? 1 : Infinity);
+    const thresholded = real
+      .filter((k) => Number.isFinite(thresholdOf(k)))
+      .sort((a, b) => (thresholdOf(a) - thresholdOf(b)) || (a < b ? -1 : a > b ? 1 : 0));
+    if (!thresholded.length) {
+      for (const k of Object.keys(memory.takeoverDeclines)) if (k.startsWith(`${id}:`)) delete memory.takeoverDeclines[k];
+      continue;
+    }
+    if (!sent) continue;
+    for (const k of thresholded) {
+      const key = `${id}:${k}`;
+      if (answer.choice === "wait") memory.takeoverDeclines[key] = (memory.takeoverDeclines[key] ?? 0) + 1;
+      else delete memory.takeoverDeclines[key];
+    }
+    const choice = thresholded[0];
+    const key = `${id}:${choice}`;
+    if ((memory.takeoverDeclines[key] ?? 0) < thresholdOf(choice)) continue;
+    // An option the model actually picked is executed by the caller; the fallback must not run it twice.
+    if (answer.choice === choice) continue;
+    // An engine-owned option that was NOT the group's only real choice is one the model overruled by
+    // staying silent through a turn, but the tag also has to mean something once its own threshold is
+    // reached -- that is why the counter is armed for every owned option just above. Measured on the
+    // defensive floor: the tag is on the first tower, and with money for more towers the group is a real
+    // question, yet the engine still has to fall back on it after the model declines.
+    // Already doing exactly this: do not re-send the column or renew its lock, and clear the count so the
+    // fallback does not fire the moment the mission ends.
+    if (actions[choice].type === "mission" && memory.mission && memory.mission.mode === actions[choice].mode && sameTarget(memory.mission, actions[choice])) {
+      delete memory.takeoverDeclines[key];
+      continue;
+    }
+    // `owned` records that the engine, not a declared threshold, is what took it -- the log keeps them
+    // distinct so a match can be read back.
+    takeovers.push({ id, choice, action: actions[choice], reason: id === "scouting" ? "auto_explore" : `auto_${id}`, plain: true, owned: own[choice] === true });
+  }
+  return takeovers;
+}
+
 // A group whose only real option is one the ENGINE would have chosen anyway is not a question. Sending it
 // asks the model to ratify a decision its own preconditions already made, and the only answer it can
 // express is `wait` -- which, measured on three real matches, is what it did 52-61% of the time. Those
@@ -2064,19 +2150,19 @@ export function requestGroupsFrom(groups, memory = {}, tick = 0) {
 // nothing. The same three matches show the split is a property of the questions, not of the model: the
 // vehicles group refused 92-97% of its single-option questions while tactics refused 0-10%.
 //
-// So a producer marks such an option `engineOwned`, and `splitEngineOwned` lifts it out of the request: the
-// engine executes it and records why, and the model is not asked. The decision is deliberately opt-in per
-// option rather than inferred from "this group has only one option": affording something is not the same as
-// having decided to buy it, and only the producer knows which of its offers answers its own precondition.
-export function splitEngineOwned(requestGroups) {
-  const asked = {}, owned = [];
+// So a producer marks such an option `engineOwned`, and the group is dropped from the request: the engine
+// executes it and records why, and the model is not asked (that execution is `collectTakeovers` above; this
+// is only the "what is left to ask" half). The decision is deliberately opt-in per option rather than
+// inferred from "this group has only one option": affording something is not the same as having decided to
+// buy it, and only the producer knows which of its offers answers its own precondition.
+export function askableGroups(requestGroups) {
+  const asked = {};
   for (const [id, g] of Object.entries(requestGroups)) {
     const real = Object.keys(g.criteria ?? {}).filter((k) => k !== "wait");
     const only = real.length === 1 ? real[0] : undefined;
-    // Only lift the option when it is the group's single real choice. With a genuine alternative the
+    // Only drop the option when it is the group's single real choice. With a genuine alternative the
     // question is a real one and stays with the model.
     if (only && g.engineOwned?.[only] === true) {
-      owned.push({ id, choice: only });
       const criteria = { ...g.criteria };
       delete criteria[only];
       // With `wait` all that would remain there is nothing to ask, so the group is dropped entirely.
@@ -2084,6 +2170,20 @@ export function splitEngineOwned(requestGroups) {
       continue;
     }
     asked[id] = g;
+  }
+  return asked;
+}
+
+// Kept as the historical name and shape, because the boundary tests are written against it. Ownership
+// itself is decided in `collectTakeovers` now -- this is only the "which of these is still a question"
+// half, so the two cannot drift apart on the lifting rule.
+export function splitEngineOwned(requestGroups) {
+  const asked = askableGroups(requestGroups);
+  const owned = [];
+  for (const [id, g] of Object.entries(requestGroups)) {
+    const real = Object.keys(g.criteria ?? {}).filter((k) => k !== "wait");
+    const only = real.length === 1 ? real[0] : undefined;
+    if (only && g.engineOwned?.[only] === true) owned.push({ id, choice: only });
   }
   return { asked, owned };
 }
@@ -2280,24 +2380,35 @@ export async function attachJevPlayer(api, options = {}) {
       // Options the engine would have taken anyway are executed rather than asked about: the model cannot
       // change the answer, so the only thing such a question can elicit is a refusal. This runs before the
       // request so a group reduced to `wait` alone is dropped from it entirely.
-      const { asked, owned } = splitEngineOwned(requestGroups);
+      const asked = askableGroups(requestGroups);
+      // The marks are read from the FULL batch, not from the surviving groups: an option that was lifted
+      // because it had a real alternative beside it survives in `asked`, so deriving the marks from the
+      // split result would lose exactly the information the fallback needs.
+      const ownedMarks = engineOwnedMarks(groups);
       const acceptedBeforeOwned = status.accepted;
-      for (const { id, choice } of owned) {
-        const action = groups[id]?.actions?.[choice];
-        if (!action) continue;
-        const execution = executeCandidate(api, action, catalog);
-        // Counted against the decision budget like any other turn. Without this the engine could keep taking
-        // its own actions without the budget ever advancing, and a match with nothing left to ask would
-        // never reach `maxDecisions` -- the one guarantee that the loop stops.
-        status.decisions++;
-        if (execution.accepted) afterAccepted(action, execution);
-        rememberChoice(memory, id, choice, execution, tick, true);
-        emit({
-          kind: "action", tick, sourceTick: tick, question: id, choice, action, ...execution,
-          auto: true, engineOwned: true,
-          reason: execution.accepted ? "engine_decided" : execution.reason,
-        });
-      }
+      // One executor for every engine takeover, so ownership and the `auto:` fallback are logged and
+      // accounted for the same way. `collectTakeovers` decides; this runs them.
+      const runTakeovers = (list) => {
+        for (const { id, choice, action, reason, owned } of list) {
+          if (!action || !status.running) continue;
+          const gated = missionGate(api, memory, action);
+          const execution = gated ?? executeCandidate(api, action, catalog);
+          // Counted against the decision budget like any other turn. Without this the engine could keep
+          // taking its own actions without the budget ever advancing, and a match with nothing left to ask
+          // would never reach `maxDecisions` -- the one guarantee that the loop stops.
+          status.decisions++;
+          if (execution.accepted) afterAccepted(action, execution);
+          rememberChoice(memory, id, choice, execution, tick, true);
+          emit({
+            kind: "action", tick, sourceTick: tick, question: id, choice, action, ...execution,
+            auto: true, ...(owned ? { engineOwned: true } : {}),
+            reason: execution.accepted ? reason : execution.reason,
+          });
+        }
+      };
+      // The engine takes them now. With no answers only the owned options come back, and only where the
+      // group was dropped from the request -- a group sent to the model was asked about.
+      runTakeovers(collectTakeovers(groups, null, ownedMarks, memory, tick).filter((t) => !(t.id in asked)));
       // Nothing left to ask the model: the engine's own decisions were the whole turn.
       if (!Object.keys(asked).length) {
         if (status.accepted > acceptedBeforeOwned) memory.quietTurns = 0;
@@ -2383,26 +2494,14 @@ export async function attachJevPlayer(api, options = {}) {
           ...execution,
         });
       }
-      // Mechanical fallback for objective-critical options marked `auto: N` (explore when nothing is
-      // in sight, capture with an engineer, train the engineer for it): after the model declined that
-      // group N times in a row, the first such option is executed anyway and logged as automatic.
-      memory.autoDeclines ??= {};
-      for (const [id, g] of Object.entries(groups)) {
-        const answer = result.answers[id];
-        const autos = Object.entries(g.actions).filter(([k, a]) => k !== "wait" && a && Number.isFinite(a.auto)).sort((a, b) => a[1].auto - b[1].auto);
-        if (!answer || !autos.length) { if (!autos.length) delete memory.autoDeclines[id]; continue; }
-        const [choice, action] = autos[0];
-        memory.autoDeclines[id] = answer.choice === "wait" ? (memory.autoDeclines[id] ?? 0) + 1 : 0;
-        if (memory.autoDeclines[id] < action.auto) continue;
-        // Already doing exactly this: the fallback does not re-send the column (or renew its lock).
-        const running = memory.mission;
-        if (action.type === "mission" && running && running.mode === action.mode && sameTarget(running, action)) { memory.autoDeclines[id] = 0; continue; }
-        const execution = missionGate(api, memory, action) ?? executeCandidate(api, action, catalog);
-        memory.autoDeclines[id] = 0;
-        if (execution.accepted) afterAccepted(action, execution);
-        rememberChoice(memory, id, choice, execution, api.tick(), true);
-        emit({ kind: "action", tick: api.tick(), sourceTick: tick, question: id, choice, auto: true, action, ...execution, reason: execution.accepted ? (id === "scouting" ? "auto_explore" : `auto_${id}`) : execution.reason });
-      }
+      // The `auto: N` fallback for options that are objective-critical but genuinely choosable (capture
+      // with an engineer, destroy a stated objective): after the model declines the same option N times
+      // running, the engine takes it anyway and says so. `collectTakeovers` picks it; the one executor
+      // above runs and logs it, and the per-option counter lives in `memory.takeoverDeclines` instead of
+      // a per-group counter, so a group tagging two options no longer lets the smaller threshold speak
+      // for both. The mission case is skipped when the same mission is already running: the fallback must
+      // not re-send the column or renew its lock.
+      runTakeovers(collectTakeovers(groups, result.answers, ownedMarks, memory, tick));
       const allWait = Object.values(result.answers).every(a => a.choice === "wait");
       const quiet = allWait && status.accepted === acceptedBefore && !snap.state.baseUnderAttack;
       memory.quietTurns = quiet ? (memory.quietTurns ?? 0) + 1 : 0;
