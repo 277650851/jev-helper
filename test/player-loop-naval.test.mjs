@@ -101,24 +101,32 @@ test('the ledger counts own losses exactly and enemy kills only inside our visio
   assert.equal(l.enemyBuildingsDestroyed, 0); assert.equal(memory.ledger.seenEnemy.size, 0, 'stale fog sightings are forgotten silently');
 });
 
-test('after three declined scouting questions with nothing in sight the army explores on its own', async () => {
+test('with nothing in sight the army explores on its own, whether or not the model answers', async () => {
   const g = game();
   g.api.units = r => r === 'self' ? g.own : [];
   g.api.map.visible = (x) => x < 15;
   const requests = [];
   const player = await attachJevPlayer(g.api, {
     catalog: catalog(), intervalMs: 1e9, wakeIntervalMs: 0, disableMicro: true, maxDecisions: 50,
+    // A model that answers `wait` to everything: scouting must not depend on it.
     requestDecision: async body => { requests.push(body); return { answers: Object.fromEntries(Object.keys(body.groups).map(id => [id, { type: 'choice', choice: 'wait', confidence: 1 }])) }; },
   });
   try {
     await settle();
-    assert.ok(requests[0].groups.scouting, 'scouting is offered with nothing in sight');
-    g.advance(20); g.fire(); await settle(); g.advance(20); g.fire(); await settle();
-    const auto = player.status.events.filter(e => e.kind === 'action' && e.auto);
-    assert.equal(auto.length, 1, 'the third decline triggers one automatic exploration');
-    assert.equal(auto[0].reason, 'auto_explore'); assert.equal(auto[0].accepted, true); assert.equal(auto[0].action.mode, 'explore');
+    // Frontier scouting with nothing in sight is engine-owned: it is taken on the first turn rather than
+    // after three declined questions. Asking about two near-identical frontier points and then waiting for
+    // three refusals is what this test used to require, and it bought nothing -- one real match answered
+    // `wait` to 13 of its 15 scouting questions.
+    const auto = player.status.events.filter(e => e.kind === 'action' && e.auto && e.question === 'scouting');
+    assert.ok(auto.length >= 1, 'scouting is taken by the engine with nothing in sight');
+    assert.equal(auto[0].reason, 'engine_decided');
+    assert.equal(auto[0].engineOwned, true, 'and the log says it was the engine\'s own decision');
+    assert.equal(auto[0].accepted, true);
+    assert.equal(auto[0].action.mode, 'explore');
     assert.ok(g.calls.some(c => c[0] === 'attackMove' || c[0] === 'move'), 'the scout actually moves');
     assert.equal(player.memory.mission?.mode, 'explore');
+    // And the model is not asked about it, because there is nothing for it to add.
+    for (const body of requests) assert.ok(!body.groups.scouting, 'the scouting question is not sent');
   } finally { player.stop('manual'); }
 });
 

@@ -670,9 +670,10 @@ export function candidateGroups(api, catalog, snapshot, memory) {
           queue: infantryType,
           cost: r.cost,
           minCredits: r.cost,
-          // The scout is trained even if the model keeps answering wait: it is how the enemy base
-          // gets found at all.
-          ...(isScout ? { auto: 2 } : {}),
+          // The scout is trained even if the model keeps answering wait: it is how the enemy base gets
+          // found at all. When it is the only thing on offer the engine takes it outright; alongside
+          // combat roles it stays a question, because then what to train really is a choice.
+          ...(isScout ? { engineOwned: true } : {}),
         };
       if(!isScout)combatTraining.push(trainAction);
       foot(
@@ -1032,7 +1033,14 @@ export function candidateGroups(api, catalog, snapshot, memory) {
       memory.enemyBuildings.size
         ? "Wait only if a scout is already moving. The force is not ready to attack, so one expendable unit should keep revealing the map for objectives and enemy positions."
         : "Wait only if a scout is already moving or the enemy base has already been discovered. With idle troops and an unknown enemy base, choose one of the frontiers.";
-    for (const p of memory.points.slice(0, 2))
+    // Frontier scouting while the enemy base is unknown is not a judgement call, and the two frontiers are
+    // near-identical options that differ only in coordinates -- a multiple-choice model cannot rank them
+    // meaningfully (the local one answered `wait` to 13 of 15 scouting questions in one match). So the
+    // engine takes the first frontier and owns it: one option, no question. The option was already tagged
+    // automatic for exactly this state, which meant ask, be refused, ask, be refused, ask, be refused,
+    // then act. Asking twice about two equivalent points first is the part with no value.
+    const scoutUnowned = enemies.length === 0 && !memory.enemyBuildings.size;
+    for (const p of memory.points.slice(0, scoutUnowned ? 1 : 2))
       scoutChoice(
         `explore_${p.x}_${p.y}`,
         `${objectiveUnseen ? "Find the objective: " : ""}${mobilize ? "Advance " + tanks.length + " tanks" : "Scout with one expendable unit"} to known frontier (${p.x},${p.y}), ${p.fog} unexplored adjacent samples. Reveal the enemy base, attack any opposition.`,
@@ -1043,7 +1051,7 @@ export function candidateGroups(api, catalog, snapshot, memory) {
           ids: mobilize ? tanks.map((u) => u.id) : [scout.id],
           x: p.x,
           y: p.y,
-          auto: enemies.length === 0 && !memory.enemyBuildings.size ? 3 : undefined,
+          ...(scoutUnowned ? { engineOwned: true } : {}),
         },
       );
   }

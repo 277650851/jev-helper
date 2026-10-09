@@ -27,7 +27,9 @@ const groupsFor = (scenario) => {
   assert.equal(groups.defenses.actions.produce_GAPILL.engineOwned, true, 'the floor tower is the engine\'s decision');
   const request = requestGroupsFrom(groups, {}, snap.state.tick);
   const { asked, owned } = splitEngineOwned(request);
-  assert.deepEqual(owned, [{ id: 'defenses', choice: 'produce_GAPILL' }]);
+  // Checked by membership rather than by exact list: scouting is engine-owned in the same state (no enemy
+  // seen means the frontier pick is not a judgement call either), and this test is about the floor.
+  assert.deepEqual(owned.filter((o) => o.id === 'defenses'), [{ id: 'defenses', choice: 'produce_GAPILL' }]);
   assert.ok(!('defenses' in asked), 'and it is not asked: the model has nothing to add');
 }
 
@@ -41,7 +43,7 @@ const groupsFor = (scenario) => {
   assert.equal(groups.defenses.actions[options[0]].engineOwned, true, 'the first tower is still engine-owned');
   const request = requestGroupsFrom(groups, {}, snap.state.tick);
   const { asked, owned } = splitEngineOwned(request);
-  assert.deepEqual(owned, [], 'nothing is lifted while a real choice remains');
+  assert.deepEqual(owned.filter((o) => o.id === 'defenses'), [], 'the floor is not lifted while a real choice remains');
   assert.ok('defenses' in asked, 'so the defences question is still asked');
 }
 
