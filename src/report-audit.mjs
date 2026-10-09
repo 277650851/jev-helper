@@ -90,6 +90,58 @@ export function auditReport(entries = [], meta = {}) {
   };
 }
 
+/**
+ * Who decided what, over a whole match. The takeover work exists so the engine can stop asking questions
+ * whose answer its own preconditions already fixed; that only means anything if a report can say how often
+ * it happened and how often the outcome was refused. This is the tally the human verification needs.
+ *
+ * Entries are the `kind: "action"` records. Both shapes are read, because a report may predate the
+ * attribution fix: `reason` names the decider (`engine_decided` or `auto_*`), and `rejectedBecause` carries
+ * the refusal -- but an older report put the refusal in `reason` itself, where it overwrote the attribution.
+ * So an entry counts as a takeover when it is `auto: true` and its reason is one of the takeover names.
+ */
+const TAKEOVER_REASON = /^engine_decided$|^auto_/;
+export function takeoversOf(entries = []) {
+  const actions = entries.filter((e) => e?.kind === 'action');
+  // `auto: true` is the durable marker: the engine issued it without the model choosing. The reason is what
+  // names the rule, and in the OLD reports a refusal overwrote it -- `jev-report-20261010-012710` carries
+  // three `queue_changed` entries that were takeovers refused on a busy queue, and filtering by reason name
+  // here would drop exactly the entries this tally exists to surface.
+  const takeovers = actions.filter((e) => e.auto === true);
+  const byReason = {};
+  const byGroup = {};
+  const refusals = {};
+  let refused = 0;
+  let unattributed = 0;
+  for (const t of takeovers) {
+    const named = TAKEOVER_REASON.test(String(t.reason ?? ''));
+    const key = named ? t.reason : 'unattributed';
+    byReason[key] = (byReason[key] ?? 0) + 1;
+    if (!named) unattributed++;
+    const g = byGroup[t.question] ??= { taken: 0, accepted: 0, refused: 0 };
+    g.taken++;
+    if (t.accepted === false) {
+      g.refused++;
+      refused++;
+      const why = t.rejectedBecause ?? (named ? 'unnamed' : String(t.reason ?? 'unknown'));
+      refusals[why] = (refusals[why] ?? 0) + 1;
+    } else g.accepted++;
+  }
+  const modelChosen = actions.filter((e) => e.auto !== true && e.accepted === true);
+  return {
+    actions: actions.length,
+    taken: takeovers.length,
+    accepted: takeovers.length - refused,
+    refused,
+    unattributed,
+    byReason,
+    byGroup,
+    refusals,
+    // Orders the model chose that were accepted, for the engine-vs-model ratio.
+    modelChosen: modelChosen.length,
+  };
+}
+
 /** The `match` block of a report, reduced to the fields worth attributing an audit to. */
 export const reportMeta = (match = {}) => ({
   build: match.meta?.build ?? null,

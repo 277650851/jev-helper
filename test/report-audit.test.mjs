@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { auditReport, classifyQuestion, reportMeta, topChoice } from '../src/report-audit.mjs';
+import { auditReport, classifyQuestion, reportMeta, topChoice, takeoversOf } from '../src/report-audit.mjs';
 
 // The audit turns a saved battle report into the one number the rewrite rests on: how often the engine
 // asked the model a question whose answer its own preconditions had already fixed. Those questions are
@@ -110,5 +110,36 @@ const q = (options, choice, extra = {}) => ({ optionCount: options.length, optio
   });
   assert.equal(reportMeta({ meta: { build: 'abc-dirty' } }).build, 'abc-dirty');
   assert.equal(reportMeta({ reason: 'victory' }).outcome, 'victory', 'a match with no outcome yet reports its end reason');
+}
+// Who decided, over a whole match. The takeover work exists so the engine stops asking questions whose
+// answer its preconditions already fixed; this tally is how a human checks that it happened and whether the
+// orders it took are landing. Both report shapes are read, because a report may predate the attribution fix.
+{
+  const entries = [
+    // The fixed shape: reason names the decider, the refusal travels beside it.
+    { kind: 'action', auto: true, reason: 'engine_decided', engineOwned: true, question: 'defenses', choice: 'produce_GAPILL', accepted: true },
+    { kind: 'action', auto: true, reason: 'engine_decided', engineOwned: true, question: 'construction', choice: 'produce_GAPOWR', accepted: false, rejectedBecause: 'queue_changed' },
+    { kind: 'action', auto: true, reason: 'auto_explore', question: 'scouting', choice: 'explore_1_1', accepted: true },
+    { kind: 'action', auto: true, reason: 'auto_explore', question: 'scouting', choice: 'explore_2_2', accepted: false, rejectedBecause: 'unit_gone' },
+    // The OLD shape: a refused takeover was logged as its own refusal, so the rule is unrecoverable.
+    { kind: 'action', auto: true, reason: 'queue_changed', question: 'vehicles', choice: 'produce_TANK', accepted: false },
+    // A model choice, and a decision record that must not be counted as an action.
+    { kind: 'action', auto: false, reason: undefined, question: 'tactics', choice: 'assault_9', accepted: true },
+    { kind: 'decision', tick: 10, groups: {} },
+  ];
+  const t = takeoversOf(entries);
+  assert.equal(t.actions, 6, 'decision records are not actions');
+  assert.equal(t.taken, 5, 'every uto: true action is a takeover');
+  assert.equal(t.accepted, 2, 'the two that landed');
+  assert.equal(t.refused, 3, 'the three that did not');
+  assert.equal(t.modelChosen, 1, 'and one order the model chose');
+  assert.equal(t.unattributed, 1, 'the old-shape entry is counted as unattributable rather than silently folded in');
+  assert.equal(t.byReason.engine_decided, 2);
+  assert.equal(t.byReason.auto_explore, 2);
+  assert.equal(t.byReason.unattributed, 1);
+  // The refusal tally is what says whether the engine is offering things that are executable right now.
+  assert.deepEqual(t.refusals, { queue_changed: 2, unit_gone: 1 });
+  assert.deepEqual(t.byGroup.scouting, { taken: 2, accepted: 1, refused: 1 });
+  assert.deepEqual(t.byGroup.defenses, { taken: 1, accepted: 1, refused: 0 });
 }
 console.log('Report audit: forced-question share, refusal rate, per-group split, all-wait decisions and attribution');
