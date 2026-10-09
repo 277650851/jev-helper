@@ -458,8 +458,13 @@ export function investmentGroups(api, catalog, snapshot, memory, groups) {
       // answer to a tank push: an anti-air tower holds a nonzero damage figure against tanks and used to
       // outrank or lose to a pillbox by an average that ignored which of them can actually shoot.
       .map(i => ({ ...i, queue: api.QueueType.Armory, value: counterValue(catalog[i.name], defenseRanking, catalog, api) }));
-    coverage = defenseUnits.filter(u => defenseTargets.length
-      ? defenseTargets.some(e => canFireAt(api, catalog, u, e))
+    // "Are we covered?" has to be measured against the same enemy the tower choice is ranked against. The
+    // peacetime branch used `counterValue(tower, []) > 0`, which is the GENERIC score -- positive for any
+    // armed tower -- so three pillboxes read as COVERED while three Kirovs flew overhead, and the logic that
+    // tops up the defences concluded there was nothing to top up. Counting against the visible enemy makes a
+    // tower that cannot reach it not count, which is the truth the question needs to carry.
+    coverage = defenseUnits.filter(u => defenseRanking.length
+      ? defenseRanking.some(e => canFireAt(api, catalog, u, e))
       : counterValue(catalog[u.name], [], catalog, api) > 0).length;
     if (coverage < targetDefenses && (defenseUnits.length < 8 || strategy.underPressure && coverage < 2)) for (const item of options.sort((a, b) => b.value / Math.sqrt(catalog[b.name].cost) - a.value / Math.sqrt(catalog[a.name].cost))) {
       // Cap the whole question, not just this layer's share: the special layer's wall and strongpoint

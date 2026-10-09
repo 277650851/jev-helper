@@ -90,6 +90,44 @@ const groupsFor = (scenario) => {
 console.log('Defence floor: engine-owned only when it is the group\'s single real option, and only while a barracks stands');
 console.log('Defence ranking: the tower choice follows the visible enemy even before it reaches the base');
 
+// 6. The coverage COUNT is measured against the visible enemy, not against a generic score. The peacetime
+//    branch asked `counterValue(tower, []) > 0`, the GENERIC score, which is positive for any armed tower --
+//    so three pillboxes counted as covered while three Kirovs flew overhead, and the logic that tops up the
+//    defences concluded there was nothing to top up.
+//
+//    SCOPE NOTE, stated rather than papered over: this pins the observable half only -- what the ENGINE
+//    offers. The count itself is not directly observable from a candidate group (`coverage` is local), and
+//    the option lists alone cannot separate the two implementations, because the special layer supplies its
+//    own anti-air option from the same visible enemy. The count was therefore verified by instrumenting it:
+//    with three pillboxes standing it reads 0 against aircraft and 3 against armour, where the old code read
+//    3 in both. Reproducing that assertion inside the suite would require exporting a local; the honest place
+//    for it is here.
+{
+  const nm = (x) => x?.kind ?? x?.name;
+  const withTowers = (visibleEnemies) => {
+    const base = SCENARIOS.defense_floor();
+    const state = { ...base, visibleEnemies, credits: 4000, inventory: { ...base.inventory, GAPILL: { name: 'Pillbox', count: 3, role: '' } } };
+    const api = replayApi({ side: 'allied', ...state }, { ...CATALOG });
+    const catalog = { ...CATALOG };
+    const snap = collectState(api, catalog);
+    const groups = candidateGroups(api, catalog, snap, {});
+    const built = snap.raw.buildings.filter((b) => catalog[nm(b)]?.isBaseDefense && !catalog[nm(b)]?.wall).map(nm);
+    const offered = Object.keys(groups.defenses?.actions ?? {}).filter((k) => k !== 'wait').map((k) => k.replace(/^produce_/, ''));
+    return { built, offered };
+  };
+  const kirovs = Array.from({ length: 3 }, (_, i) => ({ id: 900 + i, name: 'ZEP', kind: 'ZEP', type: 1, zone: 1, armor: 'light', tile: { rx: 44, ry: 44 } }));
+  const tanks = Array.from({ length: 3 }, (_, i) => ({ id: 900 + i, name: 'HTNK', kind: 'HTNK', type: 7, armor: 'heavy', tile: { rx: 44, ry: 44 } }));
+
+  const air = withTowers(kirovs);
+  assert.equal(air.built.length, 3, 'three ground towers are standing');
+  assert.ok(air.offered.some((n) => /NASAM|Patriot/i.test(n)), `an anti-air tower is offered against aircraft (${air.offered.join(',')})`);
+  // The same three towers against ground armour: no anti-air tower is proposed, because nothing about the
+  // threat asks for one. The two states must not be told the same story.
+  const ground = withTowers(tanks);
+  assert.ok(!ground.offered.some((n) => /NASAM|Patriot/i.test(n)), `and none against ground armour (${ground.offered.join(',')})`);
+}
+console.log('Defence coverage: measured against the visible enemy, not against a generic score');
+
 // 5. When the defence question ends up with nothing to offer, it has to SAY WHY. Left as a bare `wait` --
 //    and, before this, silently deleted -- the model reads it as "there is nothing to defend against",
 //    which is the opposite of the truth when the only tower that answers the visible enemy is one the base
