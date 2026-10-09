@@ -80,6 +80,7 @@
 | `8c277bd` | §0.32 文档：战报来源分支的澄清 |
 | `f1f8055` | **炮塔车乘员按「能否交战」排序**（最后一处姿态盲的适应决策） |
 | `c0a1ecd` | **局部战力估算只计能打到对方的单位**（被压制判定此前被撑高） |
+| `de12634` | **升级箱拾取按 API 文档重写**：读 crates()、用 move 拾、箱走即释放 |
 **核实后判定不可达、因此不改**：S5（矿车目标两套默认值）、S14（矿车选项被同轮清理删掉）——
 两条的详细推翻过程写在各节里，留着是为了避免下一个人按「高严重度缺陷」去改。
 
@@ -1781,3 +1782,36 @@ fetch 进任何提交都会让它成立）核对每份战报的 `match.meta.buil
 4. 任务生命周期：`rememberSpecial` 记入、`maintainSpecial` 负责超时与重发，
    否则"已在去往途中"的标记永不释放，功能会卡死；
 5. 每条断言都用**变异检查**验证到能失败为止。
+
+---
+
+## 0.38 升级箱拾取：按 API 文档从零实现
+
+不参考任何既有实现，只按本仓库的 API 文档写。
+
+### 文档契约（每条都可在仓库内核对）
+
+| 来源 | 契约 |
+|---|---|
+| `werhd-player-api.d.ts:339` | `crates(): Array<{ id; name; tile: PlayerConsoleTile; water: boolean }>` |
+| `docs/player-console-api.md:81` | `werhd.crates()` —— **仅本地可见** |
+| `docs/player-console-api.md:178` | `werhd.gather(ids, x, y)` —— **「采矿到明确地格；矿区搜索与选择由用户脚本完成」** |
+| `werhd-player-api.d.ts:352` | `move(unitIds, x, y)` |
+| `docs/game-api-requests.md:237` | `unit.created` 的 `source` 可为 **`'crate'`** |
+
+**动词的依据**：`gather` 被文档限定为采矿；箱子是"单位站上去即拾取"，
+所以正确做法是 `move` 到箱格。`source: 'crate'` 说明箱子里确实可能是基地车——
+失去基地后那是唯一翻盘途径，这正是它值得单独处理的原因。
+
+### 四处落地
+
+1. **选项构造**读 `api.crates()`（独立于 `units()` 的列表），按**箱子 id** 避免重复派单，**一箱一单位**；
+2. **执行器**用 `move` 移到箱格，且**执行前重读** `crates()`——箱子已被拾走则拒 `crate_gone`，不发空指令；
+3. **`rememberSpecial`** 记入任务与 order（busy 集合靠它）——否则"有人在去"的标记**永不释放**，
+   被它跳过的其它箱子也再不会出现；
+4. **`maintainSpecial`** 负责：箱子消失即完成、单位阵亡即结束、**超时放弃**、静止单位按 `CRATE_RESEND` 重发。
+
+### 验证
+
+新增 `test/player-crate.test.mjs` 覆盖四条，**两个变异都转红**：
+把 `move` 换成文档不允许的 `gather`；以及去掉任务记性（箱子永不释放）。
