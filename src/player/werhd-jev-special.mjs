@@ -1,4 +1,4 @@
-import { isAirSupport, effectiveness, canAnswerVisible } from './werhd-jev-strategy.mjs';
+import { isAirSupport, effectiveness, counterValue, canAnswerVisible } from './werhd-jev-strategy.mjs';
 import { isCapturable } from './werhd-jev-catalog.mjs';
 export const ATTACK_STUCK_TICKS = 2700, CAPTURE_RESENDS = 3, SIEGE_RANGE = 8, BASE_GARRISON_SPARE = 8;
 // Leaving a building once its job is done: no armed enemy within RELEASE_RADIUS for this long.
@@ -180,9 +180,19 @@ export function specialGroups(api, catalog, snapshot, memory, groups) {
       const fits = (u) => idle(u, memory, tick) && u.id !== memory.scoutId && distance(u.tile, vehicle.tile) < 10
         && (catalog[u.name]?.size ?? 1) <= r.sizeLimit && (catalog[u.name]?.size ?? 1) <= vehicle.transport.capacity;
       const candidates = infantry.filter(fits);
-      const passenger = r.gunner
-        ? [...candidates].sort((a, b) => effectiveness(catalog[b.name], enemies, catalog, api) - effectiveness(catalog[a.name], enemies, catalog, api))[0]
-        : candidates[0];
+      // The gunner's weapon IS the passenger's weapon, so the passenger to load is the one that can engage
+      // what is actually visible. `effectiveness` does not check engagement at all -- it averages raw damage
+      // over targets -- so a passenger that cannot hurt a single visible enemy could still rank first on
+      // damage alone. `counterValue` applies `canEngageTarget` and the blast term, and it is what every other
+      // adaptation decision uses, so this was the last ranking that disagreed with the rest.
+      //
+      // Only the ranking changes: whether to crew at all is left as the option builder decided it. An armed
+      // IFV's weapon mode is worth having for what comes next, not only for what happens to be visible now,
+      // and `player-special.test.mjs` pins that `load` is offered whenever the state makes it applicable.
+      const ranked = r.gunner
+        ? [...candidates].sort((a, b) => counterValue(catalog[b.name], enemies, catalog, api) - counterValue(catalog[a.name], enemies, catalog, api))
+        : candidates;
+      const passenger = ranked[0];
       if (passenger)
         transport(`load_${vehicle.id}`, shore && !memory.enemyBuildings?.size && !r.gunner
           ? `Load infantry #${passenger.id} into ${r.label} #${vehicle.id} to cross the water and search the far shore (${shore.x},${shore.y}); the enemy base has never been found.`
