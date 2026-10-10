@@ -1848,6 +1848,8 @@ fetch 进任何提交都会让它成立）核对每份战报的 `match.meta.buil
 
 # 交接摘要（给任何后续会话）
 
+> 独立版本见 [jev-autopilot-handoff.md](./jev-autopilot-handoff.md)——**新会话读那一份即可**，本节保留在评审语境中的表述。
+
 ## 一眼可见的状态
 
 | 项 | 值 |
