@@ -2222,3 +2222,98 @@ fetch 进任何提交都会让它成立）核对每份战报的 `match.meta.buil
   （`100135`/`110632` 各有一次选中）。按 §0.4“不要接管模型有明确意见的题”，留在原位。
 - **`strategy.mjs:804` 的 `recover_*`**：生存重建，本来就带 `auto: 2`，不属 §0.42 范围
   （三份战报 5 题 5 拒，但没有卡死：阈值 2 会结束它）。
+
+---
+
+## 0.46 首份出自 §0.45 的战报（`jev-report-20261010-115949`，构建 `1998512`）：§0.45 通过，另一处缺陷暴露
+
+构建归属：`1998512` 就是 §0.45 的提交（`git merge-base --is-ancestor 1998512 HEAD` 为真；
+`-dirty` 后缀来自两个**本次之前就存在**的工作区条目）。这是 §0.45 第一次进入真实对局。
+
+**结果：战败，2440s，89 次决策，组-问题 163 个，全组 wait 的决策 30/89，传输故障 0。**
+
+### §0.45 被验证（机制级，按 §0.43 只声明机制成立）
+
+| tick | 事件 | 证据 |
+|---|---|---|
+| 11923 | `produce_GAPOWR` **engine_decided**（`engineOwned`） | 该拍 `investment = {category:"",name:"GAPOWR"}`、power 135/200（余量 65，GATECH 要 100）→ 正是 **POWER FOR TECH** 分支；`105509` 里同一状态被问了 **11 次** |
+| 17943 | `produce_GATECH` **engine_decided**（`engineOwned`） | `investment = {category:"",name:"GATECH"}` → **TECH ADVANCE** 计划步骤 |
+| 全match | `construction` 组**只有 1 个题** | tick 5879 的 `produce_GAAIRC`（special 层提案，模型选中，置信 0.0149） |
+
+即：两处以前会被问的计划步骤（其中一处曾连问 11 次）现在由引擎直接执行，
+`construction` 组从"最大提问来源之一"变成全程 1 题。**这不构成"整体指标改善"的证据**——
+唯一选项被拒率 48%（87 题 42 拒）、中位置信 0.062，正落在 §0.43/§0.44 记录的自然方差带（18–62%）里。
+
+### §7 清单逐项
+
+| 项 | 结果 |
+|---|---|
+| `engineOwned` / `rejectedBecause` 出现在战报 | ✅ 引擎接管 181 条、带 `rejectedBecause` 48 条 |
+| `skippedReasons` 是真实原因 | ✅ `deploy_refused` 46、`production_changed` 2、`no_compatible_defender` 2 |
+| `deploy_base` 不再出现在 `decision` 里 | ✅ 0 次 |
+| `defend_base` / `deploy_combat` / `undeploy_mobile` | ⚠️ **照问，但这是预期**：`defend_base` 与 6 个 `assault_*` 并列、`deploy_combat` 与 `undeploy_mobile` 成对出现 —— 正是 §0.41 记录的"多选项照问"。**§7 第 3 条的措辞过绝对**（已改） |
+| 矿车受攻击 / 箱子 | ✅ `flee_miner_*` 2 条、`crate_*` 3 条 |
+| 传输故障不再终结对局 | ✅ failures 0（本局没触发 degraded） |
+| §0.45 新增：不再有 `TECH ADVANCE`/`POWER FOR TECH` 唯一选项题 | ✅ 见上表 |
+
+### 本局暴露的另一处缺陷：箱子送来的基地车（**不是 §0.45 引起的**）
+
+**时间线（全部来自本份战报）**：
+
+| tick | 事件 |
+|---|---|
+| 21658 | `crate_2170` 被选中受理（模型选的，latency 6839ms）；另有 `crate_2010` / `crate_2385` 由引擎接管 |
+| **22825** | `state.inventory` **第一次**出现 `SMCV: 1`；**同一拍**出现第一条 `construction:deploy_base` 的 `rejectedBecause: "deploy_refused"` |
+| 22825 → 36756 | `deploy_base` **被拒 46 次**（同一辆车的 id），其中 44 次是在**基地车厂还立着**的时候（`GACNST` 到 tick 35657 都在） |
+| 35937 / 36258 | 最后两个决策：`GACNST` 已不存在（车厂被打掉）——**而恢复计划没有启动**：`investment` 仍是 `vehicles/FV`，没有 `recover_*`、没有 `URGENT ECONOMIC RECOVERY` |
+
+**两个后果，都是一个错误谓词造成的**（"任何 `deploysInto` 指向车厂的我方单位 = 我有一辆能用的基地车"）：
+
+1. `player.mjs:533` 拿它当"基地等着开工"，于是 `deploy_base` 带 `engineOwned`、
+   每回合重发一次已被拒绝的命令 —— **46 条占 89 次决策的一半**，另加 46 条 `skippedReasons`。
+   `docs/player-console-api.md:199-210` 列的拒绝原因（不是己方 / 不能部署 / 没有格子 / 当前位置不能展开）
+   没有一条会因重复下令而改变。
+2. `strategy.mjs:797`（当时的 782 行）用同一谓词判断"我有没有办法重建基地"：
+   `if (!hasYard && builder && !miner) return;` —— 车厂被打掉后它认为**这辆永远展不开的车**
+   就是重建手段，于是**直接返回、什么都不计划**。这才是本局最后阶段真正的问题：
+   不是"救不回来"，而是**引擎以为救得回来**。
+
+**为什么不是 §0.45 引起的**：`git show 1998512 --stat` 只动了 `werhd-jev-strategy.mjs` 的两处 construction 计划步骤、
+测试与文档；`deploy_base` 的生产者（`player.mjs:533`）与执行器（`player.mjs:1305`）都没动，
+接管走的是既有的 `askableGroups` / `collectTakeovers` 路径，而 `deploy_base` 早就是 `engineOwned: true`。
+§0.45 的两个标记都是 `produce` 选项，不参与 `deploy`。而且 SMCV 出现的那一拍**正是第一次拒绝的那一拍**。
+
+### 修复：在消费者端写死"游戏已拒绝展开的车"
+
+新 `usableBuilders(units, catalog, memory)`（`strategy.mjs`）＝ 我方"能变成车厂"的单位 **减去**
+`memory.deployRefused` 里的 id；后者在 `rememberChoice` 里记录（**唯一的执行汇聚点**，
+模型自选与引擎接管都会经过），只记 `deploy_refused`。
+两个生产者都用它：`deploy_base` 选项与恢复检查。
+
+**为什么不用 `canDeploy` 当门**：文档只有一句
+（`player-console-api.md:116` "能力判断，当前地形仍可能阻止展开"），而本份战报**没有任何字段**能证明
+那辆 SMCV 的 `canDeploy` 是 false —— 拒绝原因有四条，无从区分。按 §8"先验证前提再动手"，
+不拿一个含义未验证的字段当闸门；改用**已经观察到的事实**（游戏拒绝过）。
+
+**为什么保留"没有车厂时仍然尝试"**：`mcv = usableBuilders(...)[0] ?? (有车厂 ? 不提供 : 任意一辆)`。
+开局阶段没有任何拒绝记录，行为与以前逐字节一致；车厂立着时不再重发已被拒绝的命令；
+车厂没了（真正的紧急状态）时仍然去试 —— 这一条保证修复**不可能**让开局回归。
+
+### 变异验证（每条新断言都能变红）
+
+| 变异 | 结果 | 抓它的断言 |
+|---|---|---|
+| `usableBuilders` 不查拒绝集合 | **红** | `and the order the game already rejected is not re-issued` |
+| 恢复检查退回"任意一辆打包单位" | **红** | `but a refused one is not, so the base gets rebuilt…` |
+| `rememberChoice` 什么都不记 | **红** | `the refused vehicle is written off` |
+| 任何拒绝都记（不只 deploy） | **红** | `only a deploy refusal is evidence about deployability` |
+| `deploy_base` 生产者不查拒绝集合 | **红** | `and the order the game already rejected is not re-issued` |
+| 去掉"没有车厂仍尝试"的兜底 | **红** | `with no yard a refused vehicle is still worth one more try` |
+
+### 这次没做的
+
+- **把展不开的基地车移到合法地格**：如果拒绝原因是"当前位置不能展开"，正解是用
+  `chooseBuildingSite` 找一个能放车厂的地格再把车开过去 —— 本次没做，因为**拒绝原因仍未确定**
+  （见上）。若下一局仍出现同样的拒绝，这是下一步。
+- **写死没有冷却**：`memory.deployRefused` 一旦记下就不再尝试（同一辆车）。若真实数据出现
+  "开到别处就能展开"，就要改成按位置记录（拒绝时的地格 + 移动后重试）。

@@ -122,6 +122,17 @@ own=own.filter(u=>u.name!=='YARD');own.push(u(40,'REPAIR',2));offered[3].push('M
 snap=collectState(api,catalog);groups=candidateGroups(api,catalog,snap,memory);
 assert.ok(groups.vehicles.actions.recover_MCV);
 assert.ok(!Object.values(groups.salvage.actions).some(a=>a.objectId===40),'preserve the prerequisite needed to produce the MCV');
+// A packed vehicle that the game has refused to unpack is not "the way back": counting it as one made the
+// recovery path return early and plan nothing at all, which is what happened once the yard was destroyed in
+// jev-report-20261010-115949 (~tick 35900, the same SMCV whose deploy had been refused 46 times).
+catalog.SMCV={deploysInto:'YARD',cost:3000,label:'Soviet construction vehicle'};
+own.push(u(41,'SMCV',7));
+snap=collectState(api,catalog);groups=candidateGroups(api,catalog,snap,{});
+assert.ok(!groups.vehicles.actions.recover_MCV,'a usable packed vehicle already is the way back, so no rebuild is planned');
+const refused={deployRefused:new Set([41])};
+snap=collectState(api,catalog);groups=candidateGroups(api,catalog,snap,refused);
+assert.ok(groups.vehicles.actions.recover_MCV,'but a refused one is not, so the base gets rebuilt instead of being written off');
+own=own.filter(u=>u.id!==41);
 console.log('Pressure strategy: early counter-fire, directional placement, shared budget, airfield/lab progression and query-only planning passed');
 
 // Three turrets go around the base, not onto one side: three even sectors make a triangle. Requested

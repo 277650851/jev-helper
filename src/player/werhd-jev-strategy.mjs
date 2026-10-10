@@ -26,6 +26,24 @@ export const DEFENSE_OPTION_CAP = 5;
 // figure the crate takeover uses (`werhd-jev-special.mjs`); the recovery rebuild uses two.
 export const PLAN_STEP_AUTO = 3;
 
+// A packed construction vehicle is the base itself: a vehicle that deploys into a yard is either the base
+// that is about to start or the only way back after the yard is destroyed. Two producers read that fact --
+// the `deploy_base` option and the recovery check below -- and both used to accept ANY such vehicle, which
+// is wrong the moment one of them cannot actually be unpacked.
+//
+// jev-report-20261010-115949: a crate handed over an SMCV at tick 22825. `api.deploy` refused it on that
+// turn and on all 46 turns that followed, and the two consequences compounded -- the engine re-issued an
+// order it had already seen rejected (46 of the match's 89 decisions), and when the real yard was destroyed
+// at tick ~35900 the recovery path counted that same vehicle as a builder that could restore the base, so it
+// planned nothing at all. The game's refusal causes are listed in `docs/player-console-api.md:199-210` (not
+// ours / cannot deploy / no tile / cannot deploy here) and none of them is something a repeat order changes,
+// so a vehicle the game has refused to unpack is not a builder any more. Recorded where the refusal is seen,
+// in `rememberChoice`, so every execution path feeds the same set.
+export function usableBuilders(units, catalog, memory) {
+  const refused = memory?.deployRefused;
+  return units.filter((u) => catalog[catalog[u.name]?.deploysInto]?.yard && !refused?.has(u.id));
+}
+
 // Planning and the model share this eligibility set, even before starting cash arrives.
 export function vehicleOptions(api, catalog, state) {
   const incomingMiners = state.queues.reduce((n,q)=>n+q.items.reduce((s,i)=>s+
@@ -779,7 +797,7 @@ function recoveryGroups(api, catalog, snapshot, groups, memory) {
   if (refineryCount > 0 && memory) memory.seenRefinery = true;
   const lostRefinery = !!memory?.seenRefinery;
   if (hasYard && refineryCount && miners || !buildings.length) return;
-  const builder = units.find(u => catalog[catalog[u.name]?.deploysInto]?.yard);
+  const builder = usableBuilders(units, catalog, memory)[0];
   const miner = refineryCount && !miners && api.production.available(api.QueueType.Vehicles).find(i => catalog[i.name]?.harvester);
   if (!hasYard && builder && !miner) return;
   // Nothing to rebuild: no miner missed and no refinery lost. A missing yard (or a deployable

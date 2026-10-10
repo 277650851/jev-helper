@@ -1,6 +1,6 @@
 import { specialGroups, executeSpecial, rememberSpecial, maintainSpecial, refreshInfrastructure, SIEGE_RANGE } from "./werhd-jev-special.mjs";
 import { buildBrief, formSquads, squadUnits, sameIntent } from "./werhd-jev-commander.mjs";
-import { assessStrategy, investmentGroups, chooseBuildingSite, chooseRallySite, weaponEffectiveness, counterValue, canUnitHurt, infantryProfile, scoutScore, currentWeapon as combatWeapon, activeWeapons, canFireAt, baseThreats, ATTACK_FORCE_SIZE, ATTACK_AA_ESCORTS, vehicleOptions } from "./werhd-jev-strategy.mjs";
+import { assessStrategy, investmentGroups, chooseBuildingSite, chooseRallySite, weaponEffectiveness, counterValue, canUnitHurt, infantryProfile, scoutScore, currentWeapon as combatWeapon, activeWeapons, canFireAt, baseThreats, usableBuilders, ATTACK_FORCE_SIZE, ATTACK_AA_ESCORTS, vehicleOptions } from "./werhd-jev-strategy.mjs";
 import { updateCamera } from "./werhd-jev-camera.mjs";
 import { refreshCatalog, isDecoration } from "./werhd-jev-catalog.mjs";
 import { trackObjective, isGuardedByObjective } from "./werhd-jev-objective.mjs";
@@ -165,11 +165,19 @@ export const MAX_STALE_TICKS = 3600;
 // Recent answers per decision group, with the loss / kill totals at the time, so a repeated choice
 // that produced nothing can be shown back to the model and demoted.
 export const RECENT_LIMIT = 8, STALE_REPEATS = 4, STALE_REMOVE = 6;
-export function rememberChoice(memory, group, choice, execution, tick, auto = false) {
+export function rememberChoice(memory, group, choice, execution, tick, auto = false, action = undefined) {
   const recent = (memory.recent ??= {})[group] ??= [];
   const l = memory.ledger;
   recent.push({ choice, tick, auto, accepted: execution?.accepted === true, reason: execution?.reason ?? "", lost: (l?.ownUnitsLost ?? 0) + (l?.ownBuildingsLost ?? 0), killed: (l?.enemyUnitsDestroyed ?? 0) + (l?.enemyBuildingsDestroyed ?? 0) });
   if (recent.length > RECENT_LIMIT) recent.splice(0, recent.length - RECENT_LIMIT);
+  // A vehicle the game has refused to unpack is not a builder, and the strategy layer reads that from here
+  // (`usableBuilders`) because both producers of "we have a construction vehicle" -- the `deploy_base`
+  // option and the recovery check -- have to agree on it. This is the one point every execution passes
+  // through, so the model's own pick and the engine's takeovers are recorded the same way. Only a deploy
+  // refusal counts: `queue_changed` and `production_changed` are states that clear by themselves, and
+  // suppressing those would trade one wasted turn for a missed order.
+  if (execution?.reason === "deploy_refused" && action?.type === "deploy")
+    for (const id of action.ids ?? []) (memory.deployRefused ??= new Set()).add(id);
 }
 export function historyHints(groups, memory, state, assessment) {
   const l = memory.ledger, lostNow = (l?.ownUnitsLost ?? 0) + (l?.ownBuildingsLost ?? 0), killedNow = (l?.enemyUnitsDestroyed ?? 0) + (l?.enemyBuildingsDestroyed ?? 0);
@@ -530,7 +538,14 @@ export function candidateGroups(api, catalog, snapshot, memory) {
     "construction",
     `Choose the needed base investment. Establish power, refinery, barracks, vehicle factory. Economy targets follow the actual situation, not a fixed count: currently ${state.economy.targetRefineries} refiner${state.economy.targetRefineries === 1 ? "y" : "ies"} and ${state.economy.targetMiners} miner${state.economy.targetMiners === 1 ? "" : "s"} (${state.economy.reason}). Do not add refineries or miners beyond that while credits accumulate unused. Restore lost essential infrastructure immediately.` + " Keep at least 50 spare power. Unlock technology and counter-weapons before duplicating the vehicle factory; a second factory is useful only with surplus income. Only proposed buildings currently contribute to these needs.",
   );
-  const mcv = units.find((u) => catalog[catalog[u.name]?.deploysInto]?.yard);
+  // While a construction yard stands, a vehicle the game has already refused to unpack is simply not
+  // offered: the option's own claim ("so the base can start") is false, and there is no urgency left to
+  // justify re-issuing an order the game has rejected. With no yard at all the base is exactly the
+  // emergency the option exists for, so a refused vehicle is still offered and the engine keeps trying to
+  // come back, as it always has -- the opening cannot regress, because nothing has been refused yet.
+  const packedBuilders = usableBuilders(units, catalog, memory);
+  const mcv = packedBuilders[0]
+    ?? (buildings.some((u) => catalog[u.name]?.yard) ? undefined : units.find((u) => catalog[catalog[u.name]?.deploysInto]?.yard));
   if (mcv)
     build(
       "deploy_base",
@@ -2500,7 +2515,7 @@ export async function attachJevPlayer(api, options = {}) {
           // would never reach `maxDecisions` -- the one guarantee that the loop stops.
           status.decisions++;
           if (execution.accepted) afterAccepted(action, execution);
-          rememberChoice(memory, id, choice, execution, tick, true);
+          rememberChoice(memory, id, choice, execution, tick, true, action);
           emit(takeoverEvent({ id, choice, action, execution, reason, owned, tick, sourceTick: tick }));
         }
       };
@@ -2555,7 +2570,7 @@ export async function attachJevPlayer(api, options = {}) {
         const locked = missionGate(api, memory, action);
         if (locked) {
           status.rejected++;
-          rememberChoice(memory, id, answer.choice, locked, api.tick());
+          rememberChoice(memory, id, answer.choice, locked, api.tick(), false, action);
           emit({ kind: "action", tick: api.tick(), sourceTick: tick, question: id, choice: answer.choice, confidence: answer.confidence, action, ...locked });
           continue;
         }
@@ -2589,7 +2604,7 @@ export async function attachJevPlayer(api, options = {}) {
           execution = withRefusalReason(executeCandidate(api, action, catalog));
         if (execution.accepted) afterAccepted(action, execution);
         else if (execution.reason !== "wait") status.rejected++;
-        rememberChoice(memory, id, answer.choice, execution, api.tick());
+        rememberChoice(memory, id, answer.choice, execution, api.tick(), false, action);
         emit({
           kind: "action",
           tick: api.tick(),

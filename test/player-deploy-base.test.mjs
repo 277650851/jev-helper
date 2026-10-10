@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { collectState, candidateGroups, requestGroupsFrom, engineOwnedMarks, askableGroups, collectTakeovers } from '../src/player/werhd-jev-player.mjs';
+import { collectState, candidateGroups, requestGroupsFrom, engineOwnedMarks, askableGroups, collectTakeovers, rememberChoice } from '../src/player/werhd-jev-player.mjs';
+import { usableBuilders } from '../src/player/werhd-jev-strategy.mjs';
 
 // `deploy_base` exists only while a construction vehicle is packed, and a packed one can build nothing -- so
 // deploying is what makes the game proceed at all. The action is "deploy here"; there is no site to choose,
@@ -11,6 +12,9 @@ import { collectState, candidateGroups, requestGroupsFrom, engineOwnedMarks, ask
 
 const catalog = {
   MCV: { label: 'Construction vehicle', cost: 3000, deploysInto: 'YARD', armor: 'heavy' },
+  // The crate path can hand over a vehicle the game will not unpack -- jev-report-20261010-115949 was given
+  // an SMCV, which is why the refused case below is spelled with that name rather than a second MCV.
+  SMCV: { label: 'Soviet construction vehicle', cost: 3000, deploysInto: 'YARD', armor: 'heavy' },
   YARD: { label: 'Construction Yard', yard: true, factory: 'BuildingType', cost: 2500, armor: 'concrete' },
   POWER: { label: 'Power Plant', cost: 800, factory: 'BuildingType', power: 200, armor: 'concrete' },
 };
@@ -49,3 +53,38 @@ assert.equal(deploy.choice, 'deploy_base');
 assert.equal(deploy.reason, 'engine_decided');
 assert.ok(!('construction' in asked), 'and the model is not asked about it');
 console.log('Opening: the engine unpacks the construction vehicle itself rather than asking whether to start');
+
+// A vehicle the game has already refused to unpack is not a builder, and the option must stop being offered
+// while that is the only thing wrong. `jev-report-20261010-115949` is the measurement: a crate handed over
+// an SMCV at tick 22825, `api.deploy` returned false that turn and on the next 45, and the engine re-issued
+// the same order every turn -- 46 of the match's 89 decisions -- with a construction yard standing the whole
+// time. The refusal is recorded where the order is executed (`rememberChoice`), so the model's own pick and
+// the engine's takeover feed the same set.
+{
+  const memory = {};
+  own[0] = { ...own[0], id: 9, name: 'SMCV', kind: 'SMCV', tile: { rx: 22, ry: 22 } };
+  own.push({ id: 2, name: 'YARD', kind: 'YARD', type: 2, tile: { rx: 20, ry: 20 }, hitPoints: 1000, maxHitPoints: 1000, isIdle: false });
+  // With the yard up and nothing said about that vehicle, it is still a builder like any other.
+  const before = candidateGroups(api, catalog, collectState(api, catalog), memory);
+  assert.ok(before.construction.actions.deploy_base, 'an unrefused vehicle is offered even while a yard stands');
+  // The record a refused `api.deploy` leaves behind, through the same call the match makes.
+  rememberChoice(memory, 'construction', 'deploy_base', { accepted: false, reason: 'deploy_refused' }, 33, true, { type: 'deploy', ids: [9] });
+  assert.ok(memory.deployRefused.has(9), 'the refused vehicle is written off');
+  const after = candidateGroups(api, catalog, collectState(api, catalog), memory);
+  assert.ok(!after.construction.actions.deploy_base, 'and the order the game already rejected is not re-issued');
+  assert.deepEqual(usableBuilders(own, catalog, memory).map((u) => u.id), [], 'it is not a builder for either producer');
+  // A refusal that clears by itself must NOT write the vehicle off: suppressing a retryable order would
+  // trade one wasted turn for a missed base.
+  const retryable = {};
+  rememberChoice(retryable, 'construction', 'deploy_base', { accepted: false, reason: 'queue_changed' }, 33, true, { type: 'deploy', ids: [9] });
+  assert.equal(retryable.deployRefused, undefined, 'only a deploy refusal is evidence about deployability');
+  // Losing the yard is the emergency the option exists for: the engine keeps trying to come back.
+  own.splice(own.findIndex((u) => u.id === 2), 1);
+  const emergency = candidateGroups(api, catalog, collectState(api, catalog), memory);
+  assert.ok(emergency.construction.actions.deploy_base, 'with no yard a refused vehicle is still worth one more try');
+  assert.equal(emergency.construction.actions.deploy_base.engineOwned, true, 'and the engine still owns the attempt');
+  // Restore the opening fixture for anything that follows.
+  own.length = 0;
+  own.push({ id: 1, name: 'MCV', kind: 'MCV', type: 7, tile: { rx: 20, ry: 20 }, hitPoints: 1000, maxHitPoints: 1000, isIdle: true });
+}
+console.log('A construction vehicle the game refused to unpack is not offered again while a yard stands, and is still offered when the base is gone');
