@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { collectState, candidateGroups, requestGroupsFrom, engineOwnedMarks, askableGroups, collectTakeovers, rememberChoice } from '../src/player/werhd-jev-player.mjs';
+import { collectState, candidateGroups, requestGroupsFrom, engineOwnedMarks, askableGroups, collectTakeovers, rememberChoice, executeCandidate } from '../src/player/werhd-jev-player.mjs';
 import { usableBuilders } from '../src/player/werhd-jev-strategy.mjs';
 
 // `deploy_base` exists only while a construction vehicle is packed, and a packed one can build nothing -- so
@@ -68,11 +68,26 @@ console.log('Opening: the engine unpacks the construction vehicle itself rather 
   const before = candidateGroups(api, catalog, collectState(api, catalog), memory);
   assert.ok(before.construction.actions.deploy_base, 'an unrefused vehicle is offered even while a yard stands');
   // The record a refused `api.deploy` leaves behind, through the same call the match makes.
-  rememberChoice(memory, 'construction', 'deploy_base', { accepted: false, reason: 'deploy_refused' }, 33, true, { type: 'deploy', ids: [9] });
-  assert.ok(memory.deployRefused.has(9), 'the refused vehicle is written off');
+  const refusing = { ...api, deploy: () => false };
+  const refusal = executeCandidate(refusing, { type: 'deploy', ids: [9] }, catalog);
+  assert.equal(refusal.reason, 'deploy_refused', 'the fixture can place a yard where the vehicle stands, so the vehicle is what was refused');
+  assert.deepEqual(refusal.refusedAt, [[9, '22,22']], 'and the refusal remembers the spot, not just the vehicle');
+  rememberChoice(memory, 'construction', 'deploy_base', refusal, 33, true, { type: 'deploy', ids: [9] });
+  assert.equal(memory.deployRefused.get(9), '22,22', 'the refused vehicle is written off at that tile');
   const after = candidateGroups(api, catalog, collectState(api, catalog), memory);
   assert.ok(!after.construction.actions.deploy_base, 'and the order the game already rejected is not re-issued');
   assert.deepEqual(usableBuilders(own, catalog, memory).map((u) => u.id), [], 'it is not a builder for either producer');
+  // The other refusal is a different fact: `canPlace` says the building does not fit where the vehicle
+  // stands, so the spot is at fault. The order is still not re-issued from that spot, but a vehicle that
+  // moves is worth one more try -- which is how a placement problem can ever be fixed.
+  const stuck = executeCandidate({ ...refusing, canPlace: () => false }, { type: 'deploy', ids: [9] }, catalog);
+  assert.equal(stuck.reason, 'deploy_no_space', 'a site that cannot host the building is named apart from a vehicle that cannot unpack');
+  const moved = { ...own[0], tile: { rx: 24, ry: 24 } };
+  own[0] = moved;
+  const afterMoving = candidateGroups(api, catalog, collectState(api, catalog), memory);
+  assert.ok(afterMoving.construction.actions.deploy_base, 'the same vehicle offered again once it has moved');
+  assert.deepEqual(usableBuilders(own, catalog, memory).map((u) => u.id), [9], 'and it is a builder again');
+  own[0] = { ...moved, tile: { rx: 22, ry: 22 } };
   // A refusal that clears by itself must NOT write the vehicle off: suppressing a retryable order would
   // trade one wasted turn for a missed base.
   const retryable = {};

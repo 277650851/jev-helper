@@ -2385,3 +2385,54 @@ gameSeconds 7.47 时 `ownUnits 1 / ownBuildings 0`，那正是基地车要展开
 被拒的唯一选项集中在 `infantry:produce_ENGINEER`（4 次"高于切点"）与
 `tactics:assemble_force`（3 次）—— 这两类正是 §0.4 说"不要接管"的情形，
 本局它们仍然被完整地交给模型，且模型的拒绝带有可读的偏好。这条纪律在数据上仍然成立。
+
+---
+
+## 0.48 把"展开被拒"那一个布尔拆成两个可观测原因（§0.46 的补完）
+
+### 为什么改，而不是接着打
+
+§0.46 的修复**止住了伤害**（一次被拒后不再重发、恢复检查不再被那辆车卡死），所以不急。
+但它可能是**错的修复**：`docs/player-console-api.md:199-210` 列了四种拒绝原因，其中
+"没有格子 / 当前位置不能展开"意味着**把车开走就能展开** —— 那时正确做法是换个地格，
+而不是把这辆车永久写死。干等下一次箱子送车（6 局 1 次）等不到答案，所以先把原因变成可观测的。
+
+### 改了什么
+
+1. **`executeCandidate` 的 `deploy` 分支**：`api.deploy` 返回 false 时，用文档里就有的
+   `canPlace(name, x, y)`（`player-console-api.md:85`，`werhd-player-api.d.ts:331`）
+   检查"这辆车脚下能不能放下它要变的建筑"：
+   - 放不下 → `reason: "deploy_no_space"`（**位置**的错）；放得下却仍被拒 → `"deploy_refused"`（**这辆车**的错，与"不是己方/不能部署"同类）。
+   同时回传 `refusedAt: [[id, "rx,ry"]]`。
+2. **`rememberChoice`** 把拒绝记进 `memory.deployRefused`（现在是 `Map<id, "rx,ry">`；
+   仍然只记 deploy，`queue_changed` 那类自愈状态不记）。
+3. **`usableBuilders`** 改成**按地格**写死：只有当这辆车**还站在被拒的那个地格**时才不算 builder；
+   一旦移动就给一次机会。没有车厂时仍然照旧尝试（`deploy_base` 的兜底），所以开局不可能回归。
+
+**行为与 §0.46 等价**（车不动 ⇒ 结论一样），增量只有两处：
+拒绝被标成两种原因、以及"车动了就再试一次"。
+
+### 下一份战报会回答什么
+
+| 看到 | 说明 | 下一步 |
+|---|---|---|
+| 反复出现 `deploy_no_space` | 原因是**位置** | 用车厂选址函数（`chooseBuildingSite`）把车开到合法地格再展开 —— 这才是"基地被打掉后靠箱子基地车回来"的正解 |
+| 只出现一次 `deploy_refused` 然后安静 | 原因是**这辆车不能被展开** | §0.46 的写死就是对的，且平台已闭（一次浪费即止损） |
+| 两者都不出现 | 本局没有触发展开 | 继续 |
+
+报告里会看到的是**原因**（`rejectedBecause` → `skippedReasons`，既有三处承载点不用动，§0.27）；
+地格只在 `memory` 里用于重试判定，**没有**持久化 —— 为一个只用于诊断的字段去动
+logbook / background-core / telemetry 三处不划算，真要定位位置时再加。
+
+### 变异验证（8 条，全部能变红）
+
+| 变异 | 抓它的断言 |
+|---|---|
+| 去掉 `canPlace` 判定（又变回一个原因） | `a site that cannot host the building is named apart…` |
+| 一律叫 `deploy_no_space` | `the fixture can place a yard where the vehicle stands…` |
+| 拒绝什么都不记 | `the refused vehicle is written off at that tile` |
+| 写死忽略地格（车动了也不重试） | `the same vehicle offered again once it has moved` |
+| 写死忽略拒绝集合 | `and the order the game already rejected is not re-issued` |
+| `deploy_base` 生产者不查拒绝集合 | 同上 |
+| 恢复检查退回"任意一辆打包单位" | `but a refused one is not, so the base gets rebuilt…` |
+| 去掉"没有车厂仍尝试"的兜底 | `with no yard a refused vehicle is still worth one more try` |

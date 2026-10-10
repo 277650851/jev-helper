@@ -170,14 +170,17 @@ export function rememberChoice(memory, group, choice, execution, tick, auto = fa
   const l = memory.ledger;
   recent.push({ choice, tick, auto, accepted: execution?.accepted === true, reason: execution?.reason ?? "", lost: (l?.ownUnitsLost ?? 0) + (l?.ownBuildingsLost ?? 0), killed: (l?.enemyUnitsDestroyed ?? 0) + (l?.enemyBuildingsDestroyed ?? 0) });
   if (recent.length > RECENT_LIMIT) recent.splice(0, recent.length - RECENT_LIMIT);
-  // A vehicle the game has refused to unpack is not a builder, and the strategy layer reads that from here
-  // (`usableBuilders`) because both producers of "we have a construction vehicle" -- the `deploy_base`
-  // option and the recovery check -- have to agree on it. This is the one point every execution passes
-  // through, so the model's own pick and the engine's takeovers are recorded the same way. Only a deploy
-  // refusal counts: `queue_changed` and `production_changed` are states that clear by themselves, and
-  // suppressing those would trade one wasted turn for a missed order.
-  if (execution?.reason === "deploy_refused" && action?.type === "deploy")
-    for (const id of action.ids ?? []) (memory.deployRefused ??= new Set()).add(id);
+  // A vehicle the game has refused to unpack is not a builder while it stands where it was refused, and the
+  // strategy layer reads that from here (`usableBuilders`) because both producers of "we have a construction
+  // vehicle" -- the `deploy_base` option and the recovery check -- have to agree on it. This is the one point
+  // every execution passes through, so the model's own pick and the engine's takeovers are recorded the same
+  // way. Only a deploy refusal counts: `queue_changed` and `production_changed` are states that clear by
+  // themselves, and suppressing those would trade one wasted turn for a missed order. The tile comes from the
+  // executor, because the two deploy refusals mean different things: `deploy_no_space` blames the spot.
+  if (action?.type === "deploy" && execution?.accepted === false && execution.refusedAt?.length) {
+    const refused = (memory.deployRefused ??= new Map());
+    for (const [id, tile] of execution.refusedAt) refused.set(id, tile);
+  }
 }
 export function historyHints(groups, memory, state, assessment) {
   const l = memory.ledger, lostNow = (l?.ownUnitsLost ?? 0) + (l?.ownBuildingsLost ?? 0), killedNow = (l?.enemyUnitsDestroyed ?? 0) + (l?.enemyBuildingsDestroyed ?? 0);
@@ -1317,7 +1320,27 @@ export function executeCandidate(api, action, catalog) {
     // Same reason as the posture branch: `api.deploy` returns a boolean, so a refusal must be given a cause
     // here or the log records a rejection with nothing to explain it.
     const deployed = api.deploy(action.ids);
-    return { accepted: deployed, ...(deployed ? {} : { reason: "deploy_refused" }) };
+    if (deployed) return { accepted: true };
+    // One boolean hides two refusals that call for opposite follow-ups. `canPlace` answers whether the
+    // building fits where the vehicle stands (`player-console-api.md:85`): when it does NOT fit, the engine
+    // could still fix this by driving the vehicle to a legal site, so the spot is at fault, not the vehicle;
+    // when it DOES fit and the game refuses anyway, the vehicle is what the game will not unpack and
+    // `usableBuilders` writes it off. Logging them apart is what makes the next report say WHY --
+    // `jev-report-20261010-115949` could only say `deploy_refused`, 46 times, and four documented causes
+    // were indistinguishable in it.
+    const standing = action.ids ?? [], self = api.units("self");
+    const unitOf = (id) => self.find((x) => x.id === id);
+    const blocked = standing.some((id) => {
+      const u = unitOf(id), into = catalog?.[u?.name]?.deploysInto;
+      return !!u?.tile && !!into && typeof api.canPlace === "function" && !api.canPlace(into, u.tile.rx, u.tile.ry);
+    });
+    return {
+      accepted: false,
+      reason: blocked ? "deploy_no_space" : "deploy_refused",
+      // Where each vehicle stood when the game said no: a refusal is a verdict about that spot, so a vehicle
+      // that moves is worth one more try (and that is the path the placement case above would be fixed by).
+      refusedAt: standing.flatMap((id) => { const u = unitOf(id); return u?.tile ? [[id, `${u.tile.rx},${u.tile.ry}`]] : []; }),
+    };
   }
   if (action.type === "attack") {
     if (!api.units("enemy").some((u) => u.id === action.targetId))

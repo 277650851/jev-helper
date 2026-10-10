@@ -38,10 +38,18 @@ export const PLAN_STEP_AUTO = 3;
 // planned nothing at all. The game's refusal causes are listed in `docs/player-console-api.md:199-210` (not
 // ours / cannot deploy / no tile / cannot deploy here) and none of them is something a repeat order changes,
 // so a vehicle the game has refused to unpack is not a builder any more. Recorded where the refusal is seen,
-// in `rememberChoice`, so every execution path feeds the same set.
+// in `rememberChoice`, so every execution path feeds the same map.
+//
+// Recorded per TILE, not per vehicle: whether the building fits is a property of the spot
+// (`executeCandidate` labels that case `deploy_no_space`), so a vehicle that has moved deserves one more
+// try, while one that never moves -- the crate case -- is simply not offered again.
 export function usableBuilders(units, catalog, memory) {
   const refused = memory?.deployRefused;
-  return units.filter((u) => catalog[catalog[u.name]?.deploysInto]?.yard && !refused?.has(u.id));
+  return units.filter((u) => {
+    if (!catalog[catalog[u.name]?.deploysInto]?.yard) return false;
+    const refusedAt = refused?.get?.(u.id);
+    return refusedAt === undefined || refusedAt !== `${u.tile?.rx},${u.tile?.ry}`;
+  });
 }
 
 // Planning and the model share this eligibility set, even before starting cash arrives.

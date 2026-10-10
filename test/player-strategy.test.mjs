@@ -129,7 +129,7 @@ catalog.SMCV={deploysInto:'YARD',cost:3000,label:'Soviet construction vehicle'};
 own.push(u(41,'SMCV',7));
 snap=collectState(api,catalog);groups=candidateGroups(api,catalog,snap,{});
 assert.ok(!groups.vehicles.actions.recover_MCV,'a usable packed vehicle already is the way back, so no rebuild is planned');
-const refused={deployRefused:new Set([41])};
+const refused={deployRefused:new Map([[41,'30,30']])};
 snap=collectState(api,catalog);groups=candidateGroups(api,catalog,snap,refused);
 assert.ok(groups.vehicles.actions.recover_MCV,'but a refused one is not, so the base gets rebuilt instead of being written off');
 own=own.filter(u=>u.id!==41);
