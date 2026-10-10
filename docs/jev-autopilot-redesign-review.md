@@ -2317,3 +2317,71 @@ fetch 进任何提交都会让它成立）核对每份战报的 `match.meta.buil
   （见上）。若下一局仍出现同样的拒绝，这是下一步。
 - **写死没有冷却**：`memory.deployRefused` 一旦记下就不再尝试（同一辆车）。若真实数据出现
   "开到别处就能展开"，就要改成按位置记录（拒绝时的地格 + 移动后重试）。
+
+---
+
+## 0.47 第二份出自修复后的战报（`jev-report-20261010-122420`，构建 `b685251`）：§0.45 再确认，§0.46 **未被触发**
+
+构建归属：`b685251` = §0.46 的提交（含 §0.45），`-dirty` 后缀仍来自那两个既有工作区条目。
+**结果 `ended`（`battle_ended`），3653s（目前最长），96 次模型决策，组-问题 219 个；
+传输故障 1 次（Laya 超时，tick 50155），未降级** —— 引擎继续走到 tick 55036（§7 第 5 条）。
+
+### §0.45 再次通过（机制级）
+
+`construction` 组**全程 0 个题**，5 条全部是 `engine_decided` 的接管：
+
+| tick | 指令 | 归因 |
+|---|---|---|
+| 11135 | `produce_GAAIRC` | 计划步骤（`candidates` 把 air support 排在首位）—— **以前这是 special 层的提案，会去问模型** |
+| 15392 | `produce_GAPOWR` | POWER FOR TECH |
+| 16059 | `produce_GATECH` | TECH ADVANCE |
+| 35628 | `produce_GADEPT` | TECH ADVANCE |
+| 36193 | `produce_GAPOWR` | POWER FOR TECH |
+
+**顺带记录一处副作用**（不是缺陷，但要知道）：`candidates` 的排序让"飞机场"总是排在计划步骤第一位，
+所以只要 `coreReady` 成立、且车厂已立，`produce_GAAIRC` 就会被**计划步骤覆盖 special 层的同一个 key**
+（两处构造器写同一个 `produce_GAAIRC`），于是它从"模型的提案"变成"引擎的决定"。
+本局就是这么走的（11135 直接 `engine_decided`）。
+
+### §0.46 **本局没有被触发**（必须说清楚）
+
+- 96 个决策里**没有任何一个**的 `inventory` 出现过 MCV 类单位，`deploy_base` 在保留的日志里 **0 条**；
+- 4 个箱子（`crate_2779/3381/3899/4169`，tick 26029–42597）都是 `engine_decided` + 受理，
+  没有一个变成基地车。
+
+所以"不再有 46 次连续 `deploy_refused`"**不能算 §0.46 的验证** —— 这一局根本没有会展开失败的基地车。
+§0.46 的修复仍然只有夹具级证据（6 条变异），**真实触发要等下一次箱子送出基地车**。
+
+### ⚠ 新的方法学坑：战报**会丢掉开头**（`logTruncated`）
+
+本份 `logEntries 1252 / logKept 1126` → 最早的 **126 条**被环形缓冲截掉，
+第一条保留的条目是 tick 5542，而 `firstTick` 是 945。
+**差点据此写出"引擎前 300 秒什么都没问、什么都没做"这个完全错误的结论** ——
+真相是开局的 `deploy_base`、种建筑等条目都在被截掉的那一段里（`history[0]` 显示
+gameSeconds 7.47 时 `ownUnits 1 / ownBuildings 0`，那正是基地车要展开的时刻）。
+
+**规则**：读战报前先看 `logTruncated` / `match.logEntries` vs `match.logKept`；
+被截断时**"日志里没有"不等于"没发生"**，尤其不能用来判断开局。
+
+### §7 清单（本局）
+
+| 项 | 结果 |
+|---|---|
+| `engineOwned` / `rejectedBecause` | ✅ 接管 104 条、被拒 1 条（`base_threat_changed`） |
+| `skippedReasons` 是真实原因 | ✅ `mission_continues` 9、`target_no_longer_visible` 6、`base_threat_changed` 1、`production_changed` 1、`mission_locked` 1 |
+| `defend_base` / `deploy_combat` / `undeploy_mobile` | ✅ 只在有真实备选时出现：`defend_base` 与 2–7 个 `assault_*` 并列；tick 54083 `deploy_combat+undeploy_mobile` 成对 |
+| 箱子 | ✅ 4 条，全部 `engine_decided` + 受理 |
+| 矿车受攻击 | — 本局**没有**矿车被攻击（`flee_miner` 0），不是缺陷 |
+| `deploy_base` 在 `decision` 里 | ✅ 0 次 |
+
+### 不可归因的数字（§0.43）
+
+唯一选项题 84（38%）、被拒 **12（14%）**、全组 wait 的决策 **8/96（8%）**、拒时置信中位 0.161 ——
+都是目前四/五局里最低的一档。**但这是单局**，而 §0.43 记录的自然方差带是
+被拒率 18–62%、全组等待 8–35%，所以**不能**说"§0.45/§0.46 让这些数字下降了"。
+
+### 一处值得留下的正面证据：模型有意见的题**没有**被接管
+
+被拒的唯一选项集中在 `infantry:produce_ENGINEER`（4 次"高于切点"）与
+`tactics:assemble_force`（3 次）—— 这两类正是 §0.4 说"不要接管"的情形，
+本局它们仍然被完整地交给模型，且模型的拒绝带有可读的偏好。这条纪律在数据上仍然成立。
