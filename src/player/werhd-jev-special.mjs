@@ -139,9 +139,15 @@ export function specialGroups(api, catalog, snapshot, memory, groups) {
       if (!isScout && !canDetach) break;
       pickups(`crate_${c.id}`, `${isScout ? 'While scouting' : 'Detach one combat unit'}: move one unit onto the upgrade crate at (${c.tile.rx},${c.tile.ry})${c.name ? ` (${c.name})` : ''} to collect it. A crate may be a Construction Vehicle; after losing the base it is the way back in.`, {
         type: 'special', kind: 'collect_crate', ids: [u.id], crateId: c.id, tile: { x: c.tile.rx, y: c.tile.ry },
-        // Automatic while the scout is already heading that way, or once the base is gone: those are the turns
-        // where the model has no better use for them and would wait.
-        ...(isScout || !base || units.length <= 6 ? { auto: 3 } : {}),
+        // `engineOwned` so that when the crate is the group's ONLY real choice the engine sends the unit
+        // itself. Measured on `jev-report-20261010-085322`: 15 single-option crate questions were refused at
+        // a median confidence of 0.0074, with 11 of the 15 below 0.05 -- the same "no opinion" signature as
+        // `defend_base`, and the engine collected them anyway once `auto: 3` ran out. The choice of WHO goes
+        // is already made here (`canDetach` / `isScout`), so a lone option has nothing left to weigh.
+        //
+        // `auto: 3` stays on every option: with a real alternative beside it the option is not lifted, and
+        // the fallback threshold must stay 3 there rather than dropping to the ownership default of 1.
+        engineOwned: true, auto: 3,
       });
       // One unit per crate: handing the same id to every option meant whichever box the model picked
       // redirected the unit already walking to a different one.

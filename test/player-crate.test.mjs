@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { specialGroups, executeSpecial, rememberSpecial, maintainSpecial, CRATE_TIMEOUT } from '../src/player/werhd-jev-special.mjs';
+import { askableGroups, requestGroupsFrom, engineOwnedMarks, collectTakeovers } from '../src/player/werhd-jev-player.mjs';
 
 // Upgrade crates come from `werhd.crates()`, a listing separate from `units()` that is locally visible only
 // (`docs/player-console-api.md:81`), so nothing else in the engine has ever seen one. Collecting is a plain
@@ -127,4 +128,24 @@ assert.equal(snapshot.state.infrastructure.crates, 1, 'the crate count reaches t
   assert.ok(!keys.includes('crate_11'), 'and the farthest is left out');
   assert.deepEqual(keys.sort(), ['crate_12', 'crate_13', 'crate_14'], 'the three nearest, in distance order');
 }
-console.log('Upgrade crates: read from crates(), collected with move, released when the box is gone, nearest first');
+// 6. A lone crate is the engine's own decision. Measured on jev-report-20261010-085322: 15 single-option
+//    crate questions refused at a median confidence of 0.0074, 11 of them below 0.05 -- the same "no opinion"
+//    signature as `defend_base`, and the engine collected them anyway once the fallback ran out.
+{
+  memory.specialTasks = []; memory.specialOrders = new Map();
+  own.length = 0;
+  own.push({ id: 1, name: 'YARD', kind: 'YARD', type: 2, tile: { rx: 20, ry: 20 }, hitPoints: 1000, maxHitPoints: 1000 });
+  own.push({ id: 2, name: 'HTNK', kind: 'HTNK', type: 7, tile: { rx: 22, ry: 20 }, hitPoints: 400, maxHitPoints: 400, isIdle: true, primaryWeapon: catalog.HTNK.weapon });
+  crates = [crate(77, 30, 24)];
+  const groups = {};
+  specialGroups(api, catalog, snapshot, memory, groups);
+  const action = groups.salvage.actions.crate_77;
+  assert.equal(action.engineOwned, true, 'the engine owns a lone crate');
+  assert.equal(action.auto, 3, 'and the fallback threshold stays 3 for the case where an alternative appears');
+  // The takeover pass lifts it, so the question is never put to the model.
+  const asked = askableGroups(requestGroupsFrom(groups, memory, 1000));
+  assert.ok(!('salvage' in asked), 'so it is not asked about');
+  const taken = collectTakeovers(groups, null, engineOwnedMarks(groups), memory, 1000).filter((x) => !(x.id in asked));
+  assert.ok(taken.some((x) => x.id === 'salvage' && x.choice === 'crate_77'), 'and the engine collects it');
+}
+console.log('Upgrade crates: read from crates(), collected with move, released when gone, nearest first, engine-owned when lone');
