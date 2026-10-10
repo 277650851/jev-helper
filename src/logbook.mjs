@@ -27,6 +27,12 @@ export function stateSummary(state = {}) {
     queues: (state.queues ?? []).slice(0, 8).map(q => ({ type: short(q.type, 12), items: (q.items ?? []).slice(0, 6).map(i => `${short(i.name, 20)}×${number(i.quantity) ?? 1}`) })),
     inventory: Object.fromEntries(Object.entries(state.inventory ?? {}).slice(0, 48).map(([k, u]) => [short(k, 20), number(u?.count) ?? 0])),
     investment: state.strategy?.investment ? { category: short(state.strategy.investment.category, 24), name: short(state.strategy.investment.name, 24) } : null,
+    // The mission the engine believes is running. `scouting` re-asked the same two frontiers 17 times in
+    // three consecutive matches while the model answered `wait` every time, and the fact that decides whether
+    // the model was right -- an explore mission already on its way -- is in the state the MODEL is sent but
+    // was not archived here, so the question could not be settled from the report. Mode and age only: this
+    // summary carries no coordinates and no unit lists.
+    activeMission: state.activeMission ? { mode: short(state.activeMission.mode, 16), ageTicks: number(state.activeMission.ageTicks) } : null,
     ready: state.forceReadiness ? state.forceReadiness.ready === true : null, readyReason: short(state.forceReadiness?.reason, 160),
     ...(state.objectiveTarget ? { objective: state.objectiveTarget.found === false
       ? { found: false, seen: (state.objectiveTarget.seen ?? []).slice(0, 30).map((n) => short(n, 60)) }

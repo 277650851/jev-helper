@@ -13,6 +13,12 @@ test('decision entries keep the question, the answer and a numeric state summary
   assert.equal(e.groups.tactics.probabilities.attack_enemy_base,1);
   const json=JSON.stringify(e);assert.doesNotMatch(json,/leak|"tile"|rx/);assert.ok(json.length<3000);
   assert.equal(stateSummary({}).credits,null);assert.deepEqual(stateSummary({}).queues,[]);
+  // The running mission is archived as mode + age, because a re-asked `scouting` question can only be judged
+  // against it. Coordinates stay out, like every other position in this summary.
+  const withMission=decisionEntry({at:1,tick:5400,state:{...state,activeMission:{mode:'explore',x:71,y:74,ageTicks:1200}},questions,answers});
+  assert.deepEqual(withMission.state.activeMission,{mode:'explore',ageTicks:1200});
+  assert.deepEqual(Object.keys(withMission.state.activeMission),['mode','ageTicks'],'mode and age only: no coordinates');
+  assert.equal(stateSummary({}).activeMission,null,'a state with no mission archives null rather than a blank record');
 });
 test('player events are reduced to typed records and observations are dropped',()=>{
   const a=eventEntry({kind:'action',tick:10,question:'vehicles',choice:'produce_MTNK',accepted:true,action:{type:'produce',name:'MTNK',cost:700},confidence:.8,latencyMs:150,ageTicks:2},5);
