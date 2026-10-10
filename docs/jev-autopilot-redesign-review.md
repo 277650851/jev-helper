@@ -2107,3 +2107,118 @@ fetch 进任何提交都会让它成立）核对每份战报的 `match.meta.buil
 §0.43 的判断被这次前后分布证实：
 **只有在机制直接、前后样本各 ≥3 局时，才能说"某改动消除了什么"**；
 而"整体指标改善了多少"在本方差水平下**无法从 3 局判断**。
+
+---
+
+## 0.45 `investmentGroups` 计划步骤的接管（§0.42 的落地），以及 §0.42 两处前提被证伪
+
+### 做了什么
+
+`investmentGroups` 有两处 construction 选项**就是引擎自己的计划步骤**：
+`TECH ADVANCE` / `BREAK THE STALEMATE`（`strategy.mjs:634`）与替它供电的
+`POWER FOR TECH`（`strategy.mjs:638`）。这两处写下 `strategy.investment` 指向它、
+`strategy.reserve` 等于它的钱，所以引擎**已经选过**它了。现在两处都带
+`engineOwned: true, auto: 3`（新常量 `PLAN_STEP_AUTO`）。
+
+`add()` 是**共享**构造器：`vehicles`（矿车 / 机动反击 / 集结）和 `defenses`（反制炮塔）
+也走它。所以标记**按调用点**传入（`add(..., extra)`），没有写进辅助函数 ——
+§0.42 第 4 条问的正是这件事，**答案是"会，必须收窄到 construction"**。
+
+### 数据：三份可读战报里 construction 组的唯一选项题，按题面模板判定构造器
+
+| 战报 | construction 题 | 唯一选项 | 被拒 | 归 `investmentGroups` |
+|---|---|---|---|---|
+| `100135` | 5 | 5 | 2 | 2（TECH ADVANCE ×2，**均被选中**） |
+| `105509` | 14 | 14 | 13 | **12**（POWER FOR TECH ×11 **全拒** + TECH ADVANCE ×1 选中） |
+| `110632` | 4 | 4 | 3 | 1（POWER FOR TECH，被拒） |
+
+按模板分类的依据：`investmentGroups` 的 `add` 题面是
+`${purpose}: ${label}; cost N, technology level N, power N, weapon range N.`，
+而 `special.mjs:93` 的 `addProduction` 是 `${purpose}: ${label}, cost N.`；
+`strategy.mjs:805` 的恢复项是 `SURVIVAL: rebuild …`。
+
+**`105509` 的那 11 次就是本次的靶子**：同一个选项、从 tick 11919 到 14932 **连续 11 个决策回合**
+都是"只有 `produce_GAPOWR` 或 wait"，**11 次全部被拒**，置信度中位 0.0115
+（最小 0.0003、最大 0.3363，10/11 低于 0.07 —— §0.29 的"低到无声"签名）。
+按 `reserve = plan.cost + 250` 推算，这个计划当时锁着 **1050** 信用点（GAPOWR 800，
+战报里该指令的 `cost` 也是 800），而同期 credits 在 790–2240 之间 ——
+**引擎锁着钱、等一个它自己已经决定要建的东西，等了 11 个回合**。
+
+机制上它**完全没有回退**：没有 `auto`、也没有 `engineOwned` → `thresholdOf` 取 Infinity →
+`collectTakeovers` 的 `thresholded` 为空 → 永不接管。这是一处**永不触发**的闸门：
+条件都成立、选项也供给出来了，就是没有任何一条路径能让引擎自己动手。
+
+### §0.42 的两处前提被证伪（§8：被证伪的假设要写下来）
+
+1. **§0.42 表格里那句题面指错了构造器。**
+   “Build aircraft support to enable air strikes: Airforce Command Headquarters, cost 1000.”
+   **不是** `investmentGroups` 产出的：那个模板在 `werhd-jev-special.mjs:93` 的
+   `addProduction`（`${purpose}: ${label}, cost ${cost}.`），`investmentGroups` 的模板带
+   “technology level … power … weapon range …”。直接证据是 `105509` 里**同一个
+   `produce_GAAIRC`** 有时以 `TECH ADVANCE: … Airforce Command Headquarters` 出现
+   （`investmentGroups`），有时以 `Build aircraft support …` 出现（special 层）。
+   “同一件事有两个构造器”这个结论**成立**，但用它指认 `investmentGroups` **是错的**。
+2. **§0.42 第 2 条的描述与实际相反。** 它写“`thresholdOf` 对 `engineOwned` 且无 `auto` 的选项取阈值 1，
+   于是多选项情形会从『问三次』缩成『问一次』”。实测这两个选项**当前没有 `auto`**，
+   阈值是 Infinity、**永不回退**，所以显式 `auto: 3` 是**新引入的有界回退**，不是"保持原样"。
+   它的**判据**仍然成立（不要落到默认的 1），但动机要改成：“这两步是引擎自己的计划，
+   多选项时也该给模型三个回合，之后计划照做。”
+3. **覆盖语义的隐患（本次顺带消除，但不是这次循环的原因）。** `add()` 是整体替换
+   `g.actions[key]`。`player.mjs:587` 的开局建筑计划会给 `produce_GAPOWR` 打 `engineOwned`，
+   若它先加、`investmentGroups` 的 POWER FOR TECH 后加且不带标记，标记就被抹掉。
+   `105509` 里这条**不成立**（当时 power 余量 65，`player.mjs` 的 `powerMargin < 50` 分支没进），
+   所以 11 次循环的原因是第 2 点的“没有回退”，不是覆盖；但隐患是真的（测试夹具里
+   power 余量 20 时两个构造器**同时**供给 `produce_POWER`），本次两处都带标记后，
+   `produce_POWER` 无论被谁覆盖都还是 `engineOwned`。
+
+### 为什么是 `auto: 3`
+
+`auto` 只在“组内还有真实备选”时才有意义：那时 `askableGroups` **不会**丢组，题照问，
+引擎按自己的计划在 N 次被拒后执行。取 3 是为了与既有先例一致（升级箱 `auto: 3`、
+恢复重建 `auto: 2`、`player.mjs:587` 无 `auto` = 1）。测试**同时**钉住 `engineOwned` 与 `auto`：
+少掉任何一半都会悄悄改变谁作答。
+
+### 变异验证（每条新断言都确认能变红）
+
+| 变异 | 结果 | 抓它的断言 |
+|---|---|---|
+| 两处都去掉 `engineOwned`+`auto` | **红** | `the funded technology step is engine-owned` |
+| 保留 `engineOwned`、去掉显式 `auto` | **红** | `with an explicit fallback: … one turn, not three` |
+| 把标记塞进共享 `add()`（泄漏到 vehicles/defenses） | **红** | `the shared option builder feeds vehicles and defenses too…` |
+| 只去掉 POWER FOR TECH 的标记 | **红** | `and it is the engine's own decision too` |
+| 只去掉 TECH ADVANCE 的标记 | **红** | `the funded technology step is engine-owned` |
+| `thresholdOf` 忽略已声明阈值、对 owned 一律取 1 | **红** | `one declined turn is not enough` |
+
+### ⚠️ 基准看不到这条路径（**不要把 bench 的不变读成"改动无效"**）
+
+`tools/bench-questions.mjs` 改动前后**完全一样**（`construction` 5 题、5 唯一、全部交给模型），
+因为基准**结构上看不见**这条路径：
+
+1. `replay-state.mjs:167` 的 `available: (type) => (menu[type] ?? []).map((name) => ({ name }))`
+   在**无参**调用时返回 `[]`（`menu[undefined]`），而 `investmentGroups` 取的正是
+   `api.production.available()`（`strategy.mjs:432`）。即便有菜单，项也只有 `{name}`，
+   `candidates` 却过滤 `i.type === api.ObjectType.Building`（`strategy.mjs:624`）。
+   对照真实 API：`docs/player-console-api.md:91` 写的是 `available(queueType?)` → `{ name, type }[]`，
+   而且 `werhd-jev-catalog.mjs:4` 自己就用**无参** `available()` 建整个目录。
+2. `replay-state.mjs:45` 的 `menuFor(catalog, 'Structure', …)` 把“建造队列里的东西”等同于
+   `buildCategory === 'Structure'`，而真实 `rules.ini` 给 GATECH/GADEPT/GAAIRC 的都是
+   `BuildCat=Tech`（行 8258 / 9148 / 8728）；合成目录却把它们写成 `buildCategory: 'Structure'`，
+   与引擎自己的 `buildCategory === 'Tech'` 判据（`strategy.mjs:625`）矛盾。
+
+所以本节的效果**不能**用 bench 数字证明，也没有用。改用**受控夹具对比**：
+`test/player-strategy.test.mjs` 的 AIRFIELD/LAB 局面（显式菜单、项带 `type`），
+改动前该题被问、改动后 `splitEngineOwned` 把它列为 `owned` 并从请求里移除；
+`POWER FOR TECH` 那条同样（题面前缀与战报逐字一致：`POWER FOR TECH: supply the planned technology and defenses`）。
+
+**基准盲区本身是下一轮的待办**（已列入 `docs/jev-autopilot-handoff.md` 的待办清单），
+优先级不低于继续找题：一个看不见被测路径的基准，会让"改动后数字没变"看起来像"改动没效果"。
+
+### 本次没有接管的（以及为什么）
+
+- **`special.mjs:465` 的 "Build aircraft support to enable air strikes"**：三份战报里 3 题、1 拒
+  （`100135` 1 题 0 拒、`110632` 2 题 1 拒；`105509` 那次同一个构造器走的是 TECH ADVANCE 分支）。
+  它的前提只有“有车厂、≥1 矿车、结构队列空闲、留 1000 余款”，是**提案**而不是引擎计划
+  （`strategy.mjs:466-471` 的注释也明说“留给模型选”）；而且模型确实会选它
+  （`100135`/`110632` 各有一次选中）。按 §0.4“不要接管模型有明确意见的题”，留在原位。
+- **`strategy.mjs:804` 的 `recover_*`**：生存重建，本来就带 `auto: 2`，不属 §0.42 范围
+  （三份战报 5 题 5 拒，但没有卡死：阈值 2 会结束它）。

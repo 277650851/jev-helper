@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { collectTakeovers, engineOwnedMarks } from '../src/player/werhd-jev-player.mjs';
+import { collectTakeovers, engineOwnedMarks, requestGroupsFrom, splitEngineOwned } from '../src/player/werhd-jev-player.mjs';
 
 // The engine has two ways to take an option out of the model's hands, and they are one mechanism with two
 // triggers: `engineOwned` (the producer established every premise, so there is no question) and `auto: N`
@@ -139,5 +139,28 @@ const at = (actions, ...keys) => Object.fromEntries(keys.map((k) => [k, { id: 'q
   // A new tick starts clean: the same option is available again next turn.
   const next = collectTakeovers(groups, null, marks, memory, 701);
   assert.deepEqual(next.map((t) => t.choice), ['explore_4_4'], 'a new turn is not blocked by the previous one');
+}
+// 11. The construction plan step declares its own fallback, and the declaration is load-bearing. The
+//     option is owned, so it is dropped entirely when it is the group's only real choice; when another
+//     builder puts a real alternative beside it the group is still asked, and `auto: 3` is what keeps the
+//     model's three turns. An owned option with no declared threshold falls back on the first decline
+//     (case 9), so dropping the `auto` would quietly hand the engine's own plan the answer one turn in.
+{
+  const actions = { wait: { type: 'wait' }, produce_LAB: action({ engineOwned: true, auto: 3 }), produce_GAAIRC: action() };
+  const groups = { construction: groupOf(actions) };
+  const marks = engineOwnedMarks(groups);
+  assert.deepEqual(marks, { construction: { produce_LAB: true } }, 'the plan step carries the mark');
+  const memory = {}, answers = { construction: { choice: 'wait' } };
+  assert.deepEqual(collectTakeovers(groups, answers, marks, memory, 0), [], 'one declined turn is not enough');
+  assert.deepEqual(collectTakeovers(groups, answers, marks, memory, 0), [], 'nor two');
+  const third = collectTakeovers(groups, answers, marks, memory, 0);
+  assert.deepEqual(third.map((x) => [x.id, x.choice, x.reason, x.owned]), [['construction', 'produce_LAB', 'auto_construction', true]], 'the third sends the engine');
+  // And the question really was asked in the meantime: one real option beside the owned one is a choice.
+  const { asked, owned } = splitEngineOwned(requestGroupsFrom(groups, {}, 0));
+  assert.deepEqual(owned, [], 'a real alternative keeps the question');
+  assert.deepEqual(Object.keys(asked.construction.criteria).sort(), ['produce_GAAIRC', 'produce_LAB', 'wait'], 'and both options stay in it');
+  // With nothing beside it the same option is not a question at all.
+  const alone = { construction: { instructions: 'i', criteria: { wait: 'c', produce_LAB: 'c' }, actions: { wait: { type: 'wait' }, produce_LAB: action({ engineOwned: true, auto: 3 }) } } };
+  assert.deepEqual(splitEngineOwned(requestGroupsFrom(alone, {}, 0)).owned, [{ id: 'construction', choice: 'produce_LAB' }], 'alone, the plan step is taken outright');
 }
 console.log('Takeovers: one decision point for ownership and the auto fallback, counted per option, with a real alternative left to the model');

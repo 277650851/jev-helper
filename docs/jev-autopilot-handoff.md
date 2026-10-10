@@ -1,7 +1,7 @@
 # Jev 托管 AI 交接文档
 
 > 写给**任何后续会话**（人或 AI）。读完这一份即可接手，不必读之前的对话。
-> 详细推导、反例与逐项判据在 [`jev-autopilot-redesign-review.md`](./jev-autopilot-redesign-review.md)（§0.1–§0.40）。
+> 详细推导、反例与逐项判据在 [`jev-autopilot-redesign-review.md`](./jev-autopilot-redesign-review.md)（§0.1–§0.45）。
 
 ---
 
@@ -88,7 +88,10 @@
 
 开局计划、钱闲着造战斗单位、防御底线、侦察前沿、**`defend_base`**、**部署姿态**
 （`deploy_combat` / `undeploy_mobile`）、**展开基地车**（`deploy_base`）、
-**任务目标所需的工程师**。
+**任务目标所需的工程师**、**升级箱**（§0.41、§0.44）、
+**`investmentGroups` 的计划步骤**（`TECH ADVANCE` / `BREAK THE STALEMATE` 与
+`POWER FOR TECH`；§0.45 —— `engineOwned` 与显式 `auto: 3` 一起给，且**只给 construction**，
+因为共享的 `add()` 也喂 `vehicles` / `defenses`）。
 
 ### 5.3 自适应反制
 
@@ -109,13 +112,21 @@
 
 ## 6. 未完成 / 待验证
 
-1. **最重要：§0.24–§0.40 的修复还从未在实战中被验证过。**
-   最新战报出自 `ee07c2b`，早于这些提交 29 个以上。**需要一次真实对局。**
-2. **矿车撤离的威胁判定只用了 `canEngageTarget` 与距离**，没考虑"敌人是否已在攻击它"
+1. **基准（`tools/bench-questions.mjs`）看不见 `investmentGroups` 的计划步骤**，
+   优先级不低于继续找题：`replay-state.mjs` 的 `available()` 无参返回 `[]`（且项无 `type`），
+   合成目录又把 GATECH/GADEPT 写成 `buildCategory:'Structure'` 而真实 `rules.ini` 是 `BuildCat=Tech`。
+   **后果**：改了这条路径，bench 数字**一个都不变**——别把它读成"改动无效"（§0.45 末）。
+2. **`add()` 的覆盖语义**：后加的构造器整体替换 `g.actions[key]`，会抹掉先加者打的 `engineOwned`
+   （本次两个构造器都自带标记，这个具体冲突消失，但下一个"同 key 两个构造器"还会踩）。
+3. **`special.mjs:465` 的 air support 与 `strategy.mjs:804` 的 `recover_*` 仍未接管**，
+   理由与数据见 §0.45 末（前者是提案、模型真的会选；后者已有 `auto: 2`）。
+4. **`e253675`（升级箱）与 §0.45 的效果各需一次真实对局**——
+   §0.43 已确立：单局比较无法验证任何改动，**至少三局同码取分布**。
+5. **矿车撤离的威胁判定只用了 `canEngageTarget` 与距离**，没考虑"敌人是否已在攻击它"
    （例如敌人正忙别的目标）。真实数据可能显示误撤。
-3. **升级箱会占用侦察兵** —— 已按距离缓解，但未与"侦察前线"的收益做显式比较。
-4. **`tools/` 下其余脚本仍不在测试覆盖内**（只有 `audit-report` 的渲染被抽成可测函数）。
-5. 有提交未推送时，先确认 FastGithub 是否在运行。
+6. **升级箱会占用侦察兵** —— 已按距离缓解，但未与"侦察前线"的收益做显式比较。
+7. **`tools/` 下其余脚本仍不在测试覆盖内**（只有 `audit-report` 的渲染被抽成可测函数）。
+8. 有提交未推送时，先确认 FastGithub 是否在运行。
 
 ---
 
@@ -131,7 +142,11 @@ node tools/audit-report.mjs <战报路径>
    **不再出现在 `decision` 里**；
 4. 矿车受攻击 → `flee_miner_<id>`；箱子出现 → `crate_<id>` 与 `task collect_crate collected`；
 5. **`repeated_errors` 不再终结对局** —— 应出现 `kind:"degraded"` 并继续；
-6. **拒绝唯一选项题时的置信度中位数** —— 判断"引擎判定是否有错"的关键数（§0.29）。
+6. **拒绝唯一选项题时的置信度中位数** —— 判断"引擎判定是否有错"的关键数（§0.29）；
+7. **`construction` 组里不再出现 `TECH ADVANCE` / `POWER FOR TECH` 的唯一选项题**
+   （应变成 `reason: engine_decided` 的 `construction` 接管；§0.45 的 11 次循环是靶子）。
+   注意 `Build aircraft support …` 开头的 air support 题**照旧会问** —— 那是 special 层的提案，
+   本次**故意**没接管（§0.45）。
 
 ---
 

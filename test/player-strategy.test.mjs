@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
-import { collectState, candidateGroups } from '../src/player/werhd-jev-player.mjs';
-import { chooseBuildingSite, isAirSupport, effectiveness } from '../src/player/werhd-jev-strategy.mjs';
+import { collectState, candidateGroups, requestGroupsFrom, splitEngineOwned } from '../src/player/werhd-jev-player.mjs';
+import { chooseBuildingSite, isAirSupport, effectiveness, PLAN_STEP_AUTO } from '../src/player/werhd-jev-strategy.mjs';
 
 const catalog = {
   YARD: { yard: true, factory: 'BuildingType' }, POWER: { power: 200, cost: 800 },
@@ -53,11 +53,39 @@ credits = 1800;
 snap=collectState(api,catalog); groups=candidateGroups(api,catalog,snap,memory);
 assert.ok(groups.construction.actions.produce_AIRFIELD);
 assert.equal(snap.state.strategy.investment.name,'AIRFIELD');
+// The plan step is the engine's own -- `strategy.investment` names it and the reserve is set to its cost a
+// few lines later -- so the construction option carries the takeover mark, and the group is dropped from
+// the request when nothing else is on offer. jev-report-20261010-105509 put the same single-option plan
+// step (POWER FOR TECH) to the model eleven turns running and it was refused all eleven: unmarked and with
+// no `auto` there was no threshold at all for the engine to fall back on.
+assert.equal(groups.construction.actions.produce_AIRFIELD.engineOwned,true,'the funded technology step is engine-owned');
+assert.equal(groups.construction.actions.produce_AIRFIELD.auto,PLAN_STEP_AUTO,'with an explicit fallback: the ownership default of 1 would give the model one turn, not three');
+const planned=splitEngineOwned(requestGroupsFrom(groups,memory,snap.state.tick));
+assert.deepEqual(planned.owned.filter(x=>x.id==='construction'),[{id:'construction',choice:'produce_AIRFIELD'}],'and it is lifted when it is the only real construction option');
+assert.equal(planned.asked.construction,undefined,'so the model is not asked to ratify it');
 assert.ok(!groups.vehicles.actions.produce_TANK,'save for technology instead of endlessly rebuilding basic tanks');
 own.push(u(11,'AIRFIELD',2)); offered[0]=['POWER','REPAIR','LAB']; credits=2800;
 snap=collectState(api,catalog);groups=candidateGroups(api,catalog,snap,memory);
 assert.ok(groups.construction.actions.produce_LAB,'laboratory must be considered after its prerequisite unlocks');
 assert.equal(snap.state.strategy.investment.name,'LAB');
+assert.equal(groups.construction.actions.produce_LAB.engineOwned,true,'the next plan step carries the same mark');
+// The power plant that pays for the plan is the same decision on the same preconditions, so it is the same
+// non-question -- and it is the one the archived match actually looped on. The mark and the threshold are
+// asserted together on purpose: an owned option with no `auto` falls back on the first decline, so a future
+// edit that drops either half silently changes who answers.
+{
+  const savedMe=api.me;
+  api.me=()=>({credits,power:{total:200,drain:180}});   // margin 20: below the 100 the laboratory needs
+  const s=collectState(api,catalog),g=candidateGroups(api,catalog,s,memory);
+  assert.equal(s.state.strategy.investment?.name,'POWER','the plan becomes the power plant that pays for the technology');
+  assert.match(g.construction.criteria.produce_POWER,/^POWER FOR TECH/,'offered through the same construction group');
+  assert.equal(g.construction.actions.produce_POWER.engineOwned,true,'and it is the engine\'s own decision too');
+  assert.equal(g.construction.actions.produce_POWER.auto,PLAN_STEP_AUTO);
+  const lifted=splitEngineOwned(requestGroupsFrom(g,memory,s.state.tick));
+  assert.deepEqual(lifted.owned.filter(x=>x.id==='construction'),[{id:'construction',choice:'produce_POWER'}],'so the refusal loop cannot start');
+  assert.equal(lifted.asked.construction,undefined);
+  api.me=savedMe;
+}
 const rear=chooseBuildingSite(api,catalog,'LAB',own,memory);
 assert.ok(rear.x<30,'vulnerable technology buildings belong behind the firing line');
 
@@ -174,6 +202,7 @@ own.push(u(52,'REF',2,34,35),{...u(60,'MINER',7),isIdle:false},{...u(61,'MINER',
 snap=collectState(api,catalog);groups=candidateGroups(api,catalog,snap,{});
 assert.equal(snap.state.strategy.investment.name,'MINER','miner expansion must outrank discretionary technology');
 assert.ok(groups.vehicles.actions.produce_MINER);
+assert.notEqual(groups.vehicles.actions.produce_MINER.engineOwned,true,'the shared option builder feeds vehicles and defenses too; only the construction plan step is the engine\'s own decision');
 assert.ok(!groups.vehicles.actions.produce_TANK,'do not spend the reserved miner budget on armor');
 assert.equal(snap.state.decisionReadiness.vehicles.priority,'economy');
 assert.match(groups.vehicles.instructions,/ECONOMY FIRST/);

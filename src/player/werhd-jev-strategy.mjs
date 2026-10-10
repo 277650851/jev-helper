@@ -13,6 +13,18 @@ export const DEFENSE_SECTORS = 3;
 // counter-weapons with the special layer's wall options silently deleted; now that they survive, the
 // cap has to cover the whole list, because one multiple-choice question is what the local model reads.
 export const DEFENSE_OPTION_CAP = 5;
+// The construction group's own plan step -- "TECH ADVANCE" / "BREAK THE STALEMATE" and the power plant
+// that pays for it -- is not a question when it is the only thing on offer: `strategy.investment` is set
+// to it and the reserve to its cost a few lines below, so the engine has already chosen it. Marking the
+// option `engineOwned` makes `askableGroups` drop the group in that case, and `collectTakeovers` execute
+// it (`construction:produce_GAPOWR` was refused 11 turns in a row in jev-report-20261010-105509).
+//
+// `auto` must be declared explicitly. `thresholdOf` reads an owned option with no `auto` as a threshold of
+// 1, so leaving it out would silently collapse the fallback in the OTHER case: when another builder -- the
+// special layer's airfield, for instance -- puts a second real option beside this one, the group is still
+// asked and the engine must give the model more than one turn before its own plan wins. Three is the
+// figure the crate takeover uses (`werhd-jev-special.mjs`); the recovery rebuild uses two.
+export const PLAN_STEP_AUTO = 3;
 
 // Planning and the model share this eligibility set, even before starting cash arrives.
 export function vehicleOptions(api, catalog, state) {
@@ -422,10 +434,10 @@ export function investmentGroups(api, catalog, snapshot, memory, groups) {
   const queue = type => s.queues.find(q => q.type === type);
   const free = type => { const q = queue(type); return q && !q.size && q.maxSize !== 0; };
   const group = (id, instructions) => groups[id] ??= { instructions, criteria: { wait: 'Wait only if the offered investment is unnecessary or unaffordable.' }, actions: { wait: { type: 'wait' } } };
-  const add = (g, item, purpose, minCredits, placement) => {
+  const add = (g, item, purpose, minCredits, placement, extra) => {
     const r = catalog[item.name], key = `produce_${item.name}`;
     g.criteria[key] = `${purpose}: ${r.label}; cost ${r.cost}, technology level ${r.techLevel ?? 0}, power ${r.power ?? 0}, weapon range ${r.weapon?.range ?? 0}.`;
-    g.actions[key] = { type: 'produce', name: item.name, queue: item.queue, cost: r.cost, minCredits, placement };
+    g.actions[key] = { type: 'produce', name: item.name, queue: item.queue, cost: r.cost, minCredits, placement, ...extra };
   };
   // Add counter-weapons and a firing position to the defence question. This used to REPLACE the
   // group outright (`groups.defenses = {…}`), which silently threw away everything the special layer
@@ -619,11 +631,11 @@ export function investmentGroups(api, catalog, snapshot, memory, groups) {
       const r = catalog[item.name];
       techPlan = { name: item.name, cost: r.cost, queue: api.QueueType.Structures };
       if ((s.economy.powerMargin ?? 0) >= Math.max(0, -r.power) && s.self.credits >= Math.min(600, r.cost)) {
-        add(cg, { ...item, queue: api.QueueType.Structures }, `${strategy.suppressed ? 'BREAK THE STALEMATE' : 'TECH ADVANCE'}: unlock stronger units, support and defenses; prerequisites ${r.prerequisite?.join(',') || 'already met'}`, Math.min(600, r.cost));
+        add(cg, { ...item, queue: api.QueueType.Structures }, `${strategy.suppressed ? 'BREAK THE STALEMATE' : 'TECH ADVANCE'}: unlock stronger units, support and defenses; prerequisites ${r.prerequisite?.join(',') || 'already met'}`, Math.min(600, r.cost), undefined, { engineOwned: true, auto: PLAN_STEP_AUTO });
         cg.instructions += ' Prioritize the offered TECH ADVANCE/BREAK THE STALEMATE before duplicating a vehicle factory.';
       } else if ((s.economy.powerMargin ?? 0) < Math.max(0, -r.power)) {
         const power = api.production.available(api.QueueType.Structures).filter(i => catalog[i.name]?.power > 0).sort((a,b) => catalog[a.name].cost-catalog[b.name].cost)[0];
-        if (power && s.self.credits >= 300) { techPlan = { name: power.name, cost: catalog[power.name].cost, queue: api.QueueType.Structures }; add(cg, {...power, queue:api.QueueType.Structures}, 'POWER FOR TECH: supply the planned technology and defenses',300); }
+        if (power && s.self.credits >= 300) { techPlan = { name: power.name, cost: catalog[power.name].cost, queue: api.QueueType.Structures }; add(cg, {...power, queue:api.QueueType.Structures}, 'POWER FOR TECH: supply the planned technology and defenses',300, undefined, { engineOwned: true, auto: PLAN_STEP_AUTO }); }
       }
     }
   }
