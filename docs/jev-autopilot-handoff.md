@@ -22,12 +22,28 @@
 | 项 | 值 |
 |---|---|
 | 主线检出 | **`C:\laya\jev-helper`**（用户明确指定） |
-| 分支 | `fix/autopilot-p0-buildstamp-and-stability` |
+| 分支 | **`develop`**（长期开发分支，取代原 `fix/autopilot-p0-buildstamp-and-stability`） |
 | 远端 | `origin` = `https://github.com/277650851/jev-helper.git` |
 | 验证 | `npm test` → **217 项通过**（= `npm run package` + `node --test --test-concurrency=1 "test/*.test.mjs"`） |
 | 测试文件 | `test/` 下 **47** 个 `.test.mjs` |
 | 给扩展用 | `npm run build`，重载扩展，核对战报里的 `match.meta.build` |
 | 详细记录 | `docs/jev-autopilot-redesign-review.md` |
+
+### 分支与标签的约定（2026-10-14 确立）
+
+**`main` 是发布分支，不是开发分支。** 本分支自 `7f6d63a` 起领先 main 107 个提交，
+其中 11 项仍待真实对局验证（第 6 节），**短期内不会合并回 main**。
+所以工作线放在 `develop` 上，不要在 `fix/…` 这类"临时分支"名字上累积长期工作。
+
+| 引用 | 指向 | 用途 |
+|---|---|---|
+| `main` | `7f6d63a` | 发布基线；tag `v0.7.5` 也在此线 |
+| `develop` | 本线 | 长期开发，唯一工作分支 |
+| `autopilot-redesign-v0.50` | `9615e95` | develop 的归档 tag（§0.50 状态） |
+| `archive/wip-reserved-counter-auto` | `3961e6d` | 另一条线的完整 35 提交，仅归档，见第 3 节第 1 条 |
+
+评审文档里 `fix/autopilot-p0-buildstamp-and-stability` 的字样是**历史记录**，不必批量改写；
+但**从现在起新提交落在 `develop` 上**。
 
 **推送前提**：GitHub 需要用户启动 **FastGithub.UI** 代理，否则 `git push` 报
 `Failed to connect to github.com:443`。
@@ -40,9 +56,21 @@
    它与本分支自 `7f6d63a` 分叉，有 35 个提交，但**不含本分支任何一项修复**
    （`counterAverage` / `withRefusalReason` / `versesRow` / `canUnitHurt` / `rejectedBecause` 全部为 0）。
    任何"从那条线抄"的做法都已作废（评审 §0.37）。
+
+   > **2026-10-14 补充**：`C:\jev-merge` **目录已不存在**，而那条线的提交对象只剩本仓库里有。
+   > 它当时**不被任何分支或 tag 引用**，一次 `git gc --prune` 就会全部消失。
+   > 已抢救为 `archive/wip-reserved-counter-auto`（tip `3961e6d`，35 提交）
+   > 与 tag `archive-wip-reserved-counter-auto-3961e6d`，并已推送。
+   > **归档只是为了止损，"不要参考"这条禁令不变** —— 那条线仍是改崩的，
+   > 它的提交链 `07bc7ae → d083381 → 641bb4f → 3961e6d` 是四个不同时刻的快照，
+   > 最终态是 `3961e6d`。它的完整决策流程记录在 `docs/jev-player-flow.md`。
+
 2. **战报归属必须用 `git merge-base --is-ancestor` 判定，不能用 `git cat-file -e`。**
    后者只证明**对象存在**——`git fetch` 过的提交也会"存在"。
    评审 §0.32 记录了我因此得出**完全相反结论**的一次。
+   > **2026-10-14 补充**：判定"还有没有东西没抢救"时，
+   > `git cat-file -t <sha>` 对 4 个**不同**的快照 SHA 全都返回 `commit`——
+   > 对象存在 ≠ 可达。要问的是 `git merge-base --is-ancestor <sha> <某个分支或 tag>`。
 3. **新断言必须做变异验证**：改了实现，测试要变红。
    本评审多次出现"测试通过但抓不住缺陷"（§0.31、§0.33、§0.24）。
 4. **改字段的"含义"时必须搜出全部读取方。** 这是本任务出现**四次**的一类缺陷：
