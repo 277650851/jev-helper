@@ -109,6 +109,20 @@ const gateLines = (rows) => (Array.isArray(rows) ? rows.slice(0, 24).map((r) => 
   armed: number(r?.armed), declined: number(r?.declined), byModel: number(r?.byModel), fired: number(r?.fired),
 })) : []);
 
+// The decision-reward rows and their per-group aggregates. Bounded like everything else here: a long match
+// has ~500 decisions and this record is written to the Downloads report.
+const rewardRows = (rows) => (Array.isArray(rows) ? rows.slice(0, 120).map((r) => ({
+  tick: number(r?.tick), group: short(r?.group, 24), choice: short(r?.choice, 48),
+  auto: r?.auto === true, accepted: r?.accepted === true, windowTicks: number(r?.windowTicks),
+  dCredits: number(r?.dCredits), dOwn: number(r?.dOwn), dEnemy: number(r?.dEnemy),
+  lost: number(r?.lost), killed: number(r?.killed), exchange: number(r?.exchange),
+})) : []);
+const rewardGroups = (rows) => (Array.isArray(rows) ? rows.slice(0, 24).map((g) => ({
+  group: short(g?.group, 24), rows: number(g?.rows), chosen: number(g?.chosen), auto: number(g?.auto),
+  meanCredits: number(g?.meanCredits), meanExchange: number(g?.meanExchange),
+  killed: number(g?.killed), lost: number(g?.lost),
+})) : []);
+
 export function eventEntry(e, at) {
   const kind = short(e?.kind, 24);
   const base = { at, kind, tick: number(e?.tick) };
@@ -132,6 +146,13 @@ export function eventEntry(e, at) {
   // readers already parse changes its meaning for all of them at once.
   if (kind === 'gates') return { ...base, declared: number(e.declared), armed: number(e.armed), byModel: number(e.byModel), firedTotal: number(e.firedTotal),
     neverFired: gateLines(e.neverFired), fired: gateLines(e.fired) };
+  // The decision-reward labels, written once when a match ends. This is the signal every later learning step
+  // reads: without it a report says what was chosen but never what followed, which is why no offline learning
+  // route was possible before. `rows` is the full count and `list` is capped, so a reader cannot mistake a
+  // truncated list for the whole match.
+  if (kind === 'rewards') return { ...base, rows: number(e.rows), open: number(e.open), dropped: number(e.dropped),
+    totalCredits: number(e.totalCredits), totalExchange: number(e.totalExchange),
+    groups: rewardGroups(e.groups), list: rewardRows(e.list) };
   if (kind === 'outcome') return { ...base, result: short(e.result, 24),
     ...(Array.isArray(e.players) ? { players: e.players.slice(0, 16).map((p) => ({ name: short(p?.name, 30), allied: !!p?.allied, defeated: !!p?.defeated })) } : {}),
     ...(e.objective ? { objective: { id: number(e.objective.id), label: short(e.objective.label, 60), done: !!e.objective.done, captured: !!e.objective.captured, lost: !!e.objective.lost, hp: number(e.objective.hp), ...afterCapture(e.objective.afterCapture) } } : {}),

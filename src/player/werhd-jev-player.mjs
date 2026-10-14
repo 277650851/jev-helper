@@ -6,6 +6,7 @@ import { refreshCatalog, isDecoration } from "./werhd-jev-catalog.mjs";
 import { trackObjective, isGuardedByObjective } from "./werhd-jev-objective.mjs";
 import { buildEnemyProfile, counterBrief } from "./werhd-jev-counter.mjs";
 import { fallbackCounter, summarizeFallbacks } from "../fallback-stats.mjs";
+import { openReward, closeRewards, summarizeRewards } from "../reward-window.mjs";
 // Ordinary page-side player: every observation and command uses window.werhd.
 // Bundled into the browser extension; transport and credentials live outside the game page.
 
@@ -2472,6 +2473,20 @@ export async function attachJevPlayer(api, options = {}) {
     progressTick = -1,
     progressAt = performance.now();
   const emit = (event) => {
+    // Every executed decision funnels through here as a `kind: "action"` event -- model picks, engine
+    // takeovers and refusals alike -- so opening the reward window here covers all of them in one place,
+    // with no change to the decision loop. The baseline is the last observation sample (taken every 60
+    // ticks), which is why opening costs no extra `collectState` call. `tick` comes off the event rather
+    // than `api.tick()`, so this stays safe on the paths that run after the battle is gone.
+    if (event?.kind === "action")
+      openReward(memory, {
+        tick: event.tick ?? event.sourceTick,
+        group: event.question,
+        choice: event.choice,
+        accepted: event.accepted === true,
+        auto: event.auto === true,
+        sample: status.observations.at(-1),
+      });
     status.events.push(event);
     if (status.events.length > 400) status.events.shift();
     options.onEvent?.(event);
@@ -2512,6 +2527,19 @@ export async function attachJevPlayer(api, options = {}) {
     // came from to know whether it was ever armed -- that asymmetry is exactly the bug class this tally is
     // meant to expose, and repeating it in the wire format would be self-defeating.
     const gateRow = (s) => ({ group: s.group, key: s.key, threshold: s.threshold, armed: s.armed, declined: s.declined, byModel: s.byModel, fired: s.fired });
+    // The reward labels for this match, emitted before `stop` for the same reason the fallback tally is:
+    // they are the signal every later learning step needs, and they must survive however the match ended.
+    const rewards = summarizeRewards(memory);
+    emit({
+      kind: "rewards",
+      rows: rewards.rows,
+      open: rewards.open,
+      dropped: rewards.dropped,
+      totalCredits: rewards.totalCredits,
+      totalExchange: rewards.totalExchange,
+      groups: rewards.groups.slice(0, 24),
+      list: rewards.list,
+    });
     emit({
       kind: "gates",
       // No `tick`: `stop()` runs when the battle is already gone, and `api.tick()` throws outside a running
@@ -2597,6 +2625,9 @@ export async function attachJevPlayer(api, options = {}) {
           };
         status.observations.push(o);
         if (status.observations.length > 180) status.observations.shift();
+        // Every window whose horizon has passed is closed against this sample. Closing here (rather than on
+        // each decision) is what keeps the cost to one pass per 60 ticks instead of one per decision.
+        closeRewards(memory, o.tick, o);
         emit(o);
         lastObservationTick = api.tick();
       }
