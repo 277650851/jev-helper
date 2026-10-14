@@ -67,3 +67,65 @@ test('income counts what was spent, and the first refinery still comes before an
   const s2=collectState(bare.api,catalog);const g2=candidateGroups(bare.api,catalog,s2,bare.memory);
   assert.equal(s2.state.economy.targetMiners,0);assert.equal(s2.state.economy.targetRefineries,1);assert.ok(g2.construction.actions.produce_REFINERY);
 });
+
+// Four matches in a row ended in economic_stall, and this is the shape they shared. The miner target is
+// derived from the refinery count, the refinery count is pinned at 1, so the miner target is pinned at
+// 2 -- and a base on two ore miners that fields twenty tanks cannot replace what it loses. In
+// jev-report-20261014-233357 the army went from 18 units to 4 between the 1 000th and 1 100th second
+// with 69 credits in hand: the losses arrived, and there was no income to meet them with.
+//
+// A credit trigger cannot fix this. By the time credits are low the army is already gone, so the signal
+// has to be the one that leads: losing units faster than the base can earn the cost of replacing them.
+test('losing units faster than the base can earn their cost expands the economy, while credits are still there', () => {
+  const own=[...base, {...unit(6,'HARV',7,30,12),isIdle:false}, {...unit(7,'HARV',7,31,12),isIdle:false}];
+  const { api, memory } = world({ own, credits:3000, tick:5000, offers });
+  // 18 tanks lost over the window, 700 each = 12 600 of replacements, against 3 000 earned. The
+  // samples carry `lost` because that is the shape economyPlan writes them in -- the replacement bill
+  // and the income have to be measured over the same span or the comparison is meaningless.
+  memory.economySamples=[{tick:3500,credits:1000,spent:0,lost:22}];
+  memory.spentCredits=5000;
+  memory.ledger={ownUnitsLost:40};
+  const snap=collectState(api,catalog);
+  const g=candidateGroups(api,catalog,snap,memory);
+  const e=snap.state.economy;
+  assert.equal(e.lostInWindow,18);
+  assert.ok(e.outran,`the base is losing more than it earns (lost ${e.lostInWindow} units, replacement cost ${e.replacementCost}, income ${e.incomeRate})`);
+  assert.ok(e.targetMiners>2,`the miner target rises past the two a single refinery can justify (got ${e.targetMiners})`);
+  assert.ok(e.targetRefineries>1,`and a second refinery is asked for once the miners are not the binding constraint (got ${e.targetRefineries})`);
+  assert.match(e.reason,/cannot keep up with losses/);
+});
+
+test('a base whose income keeps up with its losses is not asked to expand', () => {
+  const own=[...base, {...unit(6,'HARV',7,30,12),isIdle:false}, {...unit(7,'HARV',7,31,12),isIdle:false}];
+  const { api, memory } = world({ own, credits:3000, tick:5000, offers });
+  // Two units lost over the window, 1 400 of replacements, against 25 000 earned: comfortably covered.
+  memory.economySamples=[{tick:3500,credits:1000,spent:0,lost:10}];
+  memory.spentCredits=26000;
+  memory.ledger={ownUnitsLost:12};
+  const snap=collectState(api,catalog);candidateGroups(api,catalog,snap,memory);
+  const e=snap.state.economy;
+  assert.equal(e.outran,false);
+  assert.equal(e.targetRefineries,1,'a healthy base still keeps to one refinery');
+});
+
+test('a base taking no losses at all is never told to expand', () => {
+  const own=[...base, {...unit(6,'HARV',7,30,12),isIdle:false}];
+  const { api, memory } = world({ own, credits:800, tick:5000, offers });
+  memory.economySamples=[{tick:3500,credits:2500,spent:0,lost:3}];
+  memory.ledger={ownUnitsLost:3};
+  const snap=collectState(api,catalog);candidateGroups(api,catalog,snap,memory);
+  assert.equal(snap.state.economy.outran,false,'losing nothing is not a reason to spend on ore');
+});
+
+test('a sample written before the loss counter existed does not trigger an expansion', () => {
+  // memory.economySamples lives in the session, so a build that adds `lost` meets samples without it.
+  // Defaulting the window start to "no losses yet" makes the bill zero, which does nothing -- the safe
+  // direction: a missing field must never be read as an emergency.
+  const own=[...base, {...unit(6,'HARV',7,30,12),isIdle:false}];
+  const { api, memory } = world({ own, credits:800, tick:5000, offers });
+  memory.economySamples=[{tick:3500,credits:2500,spent:0}];
+  memory.ledger={ownUnitsLost:30};
+  const snap=collectState(api,catalog);candidateGroups(api,catalog,snap,memory);
+  assert.equal(snap.state.economy.lostInWindow,0);
+  assert.equal(snap.state.economy.outran,false);
+});

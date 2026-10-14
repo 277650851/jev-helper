@@ -226,7 +226,11 @@ export function economyPlan(api, catalog, state, memory, units) {
   const refineries = units.filter(u => catalog[u.name]?.refinery).length;
   const credits = state.self?.credits ?? 0, spent = memory.spentCredits ?? 0;
   const samples = memory.economySamples ??= [];
-  if (!samples.length || tick - samples.at(-1).tick >= 60) samples.push({ tick, credits, spent });
+  // The unit-loss counter rides along in the same samples. It has to be the same window as the income:
+  // comparing a replacement bill measured over one span against income measured over another is how
+  // this ends up comparing a tank to a fortnight of ore.
+  const lostTotal = memory.ledger?.ownUnitsLost ?? 0;
+  if (!samples.length || tick - samples.at(-1).tick >= 60) samples.push({ tick, credits, spent, lost: lostTotal });
   while (samples.length > 1 && tick - samples[0].tick > ECONOMY_WINDOW_TICKS) samples.shift();
   const first = samples[0], span = tick - first.tick;
   const income = (credits - first.credits) + (spent - first.spent);
@@ -235,18 +239,54 @@ export function economyPlan(api, catalog, state, memory, units) {
   const idleMiners = miners.filter(u => u.isIdle && !findVisibleOre(api, u.tile)).length;
   const surplus = credits >= 4000 && trend >= 0;
   const starving = credits < 1500 && trend <= 0;
+
+  // Income has to keep up with what the fight costs.
+  //
+  // The miner target is derived from the refinery count and the refinery count is fixed, so the two
+  // together pin the economy at whatever one refinery can justify -- and a base on that income fields
+  // an army it cannot replace. Four matches in a row ended this way (docs/losses.md, all
+  // `economic_stall`): in jev-report-20261014-233357 the army went from 18 units to 4 between the
+  // 1 000th and 1 100th second holding 69 credits, and the miner was offered exactly once in the whole
+  // match, at the 266th second, as "needed to reach 3 miners". It was never offered again, because by
+  // then the target said 2 and we had 2.
+  //
+  // A credit trigger cannot see this coming: by the time credits are low the army has already been
+  // spent, which is why the previous "expand while starving" rule fired too late to matter. The signal
+  // that leads is the replacement bill itself -- over the same window, what the army lost against what
+  // the base earned. When the bill is larger than the income, no amount of good fighting saves the
+  // match, and the answer is more ore rather than a better attack.
+  const lostNow = memory.ledger?.ownUnitsLost ?? 0;
+  const firstLost = first.lost ?? lostNow;
+  const lostInWindow = Math.max(0, lostNow - firstLost);
+  // What a lost unit has to be replaced *with*, not what it happened to cost. A miner is cheap and a
+  // tank is not, and a base that trades a technician for a tank every other loss is not poor, it is
+  // losing tanks. The cheapest armed unit on offer is the conservative reading; a heavier army costs
+  // more to hold and this has to err toward acting.
+  const replacementCost = catalog && units
+    ? lostInWindow * Math.min(1000, ...units.map((u) => catalog[u.name]?.weapon?.damage > 0 ? (catalog[u.name]?.cost ?? 700) : Infinity))
+    : lostInWindow * 700;
+  // Only over a window long enough for the rate to mean something, and only once there is a bill at all.
+  const outran = span >= 300 && lostInWindow > 0 && replacementCost > income;
   let targetMiners, reason;
-  if (!refineries) { targetMiners = 0; reason = "no refinery yet: a refinery comes before any miner"; }
+  if (outran) {
+    // More ore per refinery, then more refineries: a third miner on one refinery is capped by that
+    // refinery's loading, so past the per-refinery target the binding constraint is the refinery.
+    targetMiners = Math.min(4, Math.max(miners.length + 1, refineries * 2));
+    reason = `the army lost ${lostInWindow} unit${lostInWindow === 1 ? "" : "s"} in the last window, about ${Math.round(replacementCost)} credits of replacements against ${Math.round(income)} earned: income cannot keep up with losses, so expand mining toward ${targetMiners}`;
+  } else if (!refineries) { targetMiners = 0; reason = "no refinery yet: a refinery comes before any miner"; }
   else if (idleMiners) { targetMiners = miners.length; reason = `${idleMiners} of ${miners.length} miners idle without reachable ore; another miner would be wasted`; }
   else if (surplus) { targetMiners = Math.max(1, miners.length); reason = `credits ${credits} and ${trend > 0 ? "rising" : "steady"} (${income >= 0 ? "+" : ""}${income} earned in the last window): money is not the bottleneck, keep ${targetMiners} miner${targetMiners === 1 ? "" : "s"}`; }
   else if (starving) { targetMiners = Math.min(3, Math.max(2, refineries * 2)); reason = `credits ${credits} and falling: expand mining toward ${targetMiners} miners`; }
   else { targetMiners = Math.min(3, Math.max(1, miners.length, refineries * 2)); reason = `income roughly covers spending (credits ${credits}, ${trend >= 0 ? "+" : ""}${trend} over the window): ${targetMiners} miner${targetMiners === 1 ? "" : "s"} for ${refineries} refiner${refineries === 1 ? "y" : "ies"}`; }
-  // One refinery is the plan. A second one only ever appeared while starving with two miners, and in
-  // jev-report-20261008-054847 the base spent its build orders on a duplicate instead of on the
-  // defenses and army it needed. A single refinery fed by its target miners is the opening; a second
-  // one is a late-game decision, not an automatic one.
-  const targetRefineries = 1;
-  return { targetMiners, targetRefineries, incomeRate, trend, surplus, starving, idleMiners, reason };
+  // One refinery is the plan until the army outruns the income it feeds. It used to be the plan
+  // unconditionally, on the strength of one report (jev-report-20261008-054847) where a second
+  // refinery took build orders that the defenses and the army needed instead. That was the right call
+  // against a base that could not use what a second refinery earned -- but it removed the only way
+  // income could ever grow, and the four `economic_stall` losses are what that looks like from the
+  // other side. A second refinery is now asked for when the replacement bill is outrunning income,
+  // which is the condition the first report was actually about.
+  const targetRefineries = outran && targetMiners > refineries * 2 ? 2 : 1;
+  return { targetMiners, targetRefineries, incomeRate, trend, surplus, starving, idleMiners, outran, lostInWindow, replacementCost, reason };
 }
 
 // How the fighting is going, and what else could be brought to bear. Losses and kills come from
