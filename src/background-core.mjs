@@ -4,7 +4,7 @@ import {summarize,recordObservation} from './telemetry.mjs';
 import {LOG_KEY,appendEntries,trimMatchEntries,trimReportEntries,decisionEntry,commandEntry,eventEntry,logStats} from './logbook.mjs';
 
 export function createBackground(c, {fetchImpl = fetch, now = Date.now, uuid = () => crypto.randomUUID()} = {}) {
-  const inflight = new Map(), controlLocks = new Map(), stateLocks = new Map();
+  const inflight = new Map(), controlLocks = new Map(), stateLocks = new Map(), eventLocks = new Map();
   let probing=false;
   // storage.setAccessLevel is Chromium 118+, and the storage.local variant is missing on some
   // Edge builds (absent on Edge 130). This runs at top level, so an unguarded call throws during
@@ -343,7 +343,17 @@ export function createBackground(c, {fetchImpl = fetch, now = Date.now, uuid = (
       return {...config,running:true,decisions:current.decisions??0,credits:current.credits,latencyMs:current.latencyMs,lastTick:current.lastTick,failures:current.failures??0,losses:l?{ownUnits:l.ownUnitsLost,ownBuildings:l.ownBuildingsLost,enemyUnits:l.enemyUnitsDestroyed,enemyBuildings:l.enemyBuildingsDestroyed}:null};
     }
     if(message.type==='DECIDE')return decide(message,sender);
-    if(message.type==='EVENT')return event(message,sender);
+    // Events from one tab are processed one at a time, in the order they were emitted.
+    //
+    // They were handled concurrently, and `authorize` requires the session to still be running, so the
+    // page's final three events -- `rewards`, `gates`, then `stop` -- raced each other: the moment the
+    // `stop` handler reached its `patch`, `running` went false and the two summaries that were emitted
+    // BEFORE it were rejected as a dead session and never logged. jev-report-20261015-043756 lost both
+    // records that way (its `match.reason` is `battle_ended`, and it contains no `stop`, `gates` or
+    // `rewards` entry at all), while jev-report-20261015-024314 happened to win the race. Serialising on a
+    // lock of its own -- NOT `stateLocks`, which `patch()` takes, and which would make this task wait on a
+    // task that is waiting on it (see the comment on `abandon` below) -- restores the emission order.
+    if(message.type==='EVENT')return serial(eventLocks,sender.tab.id,()=>event(message,sender));
     if(message.type==='HOTKEY_TOGGLE'){
       if(sender.id!==c.runtime.id || sender.frameId!==0 || !supportedGame(sender.url))throw new Error('不支持此游戏页面。');
       return serial(controlLocks,sender.tab.id,async()=> (await getSession(sender.tab.id))?.running?stop(sender.tab.id):start(sender.tab.id));

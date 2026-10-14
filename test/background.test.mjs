@@ -406,3 +406,36 @@ test('the live event feed keeps the same attribution a saved report does',async(
   assert.equal(e.accepted,false);
   assert.doesNotMatch(e.text,/^engine_decided$/,'the display text is not just the decider');
 });
+
+test('the events a match ends with are logged in the order the page emitted them',async()=>{
+  // The page posts these three in one tick, `rewards` -> `gates` -> `stop`. Their handlers used to run
+  // concurrently, and `authorize` requires a running session: as soon as the `stop` handler reached its
+  // `patch`, `running` went false and the two summaries emitted BEFORE it were rejected as a dead session.
+  // jev-report-20261015-043756 lost both that way -- `match.reason` is `battle_ended` and the report holds
+  // no `stop`, `gates` or `rewards` entry at all -- while jev-report-20261015-024314 happened to win the
+  // race. The summaries are the whole point of the tally, so they must not depend on winning it.
+  const x=await setup(async()=>answer());
+  // The race has to be made deterministic, or the test passes whether the lock is there or not: in this
+  // mock a session read resolves in a microtask, so three handlers started in order happen to finish in
+  // order. Delaying the first two reads reproduces what the real background does -- the two summaries are
+  // still inside `authorize` when the `stop` that follows them reaches its `patch` and clears `running`.
+  const realGet=x.c.storage.session.get;
+  let reads=0;
+  x.c.storage.session.get=async key=>{if(reads++<2)await new Promise(r=>setTimeout(r,20));return realGet(key);};
+  const send=event=>x.app.handle({type:'EVENT',token:x.s.token,event},sender).catch(e=>e);
+  await Promise.all([
+    send({kind:'rewards',rows:3,open:0,dropped:0,totalCredits:-40,totalExchange:-2,groups:[],list:[]}),
+    send({kind:'gates',declared:1,armed:5,byModel:2,firedTotal:1,neverFired:[],fired:[]}),
+    send({kind:'stop',reason:'battle_ended',decisions:12,accepted:9}),
+  ]);
+  const {matches}=await x.app.handle({type:'MATCHES_LIST'},extension);
+  assert.equal(matches[0].reason,'battle_ended','the stop was recorded');
+  const log=await x.app.handle({type:'MATCH_LOG_GET',id:matches[0].id},extension);
+  const kinds=log.entries.map(e=>e.kind);
+  assert.equal(kinds.filter(k=>k==='rewards').length,1,'the reward summary survives the stop that follows it');
+  assert.equal(kinds.filter(k=>k==='gates').length,1,'the fallback tally survives the stop that follows it');
+  assert.ok(kinds.indexOf('rewards')<kinds.indexOf('stop'),'emission order is preserved');
+  assert.ok(kinds.indexOf('gates')<kinds.indexOf('stop'),'emission order is preserved');
+  const rewards=log.entries.find(e=>e.kind==='rewards');
+  assert.equal(rewards.rows,3,'and it carries its numbers, not just its kind');
+});
