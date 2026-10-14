@@ -92,14 +92,26 @@ jobs:
         run: |
           tag="v${VERSION}"
 
-          # Guard on the TAG, not on the release. A release can be missing while its
-          # tag exists -- that is the current state of this repo (tags v0.4.4 / v0.7.5,
-          # no releases). Checking `gh release view` would pass, and
-          # `gh release create --target HEAD` would then attach a ZIP built from the
-          # new commit to the OLD tag, so the artifact and its provenance disagree.
+          # The project deliberately stays on one version number, so this case is expected to recur:
+          # the tag for the current version already exists while main has moved past it. Skip the
+          # release rather than failing the run -- but never reach `gh release create`, because
+          # `--target $GITHUB_SHA` would attach a ZIP built from the new commit to a tag pointing at
+          # the old one, so the artifact and its provenance would silently disagree.
           if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
-            echo "::error::Tag $tag already exists at $(git rev-list -n 1 "$tag" | cut -c1-7), but this build is from $GITHUB_SHA. Bump the version in package.json and public/manifest.json to publish a new one; re-tagging an existing release silently mislabels the artifact." >&2
-            exit 1
+            at="$(git rev-list -n 1 "$tag" | cut -c1-7)"
+            {
+              echo "### No release published"
+              echo
+              echo "Version is still \`$VERSION\` and tag \`$tag\` already exists (pointing at \`$at\`),"
+              echo "while this build is from \`$(echo "$GITHUB_SHA" | cut -c1-7)\`. Skipped on purpose:"
+              echo "attaching the new ZIP to the old tag would mislabel the artifact."
+              echo
+              echo "Checks passed and the ZIP is in this run's artifacts either way."
+              echo "To publish, either move \`$tag\` to the release commit, or raise the version in"
+              echo "\`package.json\` and \`public/manifest.json\`. Staying on \`$VERSION\` is fine."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::warning::Tag $tag already exists at $at; build is from $(echo "$GITHUB_SHA" | cut -c1-7). Not publishing, to avoid attaching a new ZIP to an old tag. Move the tag or raise the version to publish." >&2
+            exit 0
           fi
           if gh release view "$tag" >/dev/null 2>&1; then
             echo "Release $tag already exists, skipping." >> "$GITHUB_STEP_SUMMARY"

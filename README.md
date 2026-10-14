@@ -357,7 +357,7 @@ npm run package
 
 ### 发版
 
-推送到 `main` 时 GitHub Actions 会自动检查版本号、执行 `npm test`（构建、打包、测试各一次），并按 `package.json` 的版本号发布 Release（标签 `v<版本>`，附带 ZIP 和 SHA-256）。`develop` 同样会跑检查，但**不发布**（未发布的重构不能进 Release）。PR 只做检查不发版。发新版前先同步修改 `package.json` 与 `public/manifest.json` 的版本号（不一致时工作流在最前面直接失败，本地 `npm run package` 也会拒绝打包）。工作流见 `.github/workflows/release.yml`。
+推送到 `main` 时 GitHub Actions 会自动检查版本号、执行 `npm test`（构建、打包、测试各一次），并按 `package.json` 的版本号发布 Release（标签 `v<版本>`，附带 ZIP 和 SHA-256）。`develop` 同样会跑检查，但**不发布**（未发布的重构不能进 Release）。PR 只做检查不发版。版本号保持 `0.7.5`，不随提交递增；标签已存在时工作流会跳过发布并说明原因（详见下方状态说明），不会把新构建挂到旧标签上。工作流见 `.github/workflows/release.yml`。
 
 > **当前仓库状态（2026-10-14 核实）：Actions 从未运行过，Release 数量为 0。**
 > `.github/workflows/release.yml` 自 2026-09-24 加入后，`main` 上已有 56 次符合条件的推送，
@@ -365,9 +365,14 @@ npm run package
 > （私有库 + 账户套餐额度，或仓库级关闭）。**上面描述的是工作流本身的行为，不代表它现在真的在跑。**
 >
 > 另有两个既成事实：标签 `v0.4.4` 与 `v0.7.5` 存在，但对应 Release 从未创建；
-> `package.json` 版本号仍是 `0.7.5`，与 `v0.7.5` 标签指向的提交不同。
-> 因此发版前必须先升版本号 —— 工作流现在会在标签已存在时**直接失败**，
-> 而不是把新构建的 ZIP 挂到旧标签上（那会让产物与出处对不上）。
+> 版本号一直停在 `0.7.5`，而 `v0.7.5` 标签指向的是 2026-09-27 的提交，`main` 此后已前进。
+>
+> **版本号保持 `0.7.5` 是有意的**，所以"标签已存在"是常态而非异常。工作流的处理是
+> **跳过发布并给出说明**（`::warning::` + 构建摘要），而不是让流水线变红：
+> 检查与打包照常通过，ZIP 仍在本次运行的 artifacts 里。
+> 唯一不做的是 `gh release create` —— 它带 `--target $GITHUB_SHA`，
+> 若走到那一步，会把**新提交构建的 ZIP 挂到指向旧提交的标签上**，产物与出处对不上且不报错。
+> 真要发布时，二选一：把 `v0.7.5` 标签移到发布提交，或升版本号。继续停在 `0.7.5` 也没问题。
 >
 > 要恢复自动发版：在仓库 Settings → Actions 里启用 Actions，再推送一次 `main` 或手动
 > `workflow_dispatch` 验证。
