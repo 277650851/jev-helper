@@ -69,6 +69,15 @@ export const UNIT_PURPOSE = {
   GAOREP: 'ore purifier; raises the credits every load of ore is worth',
   INDUSTRIALPLANT: 'industrial plant; every vehicle afterwards costs less',
   CAOILD: 'tech oil derrick; capture it and it pays credits for the rest of the match',
+  // The neutral buildings a barracks-and-engineer opening should go and take. They are the cheapest
+  // advantage on the map: an engineer costs 500 and one of these is permanent (docs/ra2-unit-catalog.md §0).
+  // `isCapturable` already recognises all seven by name; these lines are what makes their value rankable.
+  CAOUTP: 'tech outpost; capture it for free vehicle repair and its own anti-air missiles',
+  CATHOSP: 'tech hospital; capture it and every infantry unit regenerates for the rest of the match',
+  CAAIRP: 'tech airport; capture it for free paradrops, on offence and defence',
+  CASLAB: 'secret lab; capture it to unlock a random country-specific unit',
+  CAMACH: 'tech machine shop; capture it and every vehicle repairs itself for the rest of the match',
+  CAPOWR: 'tech power plant; capture it for free power, but it explodes when destroyed',
 };
 
 /** One line on what this is for, or `undefined` when the catalog doc has no row for it. */

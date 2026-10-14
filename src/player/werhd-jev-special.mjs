@@ -510,8 +510,20 @@ export function specialGroups(api, catalog, snapshot, memory, groups) {
   // rest of the match is played without. Capped by the target list, so this cannot run away.
   const engineersWanted = Math.min(captureTargets.length, Math.min(4, captureTargets.length)) + (wanted && armedNear(wanted.tile) ? 1 : 0) + (huts.length && bridgeUrgent ? 1 : 0);
   const objectiveEngineer = wanted && engineers.length < engineersWanted;
-  if (engineersWanted > engineers.length && freeQueue(api.QueueType.Infantry) && (snapshot.state.self.credits > 1800 || objectiveEngineer)) {
-    const engineer = available.find((u) => catalog[u.name]?.engineer && afford(catalog[u.name], objectiveEngineer ? 0 : 1200));
+  // The opening a barracks is supposed to enable: go and take the neutral buildings. They are the cheapest
+  // advantage on the map -- `[ENGINEER] Cost=500, Strength=75` in rules.ini, i.e. CHEAPER THAN A GRIZZLY
+  // (MTNK 750), while a tech oil derrick pays `ProduceCashStartup=1000` the moment it is taken plus 20 a
+  // cycle, and a tech outpost brings anti-air and free vehicle repair for the rest of the match
+  // (docs/ra2-unit-catalog.md §0). The gate used to be `credits > 1800` and the training call reserved
+  // another 1200 on top, so a base that had just finished its barracks never trained one and the buildings
+  // sat there all match. There is no invented margin any more: the engineer is offered as soon as its own
+  // cost is affordable, which is what the trade actually needs.
+  const engineerRule = available.find((u) => catalog[u.name]?.engineer);
+  const engineerCost = catalog[engineerRule?.name]?.cost ?? 500;
+  const neutralTarget = captureTargets.find((c) => c.neutral && !c.defended);
+  const earlyEngineer = !!neutralTarget && !!engineerRule && snapshot.state.self.credits >= engineerCost;
+  if (engineersWanted > engineers.length && freeQueue(api.QueueType.Infantry) && (snapshot.state.self.credits > 1800 || objectiveEngineer || earlyEngineer)) {
+    const engineer = available.find((u) => catalog[u.name]?.engineer && afford(catalog[u.name], objectiveEngineer || earlyEngineer ? 0 : 1200));
     const first = captureTargets[0];
     if (engineer) addProduction(group('infantry', ''), { ...engineer, queue: api.QueueType.Infantry },
       huts.length && bridgeUrgent ? `PRIORITY: train an engineer to repair the bridge (${bridgeWhy})` : objectiveEngineer ? `MISSION OBJECTIVE: train an engineer to capture ${catalog[wanted.name]?.label ?? wanted.name} #${wanted.id}` : first ? `OBJECTIVE: train an engineer to capture ${catalog[first.unit.name]?.label ?? first.unit.name} #${first.unit.id}${captureTargets.length > 1 ? ` and ${captureTargets.length - 1} more capturable structure${captureTargets.length > 2 ? 's' : ''}` : ''}` : 'Train one engineer for visible bridge repair',
