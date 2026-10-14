@@ -524,6 +524,21 @@ export function frontierPoints(api, base, memory) {
 // Assault options per question (a small model sees ~256 tokens of options), how far from the troops
 // a mobile enemy may be to be offered for engagement, and how long a rally point stays put.
 export const MAX_ASSAULTS = 6, MAX_ASSAULTS_WITH_OBJECTIVE = 4, ENGAGE_RADIUS = 15, RALLY_HOLD_TICKS = 1800, OBJECTIVE_GUARD_RADIUS = 10;
+// How long a scout already on its way counts as "travelling": until this many ticks have passed, the
+// scouting question is not asked again.
+//
+// It was 450, and that is what produced the largest single waste in the decision budget. Measured over ten
+// real reports: the `scouting` group with `explore_` candidates was 1342 of 4696 group-questions (29%), the
+// model took 14 of them (1%) and answered `wait` to 1328 -- and the `activeMission.ageTicks` at the moment
+// those questions were asked had a median of 1031 and a maximum of 7191. So the 450-tick window expired
+// while the scout was still en route, the engine re-asked on every turn, and the model -- which can see
+// `activeMission.mode === "explore"` in the minority of turns where that field survives the context cap --
+// answered `wait`, which is exactly what the question's own criterion tells it to do.
+//
+// 2700 is not a new number: it is the horizon this project already uses for "this is not progressing"
+// (FORCE_STALL_TICKS, STALE_ATTACK_TICKS, ATTACK_STUCK_TICKS). Past it the scout counts as stuck and the
+// frontiers are offered again, which is the case the old 450 was really guarding against.
+export const SCOUT_TRAVEL_TICKS = 2700;
 // The rally point used to be re-scored every turn, including how many of our units stood nearby,
 // so it wandered and the gather order was re-sent over and over. It now stays for a while.
 export function stableRallySite(api, catalog, own, base, memory) {
@@ -1138,7 +1153,13 @@ export function candidateGroups(api, catalog, snapshot, memory) {
     explorers.every(
       (u) => Math.hypot(u.tile.rx - oldMission.x, u.tile.ry - oldMission.y) > 4,
     ) &&
-    api.tick() - oldMission.since < 450;
+    api.tick() - oldMission.since < SCOUT_TRAVEL_TICKS;
+  // The model is asked to judge "a scout is already moving", and that fact is NOT in `activeMission`: a
+  // scout sent out while the army attacks is tracked in `memory.scoutMission`, which `activeMission` (built
+  // from `memory.mission` above) never shows. Measured on ten reports, 86% of the scouting questions were
+  // asked while `activeMission.mode` read rally / defend / attack. So the one field the criterion needs is
+  // published here, next to the criterion that uses it.
+  state.scoutMoving = !!travelling;
   // Keep revealing the map while no attack is possible: an enemy building seen once must not end scouting.
   // The objective has never been seen: keep looking for it even while the army can attack.
   const objectiveUnseen = !!memory.objectiveKeys?.words?.length && !memory.objectiveTarget;
@@ -1162,8 +1183,8 @@ export function candidateGroups(api, catalog, snapshot, memory) {
     if (objectiveUnseen) groups.scouting.instructions = `SEARCHING FOR THE OBJECTIVE (${memory.objectiveKeys.words.join(" / ")}): it has not been seen yet; scouting is how to find it. ` + groups.scouting.instructions;
     groups.scouting.criteria.wait =
       memory.enemyBuildings.size
-        ? "Wait only if a scout is already moving. The force is not ready to attack, so one expendable unit should keep revealing the map for objectives and enemy positions."
-        : "Wait only if a scout is already moving or the enemy base has already been discovered. With idle troops and an unknown enemy base, choose one of the frontiers.";
+        ? "Wait only if a scout is already moving (state.scoutMoving is true). The force is not ready to attack, so one expendable unit should keep revealing the map for objectives and enemy positions."
+        : "Wait only if a scout is already moving (state.scoutMoving is true). With idle troops and an unknown enemy base, choose one of the frontiers.";
     // Frontier scouting while the enemy base is unknown is not a judgement call, and the two frontiers are
     // near-identical options that differ only in coordinates -- a multiple-choice model cannot rank them
     // meaningfully (the local one answered `wait` to 13 of 15 scouting questions in one match). So the

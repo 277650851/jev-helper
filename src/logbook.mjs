@@ -39,6 +39,12 @@ export function stateSummary(state = {}) {
     // was not archived here, so the question could not be settled from the report. Mode and age only: this
     // summary carries no coordinates and no unit lists.
     activeMission: state.activeMission ? { mode: short(state.activeMission.mode, 16), ageTicks: number(state.activeMission.ageTicks) } : null,
+    // Whether a scout is currently on its way, independent of `activeMission`: a scout sent while the army
+    // attacks is tracked in `memory.scoutMission`, which `activeMission` never shows. Without it archived,
+    // the scouting question's own `wait` criterion ("wait only if a scout is already moving") could not be
+    // checked against a report at all -- and that criterion is why 1328 of 1342 scouting questions were
+    // answered `wait` across ten matches.
+    scoutMoving: state.scoutMoving === true,
     // The economy plan the engine is acting on. Four matches in a row were lost to the same thing
     // (docs/losses.md, all `economic_stall`) and none of it was visible here: the miner target is
     // derived from the refinery count, so the whole diagnosis had to be rebuilt from `harvesters` and

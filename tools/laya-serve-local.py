@@ -254,6 +254,13 @@ STATE_PRIORITY = (
     "ownArmyCount", "mobileTankCount", "deployedCombatCount", "antiAirCount", "harvesters",
     "averageArmyHealth", "visibleEnemyCount", "nearbyEnemyCount", "airThreatCount",
     "committedCredits", "uncommittedCredits", "escalation",
+    # The two mission facts a question's own criterion asks about. `activeMission` is what the scouting
+    # question means by "a scout is already moving", and `scoutMoving` is the same fact for a scout that runs
+    # in `memory.scoutMission` (sent while the army attacks) -- which `activeMission` never shows. Measured
+    # over ten reports: 86% of the 1342 scouting questions were asked while `activeMission.mode` read
+    # rally / defend / attack, so the model was told to wait on a condition it could not evaluate. Both are
+    # tiny (a mode string, an age, a boolean), so they belong ahead of the bulk fields.
+    "activeMission", "scoutMoving",
     "self", "base", "queues", "inventory",
     "forceReadiness", "combatAssessment", "strategy", "objectiveTarget", "recentChoices",
     "infrastructure", "economy", "hints",
@@ -276,7 +283,11 @@ SLIM_SCALARS = (
     "committedCredits", "uncommittedCredits",
 )
 SLIM_KEEP = SLIM_SCALARS + ("self", "base", "forceReadiness", "combatAssessment",
-                            "queues", "inventory")
+                            "queues", "inventory",
+                            # Same reason as in STATE_PRIORITY: the scouting question's `wait` criterion is
+                            # "a scout is already moving", and without these two the model cannot tell. They
+                            # cost a handful of tokens against a 489-token budget.
+                            "activeMission", "scoutMoving")
 # `forces` and `homeGuard` were briefly added here so the model could see the home guard. Measured
 # over 117 real states replayed through the running service, that costs ~38 tokens a question and
 # puts 50% of them on the 1024 cap against 18% without -- the guard is not free, and nothing in the
