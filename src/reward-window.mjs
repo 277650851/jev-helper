@@ -16,10 +16,15 @@
 // State lives in `memory.rewards` ({open, done}), because `memory` is already threaded through the decision
 // loop and the observation sampler; nothing else has to be plumbed.
 export const REWARD_WINDOW_TICKS = 450;
-// Bounds. `open` is bounded so a stalled observation sampler cannot grow it without limit; `done` is bounded
-// because a long match has ~500 decisions and the report is written to disk.
+// Bounds. `open` is bounded so a stalled observation sampler cannot grow it without limit.
+//
+// `done` is NOT just a display bound: `summarizeRewards` aggregates over `done`, so dropping rows makes the
+// per-group means describe only the tail of the match. That is exactly what the first real match showed:
+// jev-report-20261015-024314 settled 703 windows and the 600 cap discarded 100 of them, so every mean in
+// that report was computed from the last 85% of the match. The display list in the report is capped
+// separately (120 rows), so this bound only has to cover the arithmetic, not the wire format.
 export const MAX_OPEN_REWARDS = 120;
-export const MAX_DONE_REWARDS = 600;
+export const MAX_DONE_REWARDS = 4000;
 
 /**
  * The reward-relevant numbers of one observation sample. Every field comes from what the observation

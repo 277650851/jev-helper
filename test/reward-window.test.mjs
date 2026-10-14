@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { rewardSample, openReward, closeRewards, summarizeRewards, formatRewardReport, REWARD_WINDOW_TICKS, MAX_OPEN_REWARDS } from '../src/reward-window.mjs';
+import { rewardSample, openReward, closeRewards, summarizeRewards, formatRewardReport, REWARD_WINDOW_TICKS, MAX_OPEN_REWARDS, MAX_DONE_REWARDS } from '../src/reward-window.mjs';
 import { eventEntry } from '../src/logbook.mjs';
 
 // The signal every later learning step reads. Before this, a report said what was chosen and never what
@@ -78,6 +78,27 @@ test('per-group aggregates report means and keep the chosen/engine split', () =>
   assert.equal(v.meanExchange, 3);
   assert.equal(s.totalExchange, 9);
   assert.ok(s.kept <= 120 && s.list.length === s.kept);
+});
+
+test('every settled window is kept, because the group means are computed from them', () => {
+  // This bound is arithmetic, not presentation: `summarizeRewards` aggregates over `done`, so a cap that
+  // drops rows silently makes every mean describe only the tail of the match. The first real match
+  // (jev-report-20261015-024314) settled 703 windows against a 600 cap and lost 100 of them.
+  const memory = {};
+  const rows = MAX_DONE_REWARDS - 1;
+  // Open and close one at a time, the way a match does: the OPEN bound (120) is far smaller than this, so
+  // opening them all first would drop them there and the assertion below would test the wrong limit.
+  let tick = 0;
+  for (let i = 0; i < rows; i++) {
+    openReward(memory, { tick, group: 'infantry', choice: 'produce_E1', sample: sample(tick, 1000, 5, 5, 0, 0) });
+    tick += REWARD_WINDOW_TICKS;
+    closeRewards(memory, tick, sample(tick, 1001, 5, 5, 0, 0));
+  }
+  const s = summarizeRewards(memory);
+  assert.equal(s.rows, rows, 'nothing may be dropped below the cap');
+  assert.equal(memory.rewards.dropped, 0);
+  assert.equal(s.groups[0].rows, rows);
+  assert.equal(s.groups[0].meanCredits, 1, 'every window saw exactly +1 credit');
 });
 
 test('the rendered table shows group means and refuses to state a verdict', () => {
