@@ -7,6 +7,9 @@ import { attachJevPlayer, collectState, candidateGroups, historyHints, rememberC
 const catalog = {
   YARD:{yard:true,label:'YARD'}, BARRACKS:{factory:'InfantryType',label:'BARRACKS',cost:500}, ENG:{engineer:true,cost:500,label:'Engineer'}, GI:{occupier:true,cost:200,weapon:{damage:15,range:4},label:'GI'},
   TECH:{techLevel:2,label:'Tech Outpost'}, EREF:{refinery:true,label:'Enemy Refinery'}, HOUSE:{label:'House'}, DEF:{isBaseDefense:true,weapon:{damage:50,range:8},label:'Pillbox'}, ETANK:{weapon:{damage:60,range:5},label:'Enemy Tank'},
+  // Exactly as docs/rules-规则文件.ini has it: TechLevel=-1, no power, and none of refinery/factory/yard.
+  // It is capturable only because an engineer can take it, which is what `isCapturable` knows by name.
+  CAOILD:{techLevel:-1,label:'Tech Oil Derrick'},
 };
 const unit = (id,name,type,x,y,extra={}) => ({ id,name,type,tile:{rx:x,ry:y},hitPoints:100,maxHitPoints:100,isIdle:true,primaryWeapon:catalog[name].weapon,...extra });
 function world({ own, enemies, neutral = [], credits = 5000, tick = 3000, offers = {2:[{name:'ENG',type:3},{name:'GI',type:3}]} }) {
@@ -46,6 +49,23 @@ test('capture candidates: neutral tech first, undefended enemy economy next, a g
   const ids=Object.values(e.actions).filter((a)=>a.kind==='capture').map((a)=>a.ids[0]);
   assert.equal(new Set(ids).size,ids.length,`no engineer is offered for two captures at once (got ${JSON.stringify(ids)})`);
   assert.match(e.instructions,/Capture neutral technology structures/);
+});
+
+test('an oil derrick the enemy captured is won back with an engineer, not shelled into a death explosion', () => {
+  // rules.ini gives CAOILD `TechLevel=-1`, no power, and none of refinery/factory/yard -- so the
+  // hand-written enemy-held property list excluded it and the only option left was an attack. The derrick
+  // pays 1000 to whoever captures it plus 20 per cycle while they hold it, and destroying one runs its
+  // DeathWeapon (OilExplosion) into its neighbours. jev-report-20261014-215900 is the match that shape
+  // produced: "the enemy held the derricks, we built tanks to knock them down", ending with 2580 credits,
+  // no refinery and no army.
+  const own=[unit(1,'YARD',2,10,10), unit(2,'BARRACKS',2,12,10), unit(20,'ENG',3,14,12), unit(21,'ENG',3,15,12)];
+  const derrick=unit(204,'CAOILD',2,70,70);
+  const { api, memory } = world({ own, enemies:[derrick], neutral:[] });
+  const groups={}; specialGroups(api, catalog, snapshotOf(api), memory, groups);
+  const e=groups.engineering; assert.ok(e,'an engineering group is offered');
+  assert.ok(e.actions.capture_204,'an enemy-held oil derrick is a capture target, not only an attack target');
+  assert.match(e.criteria.capture_204,/CAPTURE \(enemy, undefended\)/);
+  assert.equal(e.actions.capture_204.auto,3,'undefended enemy-held: bounded fallback, never engine-owned');
 });
 
 test('a guarded enemy building is offered as a reclaim, never run automatically, and never with an engineer another capture already has', () => {

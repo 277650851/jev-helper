@@ -398,7 +398,22 @@ export function specialGroups(api, catalog, snapshot, memory, groups) {
     //
     // Defended stays in the ordering, not in the filter: taking an undefended one is free, taking a
     // defended one costs the engineer, so the latter ranks last and is never run automatically.
-    .filter((c) => c.neutral ? isCapturable(catalog[c.unit.name], c.unit.name) : (catalog[c.unit.name]?.refinery || catalog[c.unit.name]?.factory || catalog[c.unit.name]?.yard || catalog[c.unit.name]?.power > 0 || (catalog[c.unit.name]?.techLevel ?? 0) >= 2))
+    // Same test on both sides -- the enemy-held branch used to list the properties by hand
+    // (`refinery || factory || yard || power > 0 || techLevel >= 2`) and therefore MISSED everything
+    // `isCapturable` recognises by NAME. The one that matters is CAOILD, the neutral oil derrick:
+    // rules.ini gives it `TechLevel=-1`, no power and none of those three roles, so an oil derrick the
+    // enemy had captured could only ever be destroyed, never won back -- the exact shape recorded for
+    // jev-report-20261014-215900 above, which this filter was supposed to have fixed.
+    //
+    // Wrong twice over: the derrick pays `ProduceCashStartup=1000` to whoever captures it and
+    // `ProduceCashAmount=20` per cycle while they hold it, and destroying one runs its `DeathWeapon`
+    // (OilExplosion) into whatever is standing next to it. It is income, and it is income the enemy is
+    // collecting. `yard` and `techLevel >= 2` are kept alongside `isCapturable` because the two use
+    // different field names (`yard` vs `constructionYard`), so replacing the list outright would have
+    // dropped enemy construction yards and outposts.
+    .filter((c) => c.neutral
+      ? isCapturable(catalog[c.unit.name], c.unit.name)
+      : (isCapturable(catalog[c.unit.name], c.unit.name) || !!catalog[c.unit.name]?.yard || (catalog[c.unit.name]?.techLevel ?? 0) >= 2))
     .sort((a, b) => Number(b.neutral) - Number(a.neutral) || Number(a.defended) - Number(b.defended) || a.dist - b.dist)
     .slice(0, 6);
   // The player's capture objective ("使用工程师占领盟军战略实验室") comes first even when defended:
