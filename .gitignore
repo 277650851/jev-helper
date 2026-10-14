@@ -8,3 +8,13 @@ __pycache__/
 # Local Laya decision logs (npm run laya -- --log laya.jsonl)
 *.jsonl
 *.ndjson
+
+# Local Laya server runtime: pid file, stdout/stderr logs, and the `--dump-states` corpus.
+# tools/laya-ctl.ps1 writes these next to itself, which is the repo root when the repo's copy is used.
+# The dumps are the raw requests a match sent (2000+ files and growing) -- inputs to analysis, not sources.
+.laya-server.pid
+.laya-server.out.log
+.laya-server.err.log
+.laya-states/
+.laya-venv/
+
