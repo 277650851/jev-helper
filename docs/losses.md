@@ -14,3 +14,4 @@
 | jev-report-20261014-215900 | a0d12a3-dirty | defeat | **economic_stall** | 2927s | 21→0 | 129/129/151 | 1.17 |
 | jev-report-20261014-231556 | 4a7d885-dirty | defeat | **economic_stall** | 3265s | 21→1 | 134/133/187 | 1.41 |
 | jev-report-20261014-233357 | 4a7d885-dirty | defeat | **economic_stall** | 2085s | 20→3 | 73/70/115 | 1.64 |
+| jev-report-20261014-234919 | 12baa9e-dirty | defeat | **economic_stall** | 1009s | 9→2 | 28/26/41 | 1.58 |

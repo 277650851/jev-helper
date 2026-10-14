@@ -32,6 +32,24 @@ test('player events are reduced to typed records and observations are dropped',(
   assert.equal(eventEntry({kind:'observation',state:{}},1),null);assert.equal(eventEntry({kind:'stop',reason:'battle_ended'},1).reason,'battle_ended');
   assert.equal(eventEntry({kind:'error',message:'m'.repeat(500)},1).message.length,240);assert.equal(eventEntry({kind:'place',name:'GAPOWR',purpose:'base_development'},1).text,'base_development');
 });
+test('the summary carries the economy plan, so a loss to the economy can be read back from the report',()=>{
+  // Five matches in a row were lost to `economic_stall` and this field was not in the summary, so the
+  // diagnosis had to be reconstructed from `harvesters` and `inventory` after the fact. That is enough
+  // to see THAT there was one miner and not enough to see what the engine thought it was doing, when it
+  // offered a miner, or why it stopped -- which is exactly the question the `outran` rule answers.
+  const full=stateSummary({economy:{targetMiners:3,targetRefineries:2,incomeRate:1500,trend:-200,surplus:false,starving:true,outran:true,lostInWindow:18,replacementCost:12600,reason:'the army lost 18 units in the last window, about 12600 credits of replacements against 3000 earned'}});
+  assert.equal(full.economy.targetMiners,3);
+  assert.equal(full.economy.targetRefineries,2);
+  assert.equal(full.economy.outran,true);
+  assert.equal(full.economy.lostInWindow,18);
+  assert.equal(full.economy.replacementCost,12600);
+  assert.match(full.economy.reason,/replacements against/);
+  // A base with no economy yet must still produce a key, so consumers do not have to test for it.
+  assert.equal(stateSummary({}).economy,null);
+  // The plan is a handful of scalars and one sentence; it must not drag unit lists into the log.
+  assert.ok(JSON.stringify(full.economy).length<400,`economy stays small (${JSON.stringify(full.economy).length} bytes)`);
+});
+
 test('the log is bounded by entry count and by serialized size',()=>{
   const many=appendEntries([],Array.from({length:LOG_MAX_ENTRIES+50},(_,i)=>({at:i,kind:'action'})));
   assert.equal(many.length,LOG_MAX_ENTRIES);assert.equal(many[0].at,50);

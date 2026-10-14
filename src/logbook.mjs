@@ -39,6 +39,21 @@ export function stateSummary(state = {}) {
     // was not archived here, so the question could not be settled from the report. Mode and age only: this
     // summary carries no coordinates and no unit lists.
     activeMission: state.activeMission ? { mode: short(state.activeMission.mode, 16), ageTicks: number(state.activeMission.ageTicks) } : null,
+    // The economy plan the engine is acting on. Four matches in a row were lost to the same thing
+    // (docs/losses.md, all `economic_stall`) and none of it was visible here: the miner target is
+    // derived from the refinery count, so the whole diagnosis had to be rebuilt from `harvesters` and
+    // `inventory` after the fact. That is enough to see *that* there was one miner, not enough to see
+    // what the engine thought it was doing, when it offered a miner, or why it stopped offering --
+    // which is the question the `outran` rule was written to answer.
+    economy: state.economy ? {
+      targetMiners: number(state.economy.targetMiners), targetRefineries: number(state.economy.targetRefineries),
+      incomeRate: number(state.economy.incomeRate), trend: number(state.economy.trend),
+      surplus: state.economy.surplus === true, starving: state.economy.starving === true,
+      // The replacement bill and whether it outran the income. `lostInWindow` is a count and
+      // `replacementCost` a credit figure, both small; neither is a unit list.
+      outran: state.economy.outran === true, lostInWindow: number(state.economy.lostInWindow), replacementCost: number(state.economy.replacementCost),
+      reason: short(state.economy.reason, 200),
+    } : null,
     ready: state.forceReadiness ? state.forceReadiness.ready === true : null, readyReason: short(state.forceReadiness?.reason, 160),
     ...(state.objectiveTarget ? { objective: state.objectiveTarget.found === false
       ? { found: false, seen: (state.objectiveTarget.seen ?? []).slice(0, 30).map((n) => short(n, 60)) }
