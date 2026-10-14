@@ -1,3 +1,13 @@
+> **这份文件记什么、不记什么**
+>
+> - **记**：已发布版本的逐版验证记录（0.1.1 → 0.7.5）。这些版本都在 `main` 线上。
+> - **不记**：`develop` 分支上尚未发布的 AI 托管引擎重构（自 `7f6d63a` 起 107 个提交）。
+>   那条线的逐节验证与推导在
+>   [`docs/jev-autopilot-redesign-review.md`](./docs/jev-autopilot-redesign-review.md)（§0.1–§0.50），
+>   交接与待验证清单在 [`docs/jev-autopilot-handoff.md`](./docs/jev-autopilot-handoff.md)。
+>
+> 两份记录**互不替代**，不要因为其中一份更新就删掉另一份。
+
 # 0.7.5 验证记录
 
 日期：2026-09-25。依据 0.7.4 实战报告 jev-report-20260925-221915（本地 Laya，选择题，目标「使用工程师占领盟军作战实验室」，第 2144 秒开始托管，结果战败）。
