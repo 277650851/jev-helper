@@ -2,7 +2,7 @@ import { specialGroups, executeSpecial, rememberSpecial, maintainSpecial, refres
 import { buildBrief, formSquads, squadUnits, sameIntent } from "./werhd-jev-commander.mjs";
 import { assessStrategy, investmentGroups, chooseBuildingSite, chooseRallySite, weaponEffectiveness, counterValue, canUnitHurt, infantryProfile, scoutScore, currentWeapon as combatWeapon, activeWeapons, canFireAt, baseThreats, usableBuilders, ATTACK_FORCE_SIZE, ATTACK_AA_ESCORTS, vehicleOptions } from "./werhd-jev-strategy.mjs";
 import { updateCamera } from "./werhd-jev-camera.mjs";
-import { refreshCatalog, isDecoration } from "./werhd-jev-catalog.mjs";
+import { refreshCatalog, isDecoration, isCapturable } from "./werhd-jev-catalog.mjs";
 import { unitPurpose } from "../unit-role.mjs";
 import { trackObjective, isGuardedByObjective } from "./werhd-jev-objective.mjs";
 import { buildEnemyProfile, counterBrief } from "./werhd-jev-counter.mjs";
@@ -1195,6 +1195,16 @@ export function candidateGroups(api, catalog, snapshot, memory) {
   // asked while `activeMission.mode` read rally / defend / attack. So the one field the criterion needs is
   // published here, next to the criterion that uses it.
   state.scoutMoving = !!travelling;
+  // Why an engineer was or was not offered. `produce_ENG` appearing zero times in a match cannot be read
+  // without knowing whether there was anything to capture, whether a barracks stood, and how many engineers
+  // there were -- and on jev-report-20261015-073527 none of that was in the report, so a promised check
+  // ("did the neutral capture priority actually reach the offer?") could not be answered at all.
+  state.capture = {
+    targets: memory.captureTargets?.length ?? 0,
+    visibleNeutrals: (api.units("hostile") ?? []).filter((u) => isCapturable(catalog[u.name], u.name)).length,
+    engineers: units.filter((u) => catalog[u.name]?.engineer).length,
+    barracks: units.some((u) => catalog[u.name]?.factory === "InfantryType"),
+  };
   // Keep revealing the map while no attack is possible: an enemy building seen once must not end scouting.
   // The objective has never been seen: keep looking for it even while the army can attack.
   const objectiveUnseen = !!memory.objectiveKeys?.words?.length && !memory.objectiveTarget;

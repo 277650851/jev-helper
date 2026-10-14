@@ -45,6 +45,14 @@ export function stateSummary(state = {}) {
     // checked against a report at all -- and that criterion is why 1328 of 1342 scouting questions were
     // answered `wait` across ten matches.
     scoutMoving: state.scoutMoving === true,
+    // The engineering inputs, so "no engineer was ever offered" can be read: nothing to capture, no
+    // barracks, an engineer already standing there, or the affordability gate. Four numbers, no unit lists.
+    capture: state.capture ? {
+      targets: number(state.capture.targets),
+      visibleNeutrals: number(state.capture.visibleNeutrals),
+      engineers: number(state.capture.engineers),
+      barracks: state.capture.barracks === true,
+    } : undefined,
     // The economy plan the engine is acting on. Four matches in a row were lost to the same thing
     // (docs/losses.md, all `economic_stall`) and none of it was visible here: the miner target is
     // derived from the refinery count, so the whole diagnosis had to be rebuilt from `harvesters` and
