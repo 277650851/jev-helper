@@ -140,7 +140,13 @@ export function eventEntry(e, at) {
   // measured on `jev-report-20261010-061242`, 0 of 63 action entries had either. A record that drops the
   // reason for a refusal cannot show whether the engine's own choice was refused by the game or the model
   // declined a real question, which is the distinction the whole takeover mechanism exists to create.
-  if (kind === 'action') return { ...base, question: short(e.question, 40), choice: short(e.choice, 60), accepted: e.accepted === true, reason: short(e.reason, 40), ...(e.rejectedBecause ? { rejectedBecause: short(e.rejectedBecause, 40) } : {}), ...(e.engineOwned ? { engineOwned: true } : {}), actionType: short(e.action?.type, 24), actionName: short(e.action?.name ?? e.action?.mode, 40), cost: number(e.action?.cost), confidence: number(e.confidence), latencyMs: number(e.latencyMs), ageTicks: number(e.ageTicks), ...(e.auto ? { auto: true } : {}) };
+  if (kind === 'action') return { ...base, question: short(e.question, 40), choice: short(e.choice, 60), accepted: e.accepted === true, reason: short(e.reason, 40), ...(e.rejectedBecause ? { rejectedBecause: short(e.rejectedBecause, 40) } : {}), ...(e.engineOwned ? { engineOwned: true } : {}), actionType: short(e.action?.type, 24), actionName: short(e.action?.name ?? e.action?.mode, 40),
+    // Where a `special` action was sent. Without it a saved report cannot tell a chrono miner recalled to
+    // its refinery from the same miner stepped ten tiles into the open -- both are one `flee_miner_<id>`
+    // action with no destination, which is exactly the difference the recall change turns on. Promised as
+    // a next-match check and found unmeasurable on jev-report-20261015-065646.
+    ...(typeof e.action?.tile?.x === 'number' && typeof e.action?.tile?.y === 'number' ? { tile: [e.action.tile.x, e.action.tile.y] } : {}),
+    cost: number(e.action?.cost), confidence: number(e.confidence), latencyMs: number(e.latencyMs), ageTicks: number(e.ageTicks), ...(e.auto ? { auto: true } : {}) };
   // The page's side of a commander turn: what was executed and why not. `executed` tells it apart
   // from the background's entry for the same turn.
   if (kind === 'command') return { ...base, executed: true, sourceTick: number(e.sourceTick), note: short(e.note, 400), orders: orderLines(e.results), rejected: orderLines(e.rejected), auto: orderLines(e.auto) };

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { eventEntry } from '../src/logbook.mjs';
 import { specialGroups, executeSpecial, MINER_FLEE_RADIUS, MINER_FLEE_COOLDOWN } from '../src/player/werhd-jev-special.mjs';
 import { askableGroups, requestGroupsFrom, engineOwnedMarks, collectTakeovers } from '../src/player/werhd-jev-player.mjs';
 
@@ -183,5 +184,10 @@ console.log('Harvester escape: a miner an attacker can actually hurt is moved ou
     'and it is sent to its refinery rather than 10 tiles into the open');
   assert.match(groups.salvage.criteria.flee_miner_50, /RECALL/,
     'the order says what it is: a recall, not a walk');
+  // And the destination reaches the report. Without it a chrono recall to the refinery and a ten-tile step
+  // into the open are the same record -- one `flee_miner_50` with no tile -- so the change could not be
+  // checked against a real match at all (found on jev-report-20261015-065646).
+  const logged = eventEntry({ kind: 'action', tick, question: 'salvage', choice: 'flee_miner_50', accepted: true, action: { type: 'special', tile: action.tile } }, 0);
+  assert.deepEqual(logged.tile, [22, 22], 'the flee destination is archived');
 }
 
