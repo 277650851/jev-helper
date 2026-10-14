@@ -438,9 +438,23 @@ export function frontierPoints(api, base, memory) {
       });
     }
   points.sort((a, b) => b.score - a.score);
+  // Spread the offered frontiers across the map, not just across each other.
+  //
+  // The separation used to be a flat 10 tiles, and because the score rewards BOTH reaching out
+  // (`forward`) and being far from home (`away`), the three highest scores are almost always three
+  // points inside the same far corner. Ten tiles is "a different point" but not "a different part of
+  // the map", so the model was offered one corner three times, went there three times, and the other
+  // three quarters of the fog was never visited -- which is what "the dog always runs to the
+  // bottom-left and the map never opens up" looks like from outside.
+  //
+  // A third of the short side forces the three options into genuinely different regions, so a single
+  // scouting run is a sweep rather than a repetition. On a 135x135 map that is 45 tiles, which is
+  // wider than a base's footprint and narrower than a cross-map trip, so it does not push the scout
+  // further than it already goes.
+  const spread = Math.max(10, Math.min(size.width, size.height) / 3);
   const distinct = [];
   for (const p of points)
-    if (distinct.every((q) => Math.hypot(p.x - q.x, p.y - q.y) > 10)) {
+    if (distinct.every((q) => Math.hypot(p.x - q.x, p.y - q.y) > spread)) {
       distinct.push(p);
       if (distinct.length === 3) break;
     }
