@@ -132,3 +132,36 @@ const yard = { id: 1, name: 'YARD', kind: 'YARD', type: 2, tile: { rx: 20, ry: 2
   assert.equal(flee.action.kind, 'flee_miner', 'so the escape reaches the executor rather than staying an option');
 }
 console.log('Harvester escape: a miner an attacker can actually hurt is moved out of reach, without a round trip');
+
+// 6. The order is not repeated while the miner is still carrying it out.
+//
+// Re-issuing replaces the miner's previous move order, so a chased miner is turned around every few hundred
+// ticks and never accumulates any distance. jev-report-20261015-060916 is what that costs: `flee_miner_6956`
+// was issued 18 times between ticks 41359 and 49798 while it was the base's ONLY miner, and it died at
+// 50084. So: same attacker + still moving = say nothing; the miner stopping, or a different attacker
+// becoming the nearest one, are the two things that mean the previous order did not work.
+{
+  const chased = { ...miner(50, 30, 30), isIdle: false };
+  own = [yard, chased];
+  enemies = [enemyAt(900, 'HTNK', 30 + MINER_FLEE_RADIUS - 1, 30)];
+  tick = 20000; memory.minerFleeAt = new Map(); memory.minerFleeThreat = new Map();
+  assert.ok(run().salvage?.actions?.flee_miner_50, 'the first escape is still issued');
+
+  tick += MINER_FLEE_COOLDOWN + 1;
+  assert.ok(!run().salvage?.actions?.flee_miner_50,
+    'past the cooldown, a miner that is still moving away from the same attacker is not told again');
+
+  // It stopped. The flee point was not good enough, so the order is issued again.
+  chased.isIdle = true;
+  tick += MINER_FLEE_COOLDOWN + 1;
+  assert.ok(run().salvage?.actions?.flee_miner_50, 'a miner that has stopped is redirected');
+
+  // A different attacker is now the nearest threat, which is new information.
+  chased.isIdle = false;
+  enemies = [enemyAt(901, 'HTNK', 30 + MINER_FLEE_RADIUS - 1, 30)];
+  tick += MINER_FLEE_COOLDOWN + 1;
+  const second = run().salvage?.actions?.flee_miner_50;
+  assert.ok(second, 'a different attacker re-issues the escape');
+  assert.equal(second.threatId, 901);
+}
+

@@ -184,17 +184,33 @@ export function specialGroups(api, catalog, snapshot, memory, groups) {
   // no ore scan is attempted here -- the existing harvest logic sends the miner back out once it is safe.
   {
     const miners = units.filter((u) => catalog[u.name]?.harvester && !u.onBridge);
-    const flee = miners.filter((m) => {
-      if ((memory.minerFleeAt?.get(m.id) ?? -1e9) + MINER_FLEE_COOLDOWN > tick) return false;
-      return enemies.some((e) => (catalog[e.name]?.weapon?.damage ?? 0) > 0
+    memory.minerFleeThreat ??= new Map();
+    const flee = [];
+    for (const m of miners) {
+      if ((memory.minerFleeAt?.get(m.id) ?? -1e9) + MINER_FLEE_COOLDOWN > tick) continue;
+      const threat = enemies.reduce((best, e) => ((catalog[e.name]?.weapon?.damage ?? 0) > 0
         && distance(e.tile, m.tile) <= MINER_FLEE_RADIUS
-        && canEngageTarget(catalog[e.name], m, catalog, api));
-    });
+        && canEngageTarget(catalog[e.name], m, catalog, api)
+        && (!best || distance(e.tile, m.tile) < distance(best.tile, m.tile)) ? e : best), undefined);
+      if (!threat) continue;
+      // Already running from this same attacker: do not say it again.
+      //
+      // The order is re-issued on a 300-tick timer for as long as an armed enemy stays within
+      // MINER_FLEE_RADIUS, and each issue REPLACES the miner's previous move order, so a miner being
+      // chased never accumulates any distance -- it is turned around every few hundred ticks and dies
+      // where it stood. jev-report-20261015-060916 is what that looks like: `flee_miner_6956` was issued
+      // 18 times between ticks 41359 and 49798 while it was the base's ONLY miner, and it died at 50084.
+      // The miner is not idle in any of those turns -- it is still carrying out the previous escape -- so
+      // an order that repeats while it is moving can only reset it. It is re-issued the moment the miner
+      // stops (`isIdle`), which is when the flee point really was not good enough, and whenever a
+      // DIFFERENT attacker becomes the nearest one.
+      if (!m.isIdle && memory.minerFleeThreat.get(m.id) === threat.id) continue;
+      flee.push({ m, threat });
+    }
     if (flee.length) {
       const safety = group('salvage', 'Move a harvester out of an attacker\'s reach. It is the whole income, so losing one costs more than the ore it was mining.');
       memory.minerFleeAt ??= new Map();
-      for (const m of flee.slice(0, 3)) {
-        const threat = enemies.reduce((best, e) => (best && distance(best.tile, m.tile) <= distance(e.tile, m.tile) ? best : e), undefined);
+      for (const { m, threat } of flee.slice(0, 3)) {
         const homeFarther = base && distance(base.tile, threat.tile) > distance(m.tile, threat.tile);
         const tile = homeFarther ? base.tile : (() => {
           const dx = m.tile.rx - threat.tile.rx, dy = m.tile.ry - threat.tile.ry;
@@ -206,6 +222,7 @@ export function specialGroups(api, catalog, snapshot, memory, groups) {
           };
         })();
         memory.minerFleeAt.set(m.id, tick);
+        memory.minerFleeThreat.set(m.id, threat.id);
         safety(`flee_miner_${m.id}`, `Move harvester #${m.id} to (${tile.rx},${tile.ry}) away from the attacker #${threat.id}. It is our only income; standing in the open loses it.`,
           { type: 'special', kind: 'flee_miner', ids: [m.id], tile: { x: tile.rx, y: tile.ry }, threatId: threat.id, engineOwned: true });
       }
