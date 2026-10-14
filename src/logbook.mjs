@@ -2,8 +2,14 @@
 // Records what the model was asked, what it chose, and what the executor did with it.
 // Never stores credentials, session tokens or the raw battlefield state.
 export const LOG_KEY = 'log';
-export const LOG_MAX_ENTRIES = 2000;
-export const LOG_MAX_CHARS = 4_000_000; // JSON size guard: storage.local is limited to ~10 MB
+export const LOG_MAX_ENTRIES = 20000;
+// The 10 MB storage.local ceiling stopped applying when the extension asked for `unlimitedStorage`
+// (see README: 100 matches with per-match logs), so this is now a practical bound rather than a
+// platform one. It has to be generous because this is the *shared* log every match window is cut
+// from: at 2000 entries a long match lost its whole opening. Measured on jev-report-20261014-215900
+// (738 decisions), 2000 entries covered the last ~17% of the match -- the build order, the opening
+// economy and how the enemy arrived were all gone before any per-match budget was even applied.
+export const LOG_MAX_CHARS = 32_000_000;
 const short = (value, n) => typeof value === 'string' ? value.slice(0, n) : value == null ? '' : String(value).slice(0, n);
 const number = n => typeof n === 'number' && Number.isFinite(n) ? n : null;
 
@@ -112,7 +118,15 @@ export function eventEntry(e, at) {
 // One match's own log is stored under its own key and kept for all 100 matches, so it gets a much
 // smaller budget than the shared log. Without this, 100 matches each holding a near-maximum window
 // would mean hundreds of megabytes in storage.local, which is what unlimitedStorage was masking.
+// One match's own log is stored under its own key and kept for all 100 matches, so it gets a much
+// smaller budget than the shared log. This is the *storage* budget: 100 of these sit side by side.
 export const MATCH_LOG_MAX_CHARS = 500_000;
+// The battle report is a different destination with a different cost: it is written to the Downloads
+// folder and is the artifact that actually gets read afterwards (shared for diagnosis, attached to a
+// bug report, analysed by tools/audit-report.mjs). Nothing about it is multiplied by 100 and none of
+// it is synced, so it does not need to share the stored copy's budget. Measured on the same report,
+// the 500 KB bound kept 695 of 2000 entries -- the audit could see the endgame and not the game.
+export const REPORT_LOG_MAX_CHARS = 8_000_000;
 // Trims oldest-first until both the entry count and the size bound hold; the newest entry is kept.
 const trim = (entries, maxChars) => {
   let next = entries.slice(-LOG_MAX_ENTRIES);
@@ -123,9 +137,13 @@ const trim = (entries, maxChars) => {
 export function appendEntries(entries, additions) {
   return trim([...(entries ?? []), ...additions], LOG_MAX_CHARS);
 }
-// The same bound applied to one match's slice of the log.
+// The storage copy: one per match, kept for all of them.
 export function trimMatchEntries(entries) {
   return trim(entries, MATCH_LOG_MAX_CHARS);
+}
+// The report copy: same trim, a budget that is not shared with 99 other matches.
+export function trimReportEntries(entries) {
+  return trim(entries, REPORT_LOG_MAX_CHARS);
 }
 
 const inc = (map, key, by = 1) => { map[key] = (map[key] ?? 0) + by; };

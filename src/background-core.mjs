@@ -1,7 +1,7 @@
 import {DEFAULTS, supportedGame, apiEndpoint, originPattern, validateSettings, publicSettings, privateSettings, prepareQuestions, prepareBrief, validateAnswer, httpError, activeProvider, authHeaders, hostAllowed, normalizeHost, sanitizeAllowedHosts, providerEndpoint, serviceUrl, PROVIDER_FIELDS, BODY_MAX_BYTES, BRIEF_MAX_BYTES, jsonBytes, textBytes} from './shared.mjs';
 import {buildChatRequest, parseChatResponse, buildCommanderRequest, parseCommanderResponse, modelIds, serviceError, refusesForcedTool} from './openai.mjs';
 import {summarize,recordObservation} from './telemetry.mjs';
-import {LOG_KEY,appendEntries,trimMatchEntries,decisionEntry,commandEntry,eventEntry,logStats} from './logbook.mjs';
+import {LOG_KEY,appendEntries,trimMatchEntries,trimReportEntries,decisionEntry,commandEntry,eventEntry,logStats} from './logbook.mjs';
 
 export function createBackground(c, {fetchImpl = fetch, now = Date.now, uuid = () => crypto.randomUUID()} = {}) {
   const inflight = new Map(), controlLocks = new Map(), stateLocks = new Map();
@@ -116,9 +116,13 @@ export function createBackground(c, {fetchImpl = fetch, now = Date.now, uuid = (
     const s=await getSession(tabId);
     if(!s || s.matchRecorded || !s.startedAt)return;
     const at=now(),entries=await readLog(),window=entries.filter(e=>e.at>=s.startedAt && e.at<=at),stats=logStats(window);
-    // Statistics cover the whole match, but only a bounded tail is kept per match: the copy is
-    // stored for every one of the 100 records and written into the battle report.
+    // Two destinations, two budgets. The stored copy sits beside the other 99 records so it stays
+    // small; the report is a file on disk that exists to be read afterwards and is what gets
+    // analysed, so it gets a budget of its own. Sharing the stored copy's 500 KB is what left
+    // jev-report-20261014-215900 with 695 of 2000 entries -- an audit could see the endgame and
+    // not the game. `logKept` reports the report's count, which is the artifact that gets read.
     const kept=trimMatchEntries(window);
+    const reported=trimReportEntries(window);
     const history=(s.history??[]).map(({at,gameSeconds,credits,freeCredits,decisions,ownUnits,ownBuildings,enemyUnits,enemyBuildings,ownBuilt,ownLost,enemyDestroyed})=>({at,gameSeconds,credits,freeCredits,decisions,ownUnits,ownBuildings,enemyUnits,enemyBuildings,ownBuilt,ownLost,enemyDestroyed}));
     const ledger=s.observation?.ledger??null;
     const credits=history.map(p=>p.credits).filter(Number.isFinite),seconds=history.map(p=>p.gameSeconds).filter(Number.isFinite);
@@ -129,8 +133,8 @@ export function createBackground(c, {fetchImpl = fetch, now = Date.now, uuid = (
       credits:{start:credits[0]??null,end:credits.at(-1)??null,max:credits.length?Math.max(...credits):null,min:credits.length?Math.min(...credits):null},armyMax:s.armyMax??null,
       produced:stats.actions.acceptedProduce,actionsByType:stats.actions.byType,skippedReasons:stats.actions.skippedReasons,
       groups:Object.fromEntries(Object.entries(stats.groups).map(([id,g])=>[id,{asked:g.asked,waitRate:g.waitRate,top:Object.keys(g.choices)[0]??''}])),history};
-    record.meta=s.meta??null;record.label='';record.notes='';record.logEntries=window.length;record.logKept=kept.length;
-    record.reportFile=await saveReport(record,stats,kept,settings);
+    record.meta=s.meta??null;record.label='';record.notes='';record.logEntries=window.length;record.logKept=reported.length;record.logStored=kept.length;
+    record.reportFile=await saveReport(record,stats,reported,settings);
     await serial(stateLocks,'matches',async()=>{
       const list=await readMatches(),next=[...list.filter(m=>m.id!==record.id),record],dropped=next.slice(0,Math.max(0,next.length-MATCHES_MAX));
       await c.storage.local.set({matches:next.slice(-MATCHES_MAX),[logKey(record.id)]:kept});

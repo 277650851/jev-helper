@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {decisionEntry,eventEntry,appendEntries,trimMatchEntries,logStats,stateSummary,refusalReason,LOG_MAX_ENTRIES,LOG_MAX_CHARS,MATCH_LOG_MAX_CHARS} from '../src/logbook.mjs';
+import {decisionEntry,eventEntry,appendEntries,trimMatchEntries,trimReportEntries,logStats,stateSummary,refusalReason,LOG_MAX_ENTRIES,LOG_MAX_CHARS,MATCH_LOG_MAX_CHARS,REPORT_LOG_MAX_CHARS} from '../src/logbook.mjs';
 
 const state={tick:5400,gameSeconds:360,self:{credits:8450,power:{total:500,drain:375}},uncommittedCredits:6650,committedCredits:1800,ownArmyCount:18,mobileTankCount:8,antiAirCount:4,harvesters:3,averageArmyHealth:.86,visibleEnemyCount:9,nearbyEnemyCount:3,baseUnderAttack:true,queues:[{type:0,items:[{name:'GATECH',quantity:1}]}],inventory:{MTNK:{count:8,name:'灰熊坦克'}},army:Array.from({length:24},(_,i)=>({id:i,tile:{rx:i,ry:i}})),visibleEnemies:[{id:1,tile:{rx:1,ry:1}}],strategy:{investment:{category:'construction',name:'GATECH'}}};
 const questions={construction:{type:'choice',instructions:'x'.repeat(1000),criteria:{wait:'Wait only if unnecessary.',produce_GAPOWR:'y'.repeat(500)}},tactics:{type:'choice',instructions:'Keep a mission',criteria:{wait:'Wait',attack_enemy_base:'Attack'}}};
@@ -35,8 +35,15 @@ test('player events are reduced to typed records and observations are dropped',(
 test('the log is bounded by entry count and by serialized size',()=>{
   const many=appendEntries([],Array.from({length:LOG_MAX_ENTRIES+50},(_,i)=>({at:i,kind:'action'})));
   assert.equal(many.length,LOG_MAX_ENTRIES);assert.equal(many[0].at,50);
-  const big=appendEntries([],Array.from({length:400},(_,i)=>({at:i,kind:'decision',pad:'x'.repeat(20000)})));
-  assert.ok(JSON.stringify(big).length<=LOG_MAX_CHARS);assert.ok(big.length<400);assert.equal(big.at(-1).at,399);
+  // Size guard. The fixture is derived from the bound rather than hard-coded, so raising the cap
+  // cannot silently turn this into a test that no longer exercises anything -- which is exactly what
+  // happened when the cap went from 4 MB to 32 MB and a fixed 400 x 20 KB window stopped
+  // overflowing. Each pad is sized so 50 entries already overshoot, keeping the trim loop short.
+  const pad=Math.ceil(LOG_MAX_CHARS/40);
+  const big=appendEntries([],Array.from({length:50},(_,i)=>({at:i,kind:'decision',pad:'x'.repeat(pad)})));
+  assert.ok(JSON.stringify(big).length<=LOG_MAX_CHARS);
+  assert.ok(big.length<50,'the size bound dropped something');
+  assert.equal(big.at(-1).at,49,'the newest entry survives');
 });
 test("one match's own log gets a far smaller budget, because 100 of them are stored side by side",()=>{
   assert.ok(MATCH_LOG_MAX_CHARS<LOG_MAX_CHARS);
@@ -49,6 +56,30 @@ test("one match's own log gets a far smaller budget, because 100 of them are sto
   assert.ok(trimMatchEntries([]).length===0);
   // 100 matches at the per-match bound stay within what unlimitedStorage is meant to cover.
   assert.ok(100*MATCH_LOG_MAX_CHARS<100_000_000);
+});
+test("the report gets a far larger log budget than the stored copy, because only one of them exists per match",()=>{
+  assert.ok(REPORT_LOG_MAX_CHARS>MATCH_LOG_MAX_CHARS);
+  assert.ok(REPORT_LOG_MAX_CHARS<=LOG_MAX_CHARS);
+  // The failure this exists for: at the stored copy's budget, a long match's report kept only the
+  // tail. Measured on a 2000-entry window, the two budgets differ by ~4x in surviving entries.
+  const window=Array.from({length:2000},(_,i)=>({at:i,kind:'decision',pad:'x'.repeat(2000)}));
+  const stored=trimMatchEntries(window),reported=trimReportEntries(window);
+  assert.ok(reported.length>stored.length,`report keeps ${reported.length} > stored ${stored.length}`);
+  assert.ok(JSON.stringify(reported).length<=REPORT_LOG_MAX_CHARS);
+  assert.equal(reported.at(-1).at,1999,'the newest entry survives in both');
+  assert.equal(reported[0].at,0,'and with room to spare the report keeps the oldest entry too');
+  // Not merely a bigger number: the stored copy must still be the smaller one by a wide margin.
+  assert.ok(stored.length*2<reported.length,`stored ${stored.length} should be well under report ${reported.length}`);
+  assert.equal(trimReportEntries([]).length,0);
+});
+test("a long match no longer loses its opening to the shared log's entry cap",()=>{
+  // 738 decisions produced 2000+ entries in the field; at LOG_MAX_ENTRIES=2000 the window that every
+  // match is cut from had already lost the start of the game before any per-match budget applied.
+  const entries=Array.from({length:2500},(_,i)=>({at:i,kind:'action'}));
+  const kept=appendEntries([],entries);
+  assert.equal(kept.length,2500,'nothing dropped at this length');
+  assert.equal(kept[0].at,0,'the oldest entry is still there');
+  assert.ok(LOG_MAX_ENTRIES>2000);
 });
 test('statistics count decisions, wait rates per group, accepted and skipped actions and failures',()=>{
   const entries=[
