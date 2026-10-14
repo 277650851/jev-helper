@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { specialGroups, executeSpecial, rememberSpecial, maintainSpecial } from '../src/player/werhd-jev-special.mjs';
 import { attachJevPlayer, collectState, candidateGroups, historyHints, rememberChoice } from '../src/player/werhd-jev-player.mjs';
+import { eventEntry } from '../src/logbook.mjs';
 
 // Engineers: capture candidates, objective-driven training, task follow-up, and the automatic fallback.
 const catalog = {
@@ -112,6 +113,29 @@ test('a capture order is issued, followed up while the engineer is idle, and fin
   w.setTick(3300); maintainSpecial(w.api, w.memory, e=>events.push(e));
   assert.equal(w.memory.specialTasks.length,0);assert.equal(events.at(-1).result,'completed');assert.equal(w.memory.specialOrders.has(20),false);
   assert.equal(executeSpecial(w.api, action).reason,'already_owned');
+});
+
+test('a capture that had to be re-sent keeps its count even when it succeeds', () => {
+  // `done` emitted `observed` for EVERY completed task, and the serializer reduces an `observed` entry to
+  // its text -- so a capture that took four re-sends and then worked was recorded as a plain success with
+  // no trace of what the missing command receipts cost. Measured on jev-report-20261015-054554: 2 `task`
+  // entries against 199 `observed`, and both task entries had resends 0, so the whole record said nothing.
+  // Only a task that succeeded on the FIRST try is uninteresting enough to stay an observation.
+  const eng=unit(20,'ENG',3,14,12), tech=unit(100,'TECH',2,30,30);
+  const own=[unit(1,'YARD',2,10,10), eng];
+  const w=world({ own, enemies:[], neutral:[tech] });
+  const action={ type:'special', kind:'capture', ids:[20], targetId:100, order:{ type:7, target:{ objectId:100 } } };
+  rememberSpecial(w.memory, action, executeSpecial(w.api, action), 3000);
+  const events=[];
+  w.setTick(3200); maintainSpecial(w.api, w.memory, e=>events.push(e)); // idle engineer re-sent -> resends 1
+  assert.equal(w.memory.specialTasks[0].resends,1,'the fixture really did re-send once');
+  own.push({...tech}); // the building is ours now, on the turn after the re-send
+  w.setTick(3300); maintainSpecial(w.api, w.memory, e=>events.push(e));
+  const last=events.at(-1);
+  assert.equal(last.result,'completed');
+  assert.equal(last.kind,'task','a completed task that cost a re-send is not just an observation');
+  assert.equal(last.resends,1);
+  assert.equal(eventEntry(last,0).resends,1,'and the serializer must keep the count');
 });
 
 test('after two declined capture questions the neutral structure is captured automatically', async () => {

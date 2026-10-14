@@ -713,7 +713,7 @@ export function maintainSpecial(api, memory, emit, catalog) {
     }
     if (action.kind === 'capture') {
       const engineer = own.get(action.ids[0]), target = api.unit(action.targetId);
-      const done = (result) => { for (const id of action.ids) memory.specialOrders.delete(id); emit({ kind: result === 'completed' ? 'observed' : 'task', tick, task: 'capture', description: `capture ${result}: #${action.targetId}`, result, targetId: action.targetId, resends: task.resends ?? 0 }); return false; };
+      const done = (result) => { for (const id of action.ids) memory.specialOrders.delete(id); emit({ kind: result === 'completed' && !(task.resends > 0) ? 'observed' : 'task', tick, task: 'capture', description: `capture ${result}: #${action.targetId}`, result, targetId: action.targetId, resends: task.resends ?? 0 }); return false; };
       if (task.escort) return maintainEscort(api, memory, task, own, tick, emit, catalog, done);
       if (own.has(action.targetId)) return done('completed');
       if (!engineer) return target ? done('engineer_lost') : done('incomplete');
@@ -737,7 +737,7 @@ export function maintainSpecial(api, memory, emit, catalog) {
     const remaining = action.ids.filter((id) => !entered.includes(id) && own.has(id));
     const finish = (result) => {
       for (const id of [...action.ids, ...(action.kind === 'load' ? [action.targetId] : [])]) memory.specialOrders.delete(id);
-      emit({ kind: result === 'completed' ? 'observed' : 'task', tick, task: action.kind,
+      emit({ kind: result === 'completed' && !(task.resends > 0) ? 'observed' : 'task', tick, task: action.kind,
         description: `${action.kind} ${result}: ${entered.length}/${action.ids.length}`,
         result, targetId: action.targetId, enteredIds: entered, resends: task.resends ?? 0 });
       return false;
@@ -785,7 +785,7 @@ function maintainDemolition(api, memory, task, own, tick, emit) {
       memory.bridgeRetryAfter ??= new Map();
       for (const name of task.attackerNames) memory.bridgeRetryAfter.set(`${bridge.id}:${name}`, tick + 900);
     }
-    emit({ kind: result === 'completed' ? 'observed' : 'task', tick, task: action.kind,
+    emit({ kind: result === 'completed' && !(task.resends > 0) ? 'observed' : 'task', tick, task: action.kind,
       description: `demolish_bridge ${result}`, result, bridgeId: bridge.id, x: bridge.x, y: bridge.y,
       initialHitPoints: bridge.hitPoints, lastHitPoints: current?.hitPoints ?? task.hitPoints, resends: task.resends ?? 0 });
     return false;
