@@ -1,0 +1,19 @@
+# Windows script line endings.
+#
+# The offline bundle's launcher is a .cmd, and cmd.exe parses batch files expecting CRLF. An LF-only
+# .cmd mostly works by luck on a short script and then fails in a way that is very hard to read --
+# `goto` labels and multi-line `if` blocks are the usual casualties. Pin these to CRLF in the
+# repository so a fresh clone cannot produce one.
+#
+# This does not conflict with the other thing that has to be true for those files: 启动.cmd must stay
+# pure ASCII and launch.ps1 must keep its UTF-8 BOM, both enforced by
+# tools/offline-bundle/fix-encoding.ps1. Git normalises line endings; it does not touch a BOM, and it
+# leaves ASCII alone.
+*.cmd   text eol=crlf
+*.bat   text eol=crlf
+*.ps1   text eol=crlf
+*.py    text eol=lf
+*.mjs   text eol=lf
+*.js    text eol=lf
+*.json  text eol=lf
+*.yml   text eol=lf

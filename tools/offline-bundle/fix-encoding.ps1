@@ -28,11 +28,16 @@ if (-not $cmdFile) { throw "no .cmd launcher found in $root" }
 if (-not (Test-Path $ps1File)) { throw "launch.ps1 not found in $root" }
 
 # --- the .cmd : read as UTF-8, drop every non-ASCII character, write as ASCII ---
+# CRLF, not whatever came in. cmd.exe parses batch files expecting CRLF; an LF-only .cmd mostly works
+# by luck on a short script and then fails unreadably once there are `goto` labels or multi-line `if`
+# blocks. Normalising here as well as in .gitattributes means a hand-edited bundle is safe too.
 $cmdText = [IO.File]::ReadAllText($cmdFile.FullName, [Text.Encoding]::UTF8)
 $stripped = ($cmdText.ToCharArray() | Where-Object { [int]$_ -lt 128 }) -join ''
+$stripped = ($stripped -replace "`r`n", "`n") -replace "`n", "`r`n"
 [IO.File]::WriteAllText($cmdFile.FullName, $stripped, [Text.Encoding]::ASCII)
 $left = ([IO.File]::ReadAllBytes($cmdFile.FullName) | Where-Object { $_ -gt 127 }).Count
-Write-Host ("  [ok]   {0} -> ASCII ({1} chars, {2} non-ascii bytes left)" -f $cmdFile.Name, $stripped.Length, $left)
+$crlf = ([regex]::Matches($stripped, "`r`n")).Count
+Write-Host ("  [ok]   {0} -> ASCII, CRLF ({1} non-ascii bytes left, {2} lines)" -f $cmdFile.Name, $left, $crlf)
 
 # --- launch.ps1 : read as UTF-8 regardless of BOM, write back with one ---
 $ps1Text = [IO.File]::ReadAllText($ps1File, [Text.Encoding]::UTF8)
