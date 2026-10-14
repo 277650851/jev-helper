@@ -24,6 +24,8 @@ Chrome / Edge Manifest V3 扩展。配置模型密钥（或本地模型地址）
 | **非 Apple 平台的本地模型** | Windows / Linux / Intel Mac 也能跑本地 Laya（纯 PyTorch，CPU 或 CUDA），无需联网、无需 huggingface.co；可一键组装成离线整合包 | develop |
 | **自动发版** | 推送 `main` 自动测试、打包并发布 GitHub Release | 0.4.x |
 
+当前开发分支 `develop` 上的进展与**败因记录**见 [`docs/losses.md`](docs/losses.md)（每局为何输，由 `tools/postmortem.mjs` 判定）、[`docs/jev-autopilot-handoff.md`](docs/jev-autopilot-handoff.md)（交接与待验证清单）和 [`docs/jev-autopilot-redesign-review.md`](docs/jev-autopilot-redesign-review.md)（逐节推导与被推翻的判断）。
+
 加粗项为在原项目（[ra2web/jev-helper](https://github.com/ra2web/jev-helper) 0.3.0）基础上新增的能力。
 
 ## 安装与使用
