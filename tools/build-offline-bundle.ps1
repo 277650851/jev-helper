@@ -88,8 +88,21 @@ if ($SkipExtension) {
     } finally { Pop-Location }
     $dist = Join-Path $root 'dist'
     if (-not (Test-Path $dist)) { Die "no dist/ after the build" }
-    Copy-Item (Join-Path $dist '*') (Join-Path $dst 'extension') -Recurse -Force
-    Ok "extension -> extension\  ($((Get-ChildItem (Join-Path $dst 'extension') -Recurse -File | Measure-Object Length -Sum).Sum / 1KB | ForEach-Object { [math]::Round($_) }) KB)"
+    # Enumerate rather than `Copy-Item <dir>\*`: the glob form silently copies nothing under some
+    # invocation contexts, and the only symptom is a bundle that still holds the previous build.
+    Copy-Item (Get-ChildItem $dist -Recurse -File).FullName (Join-Path $dst 'extension') -Force
+    # Prove the copy landed. A bundle whose extension is an older build is worse than no bundle: it
+    # loads, it connects, and every fix made since is silently absent -- and the only way to notice is
+    # to look at the build stamp. Compare the two BUILD files rather than trusting the copy.
+    $built = Join-Path $dist 'BUILD.json'
+    $copied = Join-Path $dst 'extension\BUILD.json'
+    if (Test-Path $built) {
+        $want = (Get-Content $built -Raw | ConvertFrom-Json).build
+        $got = if (Test-Path $copied) { (Get-Content $copied -Raw | ConvertFrom-Json).build } else { 'MISSING' }
+        if ($want -ne $got) { Die "extension copy is stale: built $want, bundle has $got. Refusing to hand over a bundle that loads the old build." }
+        Ok "extension build verified: $got"
+    }
+    Ok "extension -> extension\  ($([math]::Round((Get-ChildItem (Join-Path $dst 'extension') -Recurse -File | Measure-Object Length -Sum).Sum / 1KB)) KB)"
 }
 
 # ---------------------------------------------------------------- venv
