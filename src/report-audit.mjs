@@ -182,8 +182,137 @@ export function takeoversOf(entries = []) {
   };
 }
 
-/** The `match` block of a report, reduced to the fields worth attributing an audit to. */
-export const reportMeta = (match = {}) => ({
+/**
+ * The family a candidate key belongs to: the key with its trailing numeric segments removed, so a producer
+ * that mints one option per unit or per tile (`assault_1470`, `capture_912`, `explore_98_95`) aggregates
+ * instead of contributing one never-chosen row each. `produce_E1` is untouched, because its suffix is not
+ * numeric -- only ids are folded.
+ */
+const familyOf = (key) => String(key).replace(/_\d+(?:_\d+)*$/, '');
+
+/**
+ * Per-OPTION lifecycle over a whole match: how often each candidate key was offered to the model, how
+ * often the model picked it, and how often the ENGINE took it on its own.
+ *
+ * Why this exists: `auditReport` answers "how much choice did the question leave" and `takeoversOf`
+ * answers "who decided, and per group". Neither answers the question a self-improvement loop needs --
+ * WHICH options are decoration. An option that is built every turn, shown to the model every turn, never
+ * picked and never taken by the engine is a rule that does nothing; an option the engine takes while the
+ * model is never shown it is a rule the engine has taken over completely. Both are MECHANISM diagnoses,
+ * not statistics: one match settles them, so they do not need the three-match distribution rule that a
+ * win-rate claim does (see docs/jev-autopilot-redesign-review.md §0.43).
+ *
+ * Input is the report's `entries`, both kinds:
+ *   - `decision` entries carry the keys the model was shown (`groups[g].options`) and its pick (`groups[g].choice`)
+ *   - `action` entries carry what was executed, tagged `auto: true` when the ENGINE took it
+ */
+export function optionLifecycle(entries = []) {
+  const options = new Map();
+  const rec = (group, key) => {
+    const option = `${group}:${key}`;
+    let o = options.get(option);
+    if (!o) {
+      options.set(option, o = {
+        option, group, key, offered: 0, chosen: 0, modelTaken: 0, modelAccepted: 0,
+        engineTaken: 0, engineAccepted: 0, engineRefused: 0, firstTick: null, lastTick: null,
+      });
+    }
+    return o;
+  };
+  const touch = (o, tick) => {
+    if (!Number.isFinite(tick)) return;
+    if (o.firstTick === null || tick < o.firstTick) o.firstTick = tick;
+    if (o.lastTick === null || tick > o.lastTick) o.lastTick = tick;
+  };
+
+  let questions = 0;
+  let actionOnly = 0;
+  for (const e of entries ?? []) {
+    if (e?.kind === 'decision') {
+      for (const [group, g] of Object.entries(e.groups ?? {})) {
+        const keys = Object.keys(g?.options ?? {});
+        if (!keys.length) continue;
+        questions++;
+        for (const key of keys) { const o = rec(group, key); o.offered++; touch(o, e.tick); }
+        // The model's pick is only attributed when it is a key that was actually offered. A report whose
+        // option list was cut by the log's ring buffer must not invent a lifecycle for a key nobody saw.
+        if (keys.includes(g?.choice)) { const o = rec(group, g.choice); o.chosen++; touch(o, e.tick); }
+      }
+      continue;
+    }
+    if (e?.kind !== 'action') continue;
+    const group = e.question;
+    const key = typeof e.choice === 'string' ? e.choice : undefined;
+    if (!group || !key) continue;
+    actionOnly++;
+    const o = rec(group, key);
+    const accepted = e.accepted === true;
+    if (e.auto === true) {
+      o.engineTaken++;
+      if (accepted) o.engineAccepted++; else o.engineRefused++;
+    } else {
+      o.modelTaken++;
+      if (accepted) o.modelAccepted++;
+    }
+    touch(o, e.tick);
+  }
+
+  const all = [...options.values()].sort((a, b) =>
+    b.offered - a.offered || b.engineTaken - a.engineTaken || a.option.localeCompare(b.option));
+  for (const o of all) {
+    // `wait` is abstention, not a strategy option: the model never "picks" it as a plan, so counting it as a
+    // dead or engine-only candidate would put one entry in every group of every report and drown the signal.
+    // It stays in `all` (how often a group is refused is worth having) but is excluded from the three derived lists.
+    o.abstain = o.key === 'wait';
+    // Executed while the model was never shown it: the producer marked it engine-owned outright.
+    o.unseen = o.offered === 0 && (o.engineTaken > 0 || o.modelTaken > 0);
+    // Shown to the model at least once, never picked, and nobody executed it either: a dead branch.
+    o.dead = o.offered > 0 && o.chosen === 0 && o.modelTaken === 0 && o.engineTaken === 0;
+    // The model never picks it; only the engine acts on it. Mutually exclusive with `unseen`: there the model
+    // was never even shown it, here it was shown it and did not take it. Keeping the three classes a
+    // partition is what stops a finder from reporting the same candidate twice under two names.
+    o.engineOnly = !o.unseen && o.chosen === 0 && (o.engineTaken > 0 || o.modelTaken > 0);
+    o.modelOnly = o.chosen > 0 && o.engineTaken === 0;
+    o.family = `${o.group}:${familyOf(o.key)}`;
+  }
+  const only = (f) => all.filter((o) => f(o) && !o.abstain);
+  // Action entries whose option never appeared in any decision entry. On a truncated log this is expected
+  // (the ring buffer drops the opening), and it means the `offered` counts are a LOWER bound.
+  const actionsWithoutQuestion = all.filter((o) => o.offered === 0).reduce((n, o) => n + o.modelTaken + o.engineTaken, 0);
+  // Aggregate by family, because a producer that mints one option per unit or per tile -- `assault_1470`,
+  // `capture_912`, `explore_98_95` -- has a per-key lifecycle that can only ever be chosen once, so every
+  // such key looks dead on its own and buries the families that really never work.
+  const fams = new Map();
+  for (const o of all) {
+    if (o.abstain) continue;
+    const f = fams.get(o.family) ?? { family: o.family, group: o.group, options: 0, offered: 0, chosen: 0, modelTaken: 0, engineTaken: 0, deadOptions: 0 };
+    f.options++;
+    f.offered += o.offered;
+    f.chosen += o.chosen;
+    f.modelTaken += o.modelTaken;
+    f.engineTaken += o.engineTaken;
+    if (o.dead) f.deadOptions++;
+    fams.set(o.family, f);
+  }
+  const families = [...fams.values()]
+    .map((f) => ({ ...f, deadFamily: f.chosen === 0 && f.modelTaken === 0 && f.engineTaken === 0 }))
+    .sort((a, b) => Number(b.deadFamily) - Number(a.deadFamily) || b.deadOptions - a.deadOptions || b.offered - a.offered);
+  return {
+    questions,
+    actions: actionOnly,
+    actionsWithoutQuestion,
+    options: all.length,
+    chosenOptions: only((o) => o.chosen > 0).length,
+    deadOptions: only((o) => o.dead),
+    unseenOptions: only((o) => o.unseen),
+    engineOnlyOptions: only((o) => o.engineOnly),
+    deadFamilies: families.filter((f) => f.deadFamily),
+    families,
+    all,
+  };
+}
+
+/** The `match` block of a report, reduced to the fields worth attributing an audit to. */export const reportMeta = (match = {}) => ({
   build: match.meta?.build ?? null,
   provider: match.providerName ?? null,
   model: match.model ?? null,
@@ -267,5 +396,68 @@ export function formatAuditReport(a, t, file = '') {
       log(`    ${id.padEnd(13)} 接管 ${String(g.taken).padStart(3)} · 受理 ${String(g.accepted).padStart(3)} · 被拒 ${String(g.refused).padStart(3)}`);
     }
   }
+  return out;
+}
+
+/**
+ * Render the option lifecycle. Same split as `formatAuditReport`: the rendering lives here so a test can
+ * reach it, and the CLI is left with nothing but reading a file and printing what it gets.
+ *
+ * Reading the numbers: `给出` counts the decision entries whose option list held the key; `被选` counts the
+ * model picking it; `模型执行` / `引擎接管` split the executed orders by who issued them. A key with a high
+ * `给出` and zero everywhere else is a rule that does nothing -- exactly the class of defect that used to be
+ * found only by a human reading a match back (the zero-cost-unit `replacementCost` case was that class).
+ */
+export function formatOptionAudit(l = {}, { file = '', truncated = false } = {}) {
+  const out = [];
+  const log = (line = '') => out.push(line);
+  const pct = (x, y) => (y ? `${Math.round((x / y) * 100)}%` : '—');
+  const row = (o) => `    ${o.option.padEnd(32)} ${String(o.offered).padStart(5)} ${String(o.chosen).padStart(5)} ${String(o.modelTaken).padStart(7)} ${String(o.engineTaken).padStart(7)}   ${o.firstTick ?? '?'}～${o.lastTick ?? '?'}`;
+  const head = '    选项                                 给出   被选  模型执行  引擎接管   存在区间';
+
+  log(`候选生命周期 ${file}`);
+  log(`组-问题 ${l.questions} 个 · 出现过的候选 ${l.options} 个 · 模型选过的 ${l.chosenOptions} 个（${pct(l.chosenOptions, l.options)}）`);
+  if (truncated || !l.questions) {
+    log(`⚠ 日志被截断或没有 decision 记录：${l.actionsWithoutQuestion} 条执行找不到对应的提问，"给出"列只是下界。`);
+    log('  （战报是环形缓冲，losses/评审 §0.44 都记过："日志里没有"不等于"没发生"。）');
+  }
+
+  log('');
+  log(`★ 从未生效的候选族（按族聚合；同一族里没有任何一个选项被选过或被执行过）→ ${l.deadFamilies.length} 个`);
+  if (l.deadFamilies.length) {
+    log('    族                                   候选数   给出   被选  模型执行  引擎接管');
+    for (const f of l.deadFamilies.slice(0, 20)) {
+      log(`    ${f.family.padEnd(34)} ${String(f.options).padStart(6)} ${String(f.offered).padStart(6)} ${String(f.chosen).padStart(6)} ${String(f.modelTaken).padStart(9)} ${String(f.engineTaken).padStart(9)}`);
+    }
+    if (l.deadFamilies.length > 20) log(`    …另有 ${l.deadFamilies.length - 20} 个`);
+  }
+
+  log('');
+  log(`★ 死选项（逐键，已排除按 id 生成的族）：造出来了、给过模型、没人选也没被执行 → ${l.deadOptions.length} 个`);
+  if (l.deadOptions.length) {
+    log(head);
+    for (const o of l.deadOptions.slice(0, 12)) log(row(o));
+    if (l.deadOptions.length > 12) log(`    …另有 ${l.deadOptions.length - 12} 个`);
+  }
+
+  log('');
+  log(`★ 模型从未见过的候选：造出来就被引擎直接接管 → ${l.unseenOptions.length} 个`);
+  if (l.unseenOptions.length) {
+    log('    选项                                 被选  模型执行  引擎接管   存在区间');
+    for (const o of l.unseenOptions.slice(0, 15)) log(`    ${o.option.padEnd(32)} ${String(o.chosen).padStart(5)} ${String(o.modelTaken).padStart(7)} ${String(o.engineTaken).padStart(7)}   ${o.firstTick ?? '?'}～${o.lastTick ?? '?'}`);
+  }
+
+  log('');
+  log(`★ 引擎独占：给过模型、模型从未选过、只有引擎在动 → ${l.engineOnlyOptions.length} 个`);
+  if (l.engineOnlyOptions.length) {
+    log(head);
+    for (const o of l.engineOnlyOptions.slice(0, 20)) log(row(o));
+    if (l.engineOnlyOptions.length > 20) log(`    …另有 ${l.engineOnlyOptions.length - 20} 个`);
+  }
+
+  log('');
+  log('怎么读：这一页定位「哪些候选根本没在起作用」，单局即可判定（机制问题，不是统计问题）；');
+  log('  但一个族「从未生效」不等于它该被删——也可能它的时机/前提从来没被满足。');
+  log('  要区分「规则多余」和「规则从没被触达」，下一步是记录每个候选的构造前提是否成立（闸门计数）。');
   return out;
 }
