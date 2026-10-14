@@ -752,9 +752,16 @@ export function investmentGroups(api, catalog, snapshot, memory, groups) {
     }
     // A missing barracks belongs here with power, the first refinery and the first factory: it is
     // the opening's defence, and the reserve must not hold it back.
+    // A refinery BELOW the economy's own target counts as essential too, but only while `outran` -- that
+    // flag means the replacement bill is beating income, which is the one situation where refining
+    // capacity is the thing losing the match. Without this the field had no consumer at all: the target
+    // was raised to 2 (and now to `ceil(miners / 2)`) and nothing ever acted on it, so the extra miners
+    // the miner target asks for had no capacity to unload into. The reserve still governs every other
+    // non-essential building, and the original over-correction (a second refinery stealing the army's and
+    // the defences' build orders) stays corrected because this needs `outran` to be true.
     const essential = id === 'construction' && (r.power > 0
       || r.factory === 'InfantryType' && !buildings.some(b => catalog[b.name]?.factory === 'InfantryType')
-      || r.refinery && !s.economy.refineries
+      || r.refinery && (!s.economy.refineries || s.economy.outran && s.economy.refineries < s.economy.targetRefineries)
       || r.factory === 'UnitType' && !r.naval && !s.economy.factories);
     if (!essential && s.uncommittedCredits - a.cost < strategy.reserve) { delete g.actions[key]; delete g.criteria[key]; }
   }

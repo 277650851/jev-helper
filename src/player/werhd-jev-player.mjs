@@ -227,6 +227,23 @@ export const ECONOMY_WINDOW_TICKS = 1800;
 // whether the economy expands, and an estimate that can be driven to zero by one odd rule entry turns
 // that decision off silently -- see the note where it is computed.
 export const REPLACEMENT_UNIT_COST = 700, MIN_REPLACEMENT_UNIT_COST = 200;
+// How far mining may expand when the army is outrunning its income, and the per-refinery ratio those
+// ceilings encode.
+//
+// The ceilings were 4 miners / 2 refineries, and the measurements say they are the binding constraint
+// rather than the ore: across six reports with `state.economy` archived, `idleMiners` was true in **0 of
+// 2370 samples** -- no miner ever stood idle without reachable ore -- while the miner target reached its
+// 4-miner cap in five of them. Every one of those matches still lost on the economy (`docs/losses.md`:
+// 10 of 12 `economic_stall`), and jev-report-20261015-054554 has money available in **0%** of the samples
+// after the army peaked. A ceiling that is reached in every match and never justified by idle miners is a
+// number that was never measured; `idleMiners` stays the brake, so a base whose ore really is worked out
+// still stops adding miners.
+//
+// MINERS_PER_REFINERY is the existing "two miners per refinery" rule, now named. Raising the miner ceiling
+// without raising refining capacity would put the extra miners in a refinery queue instead of on ore --
+// which is invisible to `idleMiners` (they are not idle, they are waiting) and is why the two ceilings
+// have to move together.
+export const MINER_TARGET_MAX = 6, REFINERY_TARGET_MAX = 3, MINERS_PER_REFINERY = 2;
 export function economyPlan(api, catalog, state, memory, units) {
   const tick = api.tick();
   const miners = units.filter(u => catalog[u.name]?.harvester);
@@ -291,7 +308,7 @@ export function economyPlan(api, catalog, state, memory, units) {
   if (outran) {
     // More ore per refinery, then more refineries: a third miner on one refinery is capped by that
     // refinery's loading, so past the per-refinery target the binding constraint is the refinery.
-    targetMiners = Math.min(4, Math.max(miners.length + 1, refineries * 2));
+    targetMiners = Math.min(MINER_TARGET_MAX, Math.max(miners.length + 1, refineries * MINERS_PER_REFINERY));
     reason = `the army lost ${lostInWindow} unit${lostInWindow === 1 ? "" : "s"} in the last window, about ${Math.round(replacementCost)} credits of replacements against ${Math.round(income)} earned: income cannot keep up with losses, so expand mining toward ${targetMiners}`;
   } else if (!refineries) { targetMiners = 0; reason = "no refinery yet: a refinery comes before any miner"; }
   else if (idleMiners) { targetMiners = miners.length; reason = `${idleMiners} of ${miners.length} miners idle without reachable ore; another miner would be wasted`; }
@@ -305,7 +322,17 @@ export function economyPlan(api, catalog, state, memory, units) {
   // income could ever grow, and the four `economic_stall` losses are what that looks like from the
   // other side. A second refinery is now asked for when the replacement bill is outrunning income,
   // which is the condition the first report was actually about.
-  const targetRefineries = outran && targetMiners > refineries * 2 ? 2 : 1;
+  //
+  // The target is the DESIRED TOTAL, not a 1-or-2 switch. It used to be `outran && ... ? 2 : 1`, which
+  // read correctly for the one case it was written for and lied in every other: a base holding three
+  // refineries (recovered, or taken off the enemy) told the model "currently 1 refinery" in the
+  // construction brief, and the field could not express the capacity a six-miner target needs.
+  // `ceil(targetMiners / MINERS_PER_REFINERY)` is that capacity, floored at what already stands so the
+  // number can never under-report, and capped by REFINERY_TARGET_MAX. Without `outran` nothing is asked
+  // for beyond what exists -- the original over-correction stays corrected.
+  const targetRefineries = outran
+    ? Math.min(REFINERY_TARGET_MAX, Math.max(refineries, Math.ceil(targetMiners / MINERS_PER_REFINERY)))
+    : Math.max(1, Math.min(refineries, REFINERY_TARGET_MAX));
   return { targetMiners, targetRefineries, incomeRate, trend, surplus, starving, idleMiners, outran, lostInWindow, replacementCost, reason };
 }
 

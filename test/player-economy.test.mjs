@@ -96,7 +96,38 @@ test('losing units faster than the base can earn their cost expands the economy,
   assert.ok(e.outran,`the base is losing more than it earns (lost ${e.lostInWindow} units, replacement cost ${e.replacementCost}, income ${e.incomeRate})`);
   assert.ok(e.targetMiners>2,`the miner target rises past the two a single refinery can justify (got ${e.targetMiners})`);
   assert.ok(e.targetRefineries>1,`and a second refinery is asked for once the miners are not the binding constraint (got ${e.targetRefineries})`);
-  assert.match(e.reason,/cannot keep up with losses/);
+  assert.match(e.reason,/cannot keep up with losses/);});
+
+test('the miner ceiling is six, and the refinery target is a total that follows it', () => {
+  // 4 miners / 2 refineries was reached in five of the six reports whose economy archived a target, and
+  // `idleMiners` was never true in 2370 samples -- no miner ever stood idle without reachable ore. So the
+  // ceiling, not the ore, was the constraint, and every one of those matches still lost on the economy.
+  const own=[...base,
+    ...[30,31,32,33,34].map((id,i)=>({...unit(id,'HARV',7,30+i,12),isIdle:false})),   // plus base's refinery = 3
+    unit(50,'REFINERY',2,20,12), unit(51,'REFINERY',2,24,12)];
+  const { api, memory } = world({ own, credits:3000, tick:5000, offers });
+  memory.economySamples=[{tick:3500,credits:1000,spent:0,lost:22}];
+  memory.spentCredits=5000;
+  memory.ledger={ownUnitsLost:40};
+  const snap=collectState(api,catalog);
+  candidateGroups(api,catalog,snap,memory);
+  const e=snap.state.economy;
+  assert.ok(e.outran);
+  assert.equal(e.targetMiners,6,'the miner ceiling is six, not four');
+  assert.equal(e.targetRefineries,3,'six miners need three refineries at two per refinery, and the target is a total');
+});
+
+test('without outran the refinery target never under-reports what already stands', () => {
+  // It used to be `... ? 2 : 1`, so a base holding three refineries told the model "currently 1 refinery"
+  // in the construction brief. Nothing acted on the field, but the brief is what the model reads.
+  const own=[...base, unit(50,'REFINERY',2,20,12), unit(51,'REFINERY',2,24,12),
+    {...unit(6,'HARV',7,30,12),isIdle:false}];
+  const { api, memory } = world({ own, credits:9000, tick:5000, offers });
+  const snap=collectState(api,catalog);
+  candidateGroups(api,catalog,snap,memory);
+  const e=snap.state.economy;
+  assert.equal(e.outran,false,'a base with money and no losses is not outrun');
+  assert.equal(e.targetRefineries,3,'the brief reports the three that exist');
 });
 
 test('a zero-cost entry in the live rules cannot price a loss at nothing', () => {
