@@ -13,7 +13,7 @@ Chrome / Edge Manifest V3 扩展。配置模型密钥（或本地模型地址）
 | 一键托管 | 在游戏页开启 / 停止 AI 托管，支持自定义快捷键 | 0.2 |
 | 双语观察台 | 弹窗内「战场」「趋势」两页实时战况，中 / EN 即时切换 | 0.2 |
 | 游戏内悬浮状态窗 | 托管时在游戏画面上显示状态、资金、响应耗时 | 0.3 |
-| **两种模型来源** | Jev 云端（需密钥、按次计费）或 **本地部署的 Laya 模型**（免费、可局域网共享） | 0.4.0 |
+| **两种模型来源** | Jev 云端（需密钥、按次计费）或 **本地部署的 Laya 模型**（免费、可局域网共享、离线可用；Apple 芯片走 MLX，Windows / Linux / Intel Mac 走 PyTorch） | 0.4.0 |
 | **设置页体验改进** | 密钥可显示 / 隐藏、已保存密钥直接回填、输入错误就地提示、测试按钮直接显示结果 | 0.4.0 |
 | **决策日志** | 本机记录每次模型问答与执行结果，可导出 JSON 离线分析 | 0.4.1 |
 | **按实际兵力出击 + 战役目标** | 出击门槛随生产能力变化，探图不再中断，可填写本局目标 | 0.4.2 |
@@ -21,6 +21,7 @@ Chrome / Edge Manifest V3 扩展。配置模型密钥（或本地模型地址）
 | **对局战绩** | 每次托管结束自动记一场，含时长、资金曲线、决策统计；现由独立数据面板网页查看 | 0.4.3 |
 | **OpenAI 兼容模型** | 任意 OpenAI 格式的服务都能当模型来源，模型从服务的列表里选；对局记录云端 / 本地、具体模型、请求地址和 Token 消耗 | 0.5.4 |
 | **指挥模式** | OpenAI 兼容来源可切到「指挥官」：模型读战况简报，自己给每支小队定打法、决定造什么，扩展负责执行和本能反应 | 0.7.0 |
+| **非 Apple 平台的本地模型** | Windows / Linux / Intel Mac 也能跑本地 Laya（纯 PyTorch，CPU 或 CUDA），无需联网、无需 huggingface.co；可一键组装成离线整合包 | develop |
 | **自动发版** | 推送 `main` 自动测试、打包并发布 GitHub Release | 0.4.x |
 
 加粗项为在原项目（[ra2web/jev-helper](https://github.com/ra2web/jev-helper) 0.3.0）基础上新增的能力。
@@ -47,7 +48,46 @@ HTTP 401/402/403 会显示具体状态并立即停止托管；服务恢复或修
 
 ## 本地部署 Laya 模型
 
-除了 Jev 云端，扩展还能使用在本机 Apple 芯片上运行的 Laya 决策模型：不需要密钥、不产生费用，可局域网共享，但决策质量明显弱于 Jev，属实验用途。模型来源、服务端启动、扩展里要填的地址与令牌、请求 / 响应格式和常见问题，见 **[本地模型使用说明（docs/local-laya.md）](docs/local-laya.md)**。
+除了 Jev 云端，扩展还能使用自己运行的 Laya 决策模型：不需要密钥、不产生费用、可局域网共享，但决策质量明显弱于 Jev，属实验用途。两条路线：
+
+| 平台 | 怎么跑 | 特点 |
+| --- | --- | --- |
+| **Apple 芯片 Mac** | `npm run laya` | 走 MLX，显存省、决策质量更好 |
+| **Windows / Linux / Intel Mac** | `tools\laya-ctl.cmd start` | 走 PyPI 的 `laya`（纯 PyTorch，CPU 或 CUDA）。**MLX 只支持 Apple 芯片，所以这些平台必须走这条路** |
+
+两条路线对外都是同一套 `/v1/systemone` 协议，**扩展侧不需要任何改动**。模型来源、服务端启动、扩展里要填的地址与令牌、请求 / 响应格式和常见问题，见 **[本地模型使用说明（docs/local-laya.md）](docs/local-laya.md)**。
+
+### 离线整合包
+
+给不想装 Python、不想配环境的人，或者要在多台电脑上分发时，用 `tools/build-offline-bundle.ps1` 组一个**离线整合包**：
+
+```powershell
+.\tools\build-offline-bundle.ps1 -Destination D:\jev-offline
+```
+
+生成一个自包含目录：构建好的扩展 + 模型权重 + 带 CUDA 的 Python 环境 + 启停脚本 + 双击即用的启动器。
+
+```
+jev-offline/
+├── 启动.cmd              ← 双击：启动服务 + 自动协议自检 + 打印配置步骤
+├── 使用说明.md            ← 给拿到这个包的人看
+├── extension/            ← 在 chrome://extensions 加载这个文件夹
+├── model/laya-multilingual/  ← 权重，647 MB
+├── venv/                 ← Python 3.10+ + PyTorch(CUDA) + laya[serve]
+└── tools/                ← laya-ctl.cmd / laya-serve-local.py / laya-check.py
+```
+
+生成过程需要联网约 **3.1 GB**（几乎全是 Windows 上约 2.4 GB 的 CUDA 版 PyTorch 轮子，另有 647 MB 权重）；**生成出来的包运行时不联网**，服务启动时会强制 `HF_HUB_OFFLINE` / `TRANSFORMERS_OFFLINE`，检查点从本地目录加载。
+
+| 开关 | 作用 |
+| --- | --- |
+| `-Device cpu` | 装 CPU 版 PyTorch，整包约 **1.5 GB** 而非 5.4 GB，代价是单次决策慢一个数量级 |
+| `-SkipModel` / `-SkipExtension` | 已有权重 / 只想要扩展时跳过对应步骤 |
+| `-PythonExe` | 指定用来建 venv 的解释器 |
+
+两条路线实测（RTX 3060，`laya` 0.4.7）：CUDA 单次决策往返约 435 ms。
+
+两点要注意：**这个目录必须待在它构建时的路径上**（venv 里记的是解释器绝对路径，`model/` 和 `tools/` 可以随意搬）；`.cmd` 启动器在中文 Windows 上必须存成 ASCII，中文文案放在带 BOM 的 `.ps1` 里，构建脚本的 `fix-encoding.ps1` 负责这件事——手工改启动器时别忘了它。
 
 ## 功能详解
 
@@ -338,10 +378,14 @@ npm run package
 | `npm run build` | 构建到 `dist/`，在扩展管理页重新加载并刷新游戏页即可生效 |
 | `npm test` | 构建、打包并运行全部测试（需要 Node 22 以上） |
 | `npm run package` | 构建并在 `artifacts/` 生成发布 ZIP |
-| `npm run laya` | 启动本地 Laya 决策服务（macOS / Linux；见 [docs/local-laya.md](docs/local-laya.md)） |
+| `npm run laya` | 启动本地 Laya 决策服务（Apple 芯片，MLX；见 [docs/local-laya.md](docs/local-laya.md)） |
 | `npm run laya:py` | 同上，直接用当前的 `python`，不建虚拟环境 |
+| `tools\laya-ctl.cmd start` | 启动本地 Laya 服务（Windows / Linux / Intel Mac，PyTorch）；`status` / `stop` / `restart` / `test` / `logs` |
+| `.\tools\build-offline-bundle.ps1 -Destination <目录>` | 组装离线整合包（扩展 + 权重 + Python 环境 + 启动器） |
 | `node tools/preview.mjs` | 界面预览，打开 `http://127.0.0.1:4318/`（需先 `npm run build`） |
 | `node tools/analyze-log.mjs <文件>` | 离线分析决策日志 |
+| `node tools/audit-report.mjs <战报>` | 战报审计：强制题占比、拒答率、各组分布与归因 |
+| `node tools/bench-questions.mjs` | 离线问题基准：改动有没有真的减少「引擎自问自答」 |
 
 `dist/` 可直接加载；ZIP 位于 `artifacts/`。唯一构建依赖是 esbuild，无远程代码、无运行时外部依赖。
 
@@ -386,7 +430,11 @@ npm run package
 - `src/observer.mjs` / `src/telemetry.mjs`：只读观测、压缩快照与有界历史采样。
 - `src/i18n.mjs` / `src/charts.mjs`：双语文案和本地 SVG 图表，无外部图表依赖。
 - `src/popup.mjs` 与 `public/`：弹窗（观察台、战绩、设置）、说明、图标。
-- `tools/laya-server.py` / `tools/laya-server.sh`：本地 Laya 决策服务（`npm run laya`），不打入扩展运行包；使用说明见 `docs/local-laya.md`。
+- `tools/laya-server.py` / `tools/laya-server.sh`：Apple 芯片上的本地 Laya 决策服务（`npm run laya`，MLX），不打入扩展运行包；使用说明见 `docs/local-laya.md`。
+- `tools/laya-serve-local.py` / `tools/laya-ctl.ps1` / `tools/laya-ctl.cmd` / `tools/laya-check.py`：非 Apple 平台的等价实现（PyTorch），Windows 优先的启停与协议自检；`laya-serve-local.py` 把指向本地目录的 Router 注入 `laya.serve`，因此**不需要访问 huggingface.co**。
+- `tools/laya-model-fetch.py`：从 ModelScope 拉权重到本地目录（纯标准库，不需要 torch / huggingface_hub / modelscope）。
+- `tools/build-offline-bundle.ps1` 与 `tools/offline-bundle/`：组装离线整合包的脚本，以及其中的启动器与使用说明。
+- `tools/audit-report.mjs` / `tools/bench-questions.mjs`：战报审计与离线问题基准。
 - `tools/analyze-log.mjs`：决策日志离线分析。
 - `test/`：既有策略回归及扩展消息、权限、停止、会话边界、双模型来源、决策日志、战役出击规则、拍子唤醒、舰船自卫与战绩测试。
 
