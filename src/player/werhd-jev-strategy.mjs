@@ -107,6 +107,62 @@ export function canUnitHurt(unit, target, catalog, api) {
   return activeWeapons(unit, catalog).some((w) => weaponEffectiveness(w, [target], catalog, api) > 0);
 }
 
+// Friendly names for the eleven armour classes `Verses` is indexed by (see `ARMOR_WORDS`).
+const ARMOR_LABEL = {
+  none: 'infantry', flak: 'flak-armour infantry', plate: 'plate infantry',
+  light: 'light vehicles', medium: 'medium vehicles', heavy: 'heavy tanks',
+  wood: 'wooden buildings', steel: 'steel buildings', concrete: 'concrete buildings',
+  special_1: 'special targets', special_2: 'aircraft',
+};
+
+// What a base defense is actually for, in words the model can compare between two options.
+//
+// Every defense used to reach the model under a label that said nothing about it -- the special
+// layer wrote the same "Build a defensive strongpoint" for a Pill Box, a Prism Tower, a Cannon and
+// a Patriot, and the strategy layer wrote only an effectiveness number. Two options that differ
+// solely in a number are not a choice a model can reason about, so it took whichever came first,
+// which is the cheapest: three pillboxes. That is the wrong answer to an armour push (a prism tower
+// out-ranges and out-damages it) and to an air raid (a pillbox cannot fire at aircraft at all),
+// and it is the shape jev-report-20261014-215900 ended in: `only 0/2 mobile anti-air escorts`
+// while the Armory never offered anything that could shoot back.
+//
+// The facts that decide the choice are: can it hit aircraft, how far, and what it is weak against.
+// Those come from the rules file through the same readers the counter logic uses, so both the two
+// written shapes of `Verses` and both of its scales are handled rather than assumed.
+//
+// "Hard" and "weak" are RELATIVE to the weapon's own row, not absolute. The rules file writes
+// `Verses=100%,100%,100%,100%,80%,80%,100%,60%,60%,100%,100%` for the pill box's gun: nothing in it
+// exceeds 100%, so an absolute "above 1.5x" test never fires and every tower reads as identical.
+// Normalising by the row's own maximum is what makes the two descriptions differ: the pill box's row
+// is flat near the top (anti-infantry, nothing to say) while a prism tower's row falls to 25% against
+// heavy armour and 10% against concrete, which is exactly the fact the model needs.
+export function defenseProfile(rule) {
+  const w = rule?.weapon ?? {};
+  const range = w.range ?? 0;
+  const parts = [`range ${range}`];
+  // `aa` is the rules file's own flag for "can engage aircraft".
+  parts.push(w.aa ? 'can shoot aircraft' : 'cannot shoot aircraft');
+  const percent = versesArePercent(w);
+  const values = [];
+  for (let i = 0; i < ARMOR_WORDS.length; i++) {
+    const raw = verseAt(w, i);
+    if (raw === undefined || !raw) continue;
+    values.push([i, percent ? raw / 100 : raw]);
+  }
+  const max = values.reduce((n, [, v]) => Math.max(n, v), 0);
+  const min = values.reduce((n, [, v]) => Math.min(n, v), Infinity);
+  // A flat row is a real answer -- a pill box has no marked preference, it just shoots infantry --
+  // so it is stated rather than left as silence.
+  if (max > 0 && max / (min || max) > 1.3) {
+    const strong = values.filter(([, v]) => v >= max * 0.9).map(([i]) => ARMOR_LABEL[ARMOR_WORDS[i]] ?? ARMOR_WORDS[i]);
+    const weak = values.filter(([, v]) => v <= max * 0.6).map(([i]) => ARMOR_LABEL[ARMOR_WORDS[i]] ?? ARMOR_WORDS[i]);
+    if (strong.length) parts.push(`hits ${strong.slice(0, 3).join('/')} hard`);
+    if (weak.length) parts.push(`weak vs ${weak.slice(0, 3).join('/')}`);
+  } else parts.push('no marked preference, solid against everything it can hit');
+  parts.push(range <= 5 ? 'must be built next to what it shoots' : 'covers the approach from a distance');
+  return parts.join('; ');
+}
+
 export function canFireAt(api, catalog, attacker, target) {
   const weapons = activeWeapons(attacker, catalog).filter(w => weaponEffectiveness(w, [target], catalog, api) > 0);
   if (!weapons.length) return false;
@@ -537,7 +593,7 @@ export function investmentGroups(api, catalog, snapshot, memory, groups) {
       if (defenseTargets.length && !reachableThreats.length) continue;
       const placement = chooseBuildingSite(api, catalog, item.name, units, memory, 200, reachableThreats);
       if (!placement || s.self.credits < Math.min(200, r.cost)) continue;
-      add(dg, item, `${strategy.underPressure ? 'URGENT' : 'PREPARE'}: counter-fire at (${placement.x},${placement.y}), estimated effectiveness ${Math.round(item.value)}; enemy ranges ${reachableThreats.map(e=>currentWeapon(e,catalog).range).join(',') || 'no local target'}`, Math.min(200, r.cost), placement);
+      add(dg, item, `${strategy.underPressure ? 'URGENT' : 'PREPARE'}: ${catalog[item.name]?.label ?? item.name} -- ${defenseProfile(r)}. ${reachableThreats.length ? `It out-ranges the attackers here (they reach ${[...new Set(reachableThreats.map(e=>currentWeapon(e,catalog).range))].join(',')}, it reaches ${r.weapon?.range ?? 0})` : 'No attacker is currently in its range'}; estimated effectiveness ${Math.round(item.value)}; build at (${placement.x},${placement.y})`, Math.min(200, r.cost), placement);
       // Below the floor the first one is not a judgement call: the base has a barracks, it is short of the
       // minimum defences, and this tower is affordable -- so the engine builds it rather than asking. It
       // used to be `auto: 2`, i.e. ask, be refused, ask, be refused, then build anyway; two real matches

@@ -27,19 +27,39 @@ function world({ own, enemies, neutral = [], credits = 5000, tick = 3000, offers
 }
 const snapshotOf = (api) => collectState(api, catalog);
 
-test('capture candidates: neutral tech first, undefended enemy economy next, defended and garrisonable buildings never', () => {
-  const own=[unit(1,'YARD',2,10,10), unit(2,'BARRACKS',2,12,10), unit(20,'ENG',3,14,12), unit(21,'GI',3,13,12)];
+test('capture candidates: neutral tech first, undefended enemy economy next, a guarded one is reclaimable, garrisonable houses and defenses never', () => {
+  const own=[unit(1,'YARD',2,10,10), unit(2,'BARRACKS',2,12,10), unit(20,'ENG',3,14,12), unit(21,'ENG',3,15,12), unit(22,'ENG',3,16,12), unit(23,'GI',3,13,12)];
   const tech=unit(100,'TECH',2,30,30), house={...unit(101,'HOUSE',2,32,30),garrison:{count:0,capacity:5,canOccupy:true}};
   const eref=unit(200,'EREF',2,50,50), guarded=unit(201,'EREF',2,60,60), pill=unit(202,'DEF',2,64,60), tank=unit(203,'ETANK',7,62,58);
   const { api, memory } = world({ own, enemies:[eref,guarded,pill,tank], neutral:[tech,house] });
   const groups={}; specialGroups(api, catalog, snapshotOf(api), memory, groups);
   const e=groups.engineering; assert.ok(e,'an engineering group is offered');
-  assert.ok(e.actions.capture_100,'the neutral tech outpost is a capture target');assert.equal(e.actions.capture_100.auto,2);assert.match(e.criteria.capture_100,/CAPTURE \(neutral\)/);assert.equal(e.actions.capture_100.order.type,7);assert.deepEqual(e.actions.capture_100.ids,[20]);
+  assert.ok(e.actions.capture_100,'the neutral tech outpost is a capture target');assert.equal(e.actions.capture_100.auto,2);assert.match(e.criteria.capture_100,/CAPTURE \(neutral\)/);assert.equal(e.actions.capture_100.order.type,7);assert.deepEqual(e.actions.capture_100.ids,[22],'the engineer nearest the target is the one assigned');
   assert.ok(e.actions.capture_200,'an undefended enemy refinery is a capture target');assert.equal(e.actions.capture_200.auto,3);
-  assert.ok(!e.actions.capture_201,'a refinery under a pillbox and a tank is not offered');
+  // A building the enemy holds is worth taking alive, so a guarded one is offered too -- but the engineer
+  // is at risk, so it is never taken automatically and it ranks behind the free ones.
+  assert.ok(e.actions.capture_201,'a guarded enemy refinery is reclaimable, not only destroyable');
+  assert.equal(e.actions.capture_201.auto,undefined,'taking a guarded one costs the engineer, so the model decides');
+  assert.match(e.criteria.capture_201,/RECLAIM \(enemy-held, guarded\)/);
   assert.ok(!e.actions.capture_101,'garrisonable houses are for garrisons, not engineers');assert.ok(!e.actions.capture_202,'defenses are not captured');
-  assert.deepEqual(memory.captureTargets,[100,200]);
+  assert.deepEqual(memory.captureTargets,[100,200,201],'a guarded enemy refinery is still a target');
+  const ids=Object.values(e.actions).filter((a)=>a.kind==='capture').map((a)=>a.ids[0]);
+  assert.equal(new Set(ids).size,ids.length,`no engineer is offered for two captures at once (got ${JSON.stringify(ids)})`);
   assert.match(e.instructions,/Capture neutral technology structures/);
+});
+
+test('a guarded enemy building is offered as a reclaim, never run automatically, and never with an engineer another capture already has', () => {
+  const own=[unit(1,'YARD',2,10,10), unit(2,'BARRACKS',2,12,10), unit(20,'ENG',3,14,12), unit(21,'ENG',3,15,12), unit(22,'GI',3,13,12)];
+  const guarded=unit(201,'EREF',2,60,60), pill=unit(202,'DEF',2,64,60), tank=unit(203,'ETANK',7,62,58);
+  const { api, memory } = world({ own, enemies:[guarded,pill,tank], neutral:[] });
+  const groups={}; specialGroups(api, catalog, snapshotOf(api), memory, groups);
+  const e=groups.engineering;
+  assert.ok(e?.actions?.capture_201,'a technology refinery the enemy took is reclaimable, not only destroyable');
+  assert.match(e.criteria.capture_201,/RECLAIM \(enemy-held, guarded\)/);
+  assert.equal(e.actions.capture_201.auto,undefined,'taking a guarded one costs the engineer, so the model decides');
+  assert.match(e.criteria.capture_201,/hand[s]? it back from the enemy rather than destroying it/);
+  const offered=Object.values(e.actions).filter((a)=>a.kind==='capture').map((a)=>a.ids[0]);
+  assert.equal(new Set(offered).size,offered.length,`no engineer is offered for two captures at once (got ${JSON.stringify(offered)})`);
 });
 
 test('with capture targets and no engineer, training one becomes an objective and can run automatically when affordable', () => {

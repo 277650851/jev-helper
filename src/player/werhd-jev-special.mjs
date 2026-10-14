@@ -1,4 +1,4 @@
-import { isAirSupport, effectiveness, counterValue, canAnswerVisible, canEngageTarget } from './werhd-jev-strategy.mjs';
+import { isAirSupport, effectiveness, counterValue, canAnswerVisible, canEngageTarget, defenseProfile } from './werhd-jev-strategy.mjs';
 import { isCapturable } from './werhd-jev-catalog.mjs';
 export const ATTACK_STUCK_TICKS = 2700, CAPTURE_RESENDS = 3, SIEGE_RANGE = 8, BASE_GARRISON_SPARE = 8;
 // A crate is a single tile on the ground, so walking there is quick and the resend window is short. The
@@ -133,9 +133,17 @@ export function specialGroups(api, catalog, snapshot, memory, groups) {
     for (const c of reachable.slice(0, 3)) {
       // Skipping one crate must not hide the others, so this skips the crate rather than leaving the loop.
       if (busy.has(c.id)) continue;
-      const u = pool[0];
+      // Nearest unit to THIS crate, not the first of a fixed priority list. The pool starts with the
+      // scout and the dogs, so `pool[0]` was always a dog and every crate was walked to by one --
+      // including crates a tank was already standing next to. The scout's own advantage is that it is
+      // out in the fog anyway, so it keeps a small head start rather than winning automatically; what
+      // decides the rest is the walk, which is what actually costs the match's only scout.
+      const isFree = (u) => u.id === memory.scoutId || !!catalog[u.name]?.attackDog;
+      const u = pool
+        .map((x) => ({ x, cost: distance(x.tile, c.tile) - (isFree(x) ? 6 : 0) }))
+        .sort((a, b) => a.cost - b.cost)[0]?.x;
       if (!u) break;
-      const isScout = u.id === memory.scoutId || !!catalog[u.name]?.attackDog;
+      const isScout = isFree(u);
       if (!isScout && !canDetach) break;
       pickups(`crate_${c.id}`, `${isScout ? 'While scouting' : 'Detach one combat unit'}: move one unit onto the upgrade crate at (${c.tile.rx},${c.tile.ry})${c.name ? ` (${c.name})` : ''} to collect it. A crate may be a Construction Vehicle; after losing the base it is the way back in.`, {
         type: 'special', kind: 'collect_crate', ids: [u.id], crateId: c.id, tile: { x: c.tile.rx, y: c.tile.ry },
@@ -378,9 +386,21 @@ export function specialGroups(api, catalog, snapshot, memory, groups) {
     .map((u) => ({ unit: u, neutral: !enemyIds.has(u.id), defended: armedNear(u.tile), dist: Math.min(...[base, ...engineers].map((o) => distance(o.tile, u.tile))) }))
     // Neutral targets must be real technology buildings; lamp posts and pipes owned by a civilian
     // house cannot be captured and only trap the engineer in a retry loop.
-    .filter((c) => c.neutral ? isCapturable(catalog[c.unit.name], c.unit.name) : (!c.defended && (catalog[c.unit.name]?.refinery || catalog[c.unit.name]?.factory || catalog[c.unit.name]?.yard || catalog[c.unit.name]?.power > 0 || (catalog[c.unit.name]?.techLevel ?? 0) >= 2)))
+    //
+    // An ENEMY-held building is a capture target whether or not it is defended, as long as it is worth
+    // taking. This used to require `!defended`, which meant a technology structure the enemy had already
+    // taken could only ever be destroyed -- and a building is worth more alive than rubble. Red Alert's
+    // capture rules are also what make this the right play: capturing hands the structure over, and one
+    // that reverts to neutral can be taken by either side again, so an oil derrick the AI captured last
+    // minute can be won back with one engineer instead of a company. jev-report-20261014-215900 is the
+    // shape this produced: the enemy held the derricks, we built tanks to knock them down, and the match
+    // ended with 2 580 credits, no refinery and no army.
+    //
+    // Defended stays in the ordering, not in the filter: taking an undefended one is free, taking a
+    // defended one costs the engineer, so the latter ranks last and is never run automatically.
+    .filter((c) => c.neutral ? isCapturable(catalog[c.unit.name], c.unit.name) : (catalog[c.unit.name]?.refinery || catalog[c.unit.name]?.factory || catalog[c.unit.name]?.yard || catalog[c.unit.name]?.power > 0 || (catalog[c.unit.name]?.techLevel ?? 0) >= 2))
     .sort((a, b) => Number(b.neutral) - Number(a.neutral) || Number(a.defended) - Number(b.defended) || a.dist - b.dist)
-    .slice(0, 4);
+    .slice(0, 6);
   // The player's capture objective ("使用工程师占领盟军战略实验室") comes first even when defended:
   // the mission needs it, and waiting does not make it safer.
   const wanted = memory.objectiveTarget?.mode === 'capture' && !memory.objectiveTarget.done ? hostile.find((u) => u.id === memory.objectiveTarget.id) : undefined;
@@ -388,20 +408,32 @@ export function specialGroups(api, catalog, snapshot, memory, groups) {
     const at = captureTargets.findIndex((c) => c.unit.id === wanted.id);
     if (at >= 0) captureTargets.splice(at, 1);
     captureTargets.unshift({ unit: wanted, neutral: !enemyIds.has(wanted.id), defended: armedNear(wanted.tile), objective: true, dist: Math.min(...[base, ...engineers].map((o) => distance(o.tile, wanted.tile))) });
-    captureTargets.length = Math.min(captureTargets.length, 4);
+    captureTargets.length = Math.min(captureTargets.length, 6);
   }
   memory.captureTargets = captureTargets.map((c) => c.unit.id);
+  // One engineer, one capture. The loop used to ask for the nearest idle engineer independently for each
+  // target, so with a single engineer and three derricks on the field all three options carried the same
+  // id: accepting one made the other two orders the same order, and the list looked like a plan to take
+  // the field when it was a plan to send one engineer three times. Engineers already promised here are
+  // removed from the pool as they are assigned, so a round offers exactly as many captures as it can
+  // actually staff, and `engineersWanted` below is sized from the same number.
+  const unassigned = new Set(engineers.filter((u) => idle(u, memory, tick)).map((u) => u.id));
   for (const c of captureTargets) {
-    const engineer = engineers.filter((u) => idle(u, memory, tick)).sort((a, b) => distance(a.tile, c.unit.tile) - distance(b.tile, c.unit.tile))[0];
+    const engineer = engineers.filter((u) => unassigned.has(u.id)).sort((a, b) => distance(a.tile, c.unit.tile) - distance(b.tile, c.unit.tile))[0];
     if (!engineer || tick - (memory.specialTargets?.get(`repair_${c.unit.id}`) ?? -10000) <= 600) continue;
-    engineering(`capture_${c.unit.id}`, `${c.objective ? 'MISSION OBJECTIVE CAPTURE' : c.neutral ? 'CAPTURE (neutral)' : 'CAPTURE (enemy, undefended)'}: ${c.objective && c.defended ? `engineer #${engineer.id} follows behind our attacking column and enters when the column reaches` : `send engineer #${engineer.id} into`} ${catalog[c.unit.name]?.label ?? c.unit.name} #${c.unit.id} at (${c.unit.tile.rx},${c.unit.tile.ry}), ${Math.round(distance(engineer.tile, c.unit.tile))} tiles away${c.defended ? '; armed enemies nearby, risky' : ''}. The engineer is consumed; the building becomes ours.`,
+    unassigned.delete(engineer.id);
+    engineering(`capture_${c.unit.id}`, `${c.objective ? 'MISSION OBJECTIVE CAPTURE' : c.neutral ? 'CAPTURE (neutral)' : c.defended ? 'RECLAIM (enemy-held, guarded)' : 'CAPTURE (enemy, undefended)'}: ${c.objective && c.defended ? `engineer #${engineer.id} follows behind our attacking column and enters when the column reaches` : `send engineer #${engineer.id} into`} ${catalog[c.unit.name]?.label ?? c.unit.name} #${c.unit.id} at (${c.unit.tile.rx},${c.unit.tile.ry}), ${Math.round(distance(engineer.tile, c.unit.tile))} tiles away${c.defended ? '; armed enemies nearby, the engineer may be lost' : ''}. The engineer is consumed; the building becomes ours${c.unit.name && !c.neutral ? ' (capturing hands it back from the enemy rather than destroying it)' : ''}.`,
       { type: 'special', kind: 'capture', ids: [engineer.id], targetId: c.unit.id, order: { type: api.OrderType.Capture, target: { objectId: c.unit.id } },
         // A defended objective: the engineer follows the army instead of walking in alone (0.7.3 sent
         // about fifteen engineers 117 tiles through the defenses one by one; none arrived).
         ...(c.objective && c.defended ? { escort: true } : {}), auto: c.objective ? 1 : c.neutral && !c.defended ? 2 : c.defended ? undefined : 3 });
   }
-  // A defended capture objective can cost an engineer on the way in: keep two ready for it.
-  const engineersWanted = Math.min(2, captureTargets.length) + (wanted && armedNear(wanted.tile) ? 1 : 0) + (huts.length && bridgeUrgent ? 1 : 0);
+  // Engineers are the only way to take a building, so a shortfall here silently costs every capture
+  // above: the loop offers an option only where an idle engineer exists, which is why one derrick was
+  // taken and the rest of the field was left sitting there. The count now tracks the targets rather
+  // than being clamped to two -- an oil derrick is income, and income lost at the opening is what the
+  // rest of the match is played without. Capped by the target list, so this cannot run away.
+  const engineersWanted = Math.min(captureTargets.length, Math.min(4, captureTargets.length)) + (wanted && armedNear(wanted.tile) ? 1 : 0) + (huts.length && bridgeUrgent ? 1 : 0);
   const objectiveEngineer = wanted && engineers.length < engineersWanted;
   if (engineersWanted > engineers.length && freeQueue(api.QueueType.Infantry) && (snapshot.state.self.credits > 1800 || objectiveEngineer)) {
     const engineer = available.find((u) => catalog[u.name]?.engineer && afford(catalog[u.name], objectiveEngineer ? 0 : 1200));
@@ -448,7 +480,8 @@ export function specialGroups(api, catalog, snapshot, memory, groups) {
       // as the answer to an air raid it cannot touch. Walls are exempt: they screen movement rather than shoot.
       if (r.isBaseDefense && !r.wall && !canAnswerVisible(r, enemies, catalog, api)) continue;
       if (r.isBaseDefense || r.wall)
-        addProduction(defenses, { ...item, queue: api.QueueType.Armory }, r.wall ? 'Build a wall segment to screen a vulnerable approach, leaving a passage' : 'Build a defensive strongpoint');
+        addProduction(defenses, { ...item, queue: api.QueueType.Armory }, r.wall ? 'Build a wall segment to screen a vulnerable approach, leaving a passage'
+          : `${r.label ?? item.name}: ${defenseProfile(r)}`);
     }
   }
   // Technology is proposed in the existing construction category, keeping one queue owner. The
