@@ -220,6 +220,11 @@ export function historyHints(groups, memory, state, assessment) {
 // income measured over the last window (credits gained plus credits spent), whether credits are
 // piling up or draining, and whether miners already sit idle without reachable ore.
 export const ECONOMY_WINDOW_TICKS = 1800;
+// What one lost combat unit is assumed to cost when the field has nothing armed to price against, and
+// the floor when it does. Both are here rather than inline because the replacement bill decides
+// whether the economy expands, and an estimate that can be driven to zero by one odd rule entry turns
+// that decision off silently -- see the note where it is computed.
+export const REPLACEMENT_UNIT_COST = 700, MIN_REPLACEMENT_UNIT_COST = 200;
 export function economyPlan(api, catalog, state, memory, units) {
   const tick = api.tick();
   const miners = units.filter(u => catalog[u.name]?.harvester);
@@ -262,9 +267,22 @@ export function economyPlan(api, catalog, state, memory, units) {
   // tank is not, and a base that trades a technician for a tank every other loss is not poor, it is
   // losing tanks. The cheapest armed unit on offer is the conservative reading; a heavier army costs
   // more to hold and this has to err toward acting.
-  const replacementCost = catalog && units
-    ? lostInWindow * Math.min(1000, ...units.map((u) => catalog[u.name]?.weapon?.damage > 0 ? (catalog[u.name]?.cost ?? 700) : Infinity))
-    : lostInWindow * 700;
+  //
+  // The minimum is taken over costs that are actually positive. `cost` comes from the live rules, and a
+  // zero there used to collapse the whole estimate: one free armed unit in the roster made
+  // `replacementCost` zero, and `outran` then compared 0 against income and never fired -- 292 of the
+  // 522 decisions in jev-report-20261015-000251 priced their losses at nothing, so the rule written to
+  // stop that match losing exactly this way was inert for most of it. `??` does not catch a zero, so
+  // the filter is explicit and the floor is a named constant.
+  const unitCost = (() => {
+    const costs = units
+      .map((u) => catalog?.[u.name])
+      .filter((r) => r?.weapon?.damage > 0 && r.cost > 0)
+      .map((r) => r.cost);
+    if (!costs.length) return REPLACEMENT_UNIT_COST;   // nothing armed on the field to price against
+    return Math.max(MIN_REPLACEMENT_UNIT_COST, Math.min(1000, ...costs));
+  })();
+  const replacementCost = lostInWindow * unitCost;
   // Only over a window long enough for the rate to mean something, and only once there is a bill at all.
   const outran = span >= 300 && lostInWindow > 0 && replacementCost > income;
   let targetMiners, reason;

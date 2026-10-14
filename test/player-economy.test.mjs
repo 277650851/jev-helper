@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { collectState, candidateGroups, economyPlan } from '../src/player/werhd-jev-player.mjs';
+import { collectState, candidateGroups, economyPlan, MIN_REPLACEMENT_UNIT_COST } from '../src/player/werhd-jev-player.mjs';
 
 // Economy targets must follow income, idle miners and the credit trend, not a fixed "3 miners".
 const weapon = (range, damage = 100) => ({ range, damage, rof: 40, ag: true, aa: false, verses: [1,1,1,1,1,1] });
@@ -9,7 +9,11 @@ const catalog = {
   HARV:{harvester:true,cost:1400}, TANK:{category:'AFV',cost:700,weapon:weapon(5,65)}, GI:{category:'Soldier',cost:200,weapon:weapon(4,15)},
 };
 for (const [name, rule] of Object.entries(catalog)) rule.label = name;
-const unit = (id, name, type, x, y, extra = {}) => ({ id, name, type, tile:{rx:x,ry:y}, isIdle:true, hitPoints:100, maxHitPoints:100, primaryWeapon:catalog[name].weapon, isDeployed:false, ...extra });
+// `catalog[name]?.weapon` rather than `catalog[name].weapon`: one test builds its own live catalog (a
+// zero-cost entry) and passes it to `collectState`, while `unit()` only knows the base table. Optional
+// chaining here mirrors how the code under test reads a catalog, and keeps the fixture from throwing before
+// the assertion it exists to make.
+const unit = (id, name, type, x, y, extra = {}) => ({ id, name, type, tile:{rx:x,ry:y}, isIdle:true, hitPoints:100, maxHitPoints:100, primaryWeapon:catalog[name]?.weapon, isDeployed:false, ...extra });
 function world({ own, credits, tick = 5000, ore = true, offers }) {
   const api = {
     ObjectType:{Building:2,Vehicle:7,Infantry:3,Aircraft:1}, QueueType:{Structures:0,Armory:1,Infantry:2,Vehicles:3,Aircrafts:4,Ships:5}, LandType:{Clear:0,Tiberium:9},
@@ -93,6 +97,26 @@ test('losing units faster than the base can earn their cost expands the economy,
   assert.ok(e.targetMiners>2,`the miner target rises past the two a single refinery can justify (got ${e.targetMiners})`);
   assert.ok(e.targetRefineries>1,`and a second refinery is asked for once the miners are not the binding constraint (got ${e.targetRefineries})`);
   assert.match(e.reason,/cannot keep up with losses/);
+});
+
+test('a zero-cost entry in the live rules cannot price a loss at nothing', () => {
+  // Found in jev-report-20261015-000251: 292 of 522 decisions had `lostInWindow > 0` and
+  // `replacementCost === 0`, so `outran` compared zero against income and stayed false. One armed unit
+  // whose `cost` came back as 0 from `api.rules()` was enough -- `?? 700` does not catch a zero, and the
+  // minimum was taken over every unit on the field rather than over the ones that can be priced.
+  const freeArmed = { ...catalog, FREE: { category: 'AFV', cost: 0, weapon: weapon(5, 65) } };
+  const own = [...base, unit(8, 'FREE', 7, 20, 20), {...unit(6, 'HARV', 7, 30, 12), isIdle: false}];
+  const { api, memory } = world({ own, credits: 3000, tick: 5000, offers });
+  memory.economySamples = [{ tick: 3500, credits: 1000, spent: 0, lost: 20 }];
+  memory.spentCredits = 5000;
+  memory.ledger = { ownUnitsLost: 24 };
+  const snap = collectState(api, freeArmed);   // the live catalog is the one with the free entry
+  const p = economyPlan(api, freeArmed, snap.state, memory, snap.raw.units);
+  assert.ok(p.lostInWindow > 0, 'units really were lost');
+  assert.ok(p.replacementCost > 0, `a loss is never free (got ${p.replacementCost})`);
+  assert.ok(p.replacementCost >= p.lostInWindow * MIN_REPLACEMENT_UNIT_COST, 'and never below the floor');
+  // The bill is real, so the rule can now fire.
+  assert.ok(p.replacementCost > 1000, `4 lost units against 3000 earned should outrun it (got ${p.replacementCost})`);
 });
 
 test('a base whose income keeps up with its losses is not asked to expand', () => {
