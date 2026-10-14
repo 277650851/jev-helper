@@ -5,6 +5,7 @@ import { updateCamera } from "./werhd-jev-camera.mjs";
 import { refreshCatalog, isDecoration } from "./werhd-jev-catalog.mjs";
 import { trackObjective, isGuardedByObjective } from "./werhd-jev-objective.mjs";
 import { buildEnemyProfile, counterBrief } from "./werhd-jev-counter.mjs";
+import { fallbackCounter, summarizeFallbacks } from "../fallback-stats.mjs";
 // Ordinary page-side player: every observation and command uses window.werhd.
 // Bundled into the browser extension; transport and credentials live outside the game page.
 
@@ -2262,6 +2263,11 @@ export function engineOwnedMarks(groups) {
 export function collectTakeovers(groups, answers, engineOwned = {}, memory = {}, tick = 0) {
   const takeovers = [];
   memory.takeoverDeclines ??= {};
+  // `auto: N` fallback counters. They live in `memory` because `collectTakeovers` already receives it, so
+  // nothing else has to be threaded through; `stop()` reads them out once and emits a `gates` entry. The
+  // point of the counters is the question the offline audit cannot answer: a declared threshold that was
+  // ARMED but never reached looks identical, in a saved report, to a threshold that does nothing at all.
+  memory.fallbackStats ??= {};
   // The caller runs this twice per turn: once with no answers (the options the engine owns outright) and
   // once after the model replies (the `auto:` fallbacks). The second pass re-evaluates the same groups, and
   // by then another group's action may have rewritten `memory.mission` -- which defeats the running-mission
@@ -2300,7 +2306,10 @@ export function collectTakeovers(groups, answers, engineOwned = {}, memory = {},
     if (!sent) continue;
     for (const k of thresholded) {
       const key = `${id}:${k}`;
-      if (answer.choice === "wait") memory.takeoverDeclines[key] = (memory.takeoverDeclines[key] ?? 0) + 1;
+      const stat = fallbackCounter(memory.fallbackStats, id, k, thresholdOf(k));
+      stat.armed++;
+      if (answer.choice === k) stat.byModel++;
+      if (answer.choice === "wait") { memory.takeoverDeclines[key] = (memory.takeoverDeclines[key] ?? 0) + 1; stat.declined++; }
       else delete memory.takeoverDeclines[key];
     }
     const choice = thresholded[0];
@@ -2321,6 +2330,7 @@ export function collectTakeovers(groups, answers, engineOwned = {}, memory = {},
     }
     // `owned` records that the engine, not a declared threshold, is what took it -- the log keeps them
     // distinct so a match can be read back.
+    fallbackCounter(memory.fallbackStats, id, choice, thresholdOf(choice)).fired++;
     memory.takenThisTick.add(id);
     takeovers.push({ id, choice, action: actions[choice], reason: id === "scouting" ? "auto_explore" : `auto_${id}`, plain: true, owned: own[choice] === true });
   }
@@ -2493,6 +2503,27 @@ export async function attachJevPlayer(api, options = {}) {
     clearTimeout(microTimer);
     if (typeof api.offTick === "function") { try { api.offTick(); } catch {} }
     controller.abort();
+    // What every declared `auto: N` fallback did this match, emitted before `stop` so the tally survives
+    // however the match ended. The distinction it exists to make: a threshold that was ARMED many times and
+    // never fired is a rule that did nothing in this match, and it looks identical in a report to a
+    // threshold whose precondition never held -- which needs the opposite fix.
+    const gates = summarizeFallbacks(memory.fallbackStats);
+    // Every row carries all four counters, in both lists. The reader must not have to know which list a row
+    // came from to know whether it was ever armed -- that asymmetry is exactly the bug class this tally is
+    // meant to expose, and repeating it in the wire format would be self-defeating.
+    const gateRow = (s) => ({ group: s.group, key: s.key, threshold: s.threshold, armed: s.armed, declined: s.declined, byModel: s.byModel, fired: s.fired });
+    emit({
+      kind: "gates",
+      // No `tick`: `stop()` runs when the battle is already gone, and `api.tick()` throws outside a running
+      // battle (`werhd is not available outside a running battle`). `stop` itself carries no tick either.
+      // Caught by test/player-lifecycle.test.mjs, whose fake api throws exactly as the real one does.
+      declared: gates.declared,
+      armed: gates.armed,
+      byModel: gates.byModel,
+      firedTotal: gates.firedTotal,
+      neverFired: gates.neverFired.slice(0, 24).map(gateRow),
+      fired: gates.fired.slice(0, 24).map(gateRow),
+    });
     emit({
       kind: "stop",
       reason,
@@ -2529,10 +2560,13 @@ export async function attachJevPlayer(api, options = {}) {
         stop("defeated_or_observer");
         return;
       }
+      // `api.players?.()` guards the CALL, not its result: on an API without `players` this was
+      // `undefined.filter(...)`, which throws into `micro`'s catch and ends the autopilot with
+      // `executor_error`. The `?? []` never ran because the throw happened first. The line above already
+      // reads it the safe way; this one is the same call site shape and had the same defect.
       const opponents =
-        api
-          .players?.()
-          .filter((p) => !p.allied && p.combatant && !p.isObserver) ?? [];
+        (api.players?.() ?? [])
+          .filter((p) => !p.allied && p.combatant && !p.isObserver);
       if (opponents.length && opponents.every((p) => p.defeated)) {
         emit({ kind: "outcome", result: "victory", tick: api.tick() });
         stop("victory");

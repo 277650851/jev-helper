@@ -102,6 +102,13 @@ export function commandEntry({ at, tick, provider, model, latencyMs, usage, brie
     rejected: orderLines(rejected) };
 }
 
+// The `auto: N` fallback tally rows. Bounded like every other list in this file, because a match can arm
+// dozens of options and the report is written to disk.
+const gateLines = (rows) => (Array.isArray(rows) ? rows.slice(0, 24).map((r) => ({
+  group: short(r?.group, 24), key: short(r?.key, 48), threshold: number(r?.threshold),
+  armed: number(r?.armed), declined: number(r?.declined), byModel: number(r?.byModel), fired: number(r?.fired),
+})) : []);
+
 export function eventEntry(e, at) {
   const kind = short(e?.kind, 24);
   const base = { at, kind, tick: number(e?.tick) };
@@ -120,6 +127,11 @@ export function eventEntry(e, at) {
   if (kind === 'stale') return { ...base, currentTick: number(e.currentTick), latencyMs: number(e.latencyMs), budgetTicks: number(e.budgetTicks) };
   if (kind === 'start') return { ...base, maxDecisions: number(e.maxDecisions), policy: short(e.policy, 40) };
   if (kind === 'stop') return { ...base, reason: short(e.reason, 40) };
+  // The `auto: N` fallback tally, written once when a match ends. A kind of its own rather than extra fields
+  // on `stop`, because `stop`'s shape is read by the panel and by analyze-log: widening a record that other
+  // readers already parse changes its meaning for all of them at once.
+  if (kind === 'gates') return { ...base, declared: number(e.declared), armed: number(e.armed), byModel: number(e.byModel), firedTotal: number(e.firedTotal),
+    neverFired: gateLines(e.neverFired), fired: gateLines(e.fired) };
   if (kind === 'outcome') return { ...base, result: short(e.result, 24),
     ...(Array.isArray(e.players) ? { players: e.players.slice(0, 16).map((p) => ({ name: short(p?.name, 30), allied: !!p?.allied, defeated: !!p?.defeated })) } : {}),
     ...(e.objective ? { objective: { id: number(e.objective.id), label: short(e.objective.label, 60), done: !!e.objective.done, captured: !!e.objective.captured, lost: !!e.objective.lost, hp: number(e.objective.hp), ...afterCapture(e.objective.afterCapture) } } : {}),
