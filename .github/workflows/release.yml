@@ -2,9 +2,9 @@ name: Check, package and release
 
 on:
   push:
-    branches: [main]
+    branches: [main, develop]
   pull_request:
-    branches: [main]
+    branches: [main, develop]
   workflow_dispatch:
 
 permissions:
@@ -70,7 +70,9 @@ jobs:
   release:
     name: Publish GitHub release
     needs: check
-    if: github.event_name != 'pull_request'
+    # Releases are published from main only. develop carries the unreleased
+    # autopilot redesign and is checked, never released.
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ github.token }}
@@ -89,9 +91,18 @@ jobs:
       - name: Create release for a new version
         run: |
           tag="v${VERSION}"
+
+          # Guard on the TAG, not on the release. A release can be missing while its
+          # tag exists -- that is the current state of this repo (tags v0.4.4 / v0.7.5,
+          # no releases). Checking `gh release view` would pass, and
+          # `gh release create --target HEAD` would then attach a ZIP built from the
+          # new commit to the OLD tag, so the artifact and its provenance disagree.
+          if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+            echo "::error::Tag $tag already exists at $(git rev-list -n 1 "$tag" | cut -c1-7), but this build is from $GITHUB_SHA. Bump the version in package.json and public/manifest.json to publish a new one; re-tagging an existing release silently mislabels the artifact." >&2
+            exit 1
+          fi
           if gh release view "$tag" >/dev/null 2>&1; then
-            echo "Release $tag already exists; bump the version in package.json and public/manifest.json to publish a new one." >> "$GITHUB_STEP_SUMMARY"
-            echo "Release $tag already exists, skipping."
+            echo "Release $tag already exists, skipping." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
           sha="$(sha256sum "$ZIP" | cut -d' ' -f1)"
