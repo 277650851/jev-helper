@@ -1,9 +1,12 @@
 # 使用本地 Laya 模型
 
-扩展默认调用 TypeSafe 托管的 Jev 模型（需要 JEV 密钥，按请求计费）。本文说明另一种模型来源：在自己的 Mac 上运行 **Laya** 决策模型，由本仓库的 `tools/laya-server.py` 提供与 Jev 相同的接口，扩展切到「本地 Laya」即可使用。不需要密钥，不产生 API 费用。
+扩展默认调用 TypeSafe 托管的 Jev 模型（需要 JEV 密钥，按请求计费）。本文说明另一种模型来源：自己运行 **Laya** 决策模型，扩展切到「本地 Laya」即可使用。不需要密钥，不产生 API 费用，全程离线。
+
+Apple 芯片用仓库自带的 `tools/laya-server.py`（MLX）；Windows / Linux / Intel Mac 用 PyPI 上的 `laya`（纯 PyTorch，见 [Windows / 无 MLX 平台](#windows--无-mlx-平台)）。
 
 - [它是什么](#它是什么)
 - [环境要求](#环境要求)
+- [Windows / 无 MLX 平台](#windows--无-mlx-平台)
 - [第一步：准备模型仓库与权重](#第一步准备模型仓库与权重)
 - [第二步：启动本地服务](#第二步启动本地服务)
 - [第三步：在扩展中配置](#第三步在扩展中配置)
@@ -35,13 +38,84 @@
 
 ## 环境要求
 
+> **两条路线，别选错。**
+>
+> - **Apple 芯片 Mac**（本文主体）：走 MLX，即下面的 `npm run laya`。决策质量更好，显存也省。
+> - **Windows / Linux / Intel Mac**：MLX 跑不了，但**可以**用 PyPI 上的 `laya`（纯 PyTorch，
+>   CPU 或 CUDA，全平台）。它自带 `laya-serve`，对外协议与 Jev 完全一致，扩展不需要改动。
+>   见 [Windows / 无 MLX 平台](#windows--无-mlx-平台)。
+>
+> 两条路线都完全离线，都不需要密钥。
+
+### 路线 A：Apple 芯片（MLX，`npm run laya`）
+
 - Apple 芯片 Mac（M1 及以后），macOS 14+
 - Python 3.11+
 - [uv](https://docs.astral.sh/uv/)（Python 包管理器）
 - Node.js 22+（本仓库本身的要求，用于 `npm run laya`）
 - 约 1 GB 空闲内存；首次需要联网下载权重
 
-Intel Mac、Windows、Linux 无法运行 MLX，只能用 Jev 云端，或连接局域网内另一台已启动服务的 Mac（见 [局域网共享](#局域网共享)）。
+## Windows / 无 MLX 平台
+
+`laya_mlx` 是 MLX 移植版，**只能跑在 Apple 芯片上**，所以 `npm run laya` 在
+Windows、Linux、Intel Mac 上都起不来。但这不等于这些平台用不了本地模型 ——
+PyPI 上的 [`laya`](https://pypi.org/project/laya/) 是纯 PyTorch 实现，自带
+`laya-serve`，对外就是 `/v1/systemone` 这套 Jev 协议，扩展侧完全无感。
+
+### 安装
+
+```powershell
+python -m venv .laya-venv
+.\.laya-venv\Scripts\python.exe -m pip install torch --index-url https://download.pytorch.org/whl/cu124
+.\.laya-venv\Scripts\python.exe -m pip install "laya[serve]"
+
+# 权重从 ModelScope 拉（约 647 MB）。huggingface.co 不通时也能用。
+.\.laya-venv\Scripts\python.exe tools\laya-model-fetch.py
+```
+
+> Windows 上的 CUDA 版 PyTorch 轮子很大（cu124 约 2.4 GB），首次下载要耐心。
+> 只想先跑起来可以装 CPU 版：`pip install torch --index-url https://download.pytorch.org/whl/cpu`
+> （约 0.6 GB），代价是单次决策从几百毫秒变成几秒。
+
+### 启停
+
+```powershell
+tools\laya-ctl.cmd start      # 后台启动并等就绪
+tools\laya-ctl.cmd status     # 跑着什么、用的哪个设备、权重齐不齐
+tools\laya-ctl.cmd test       # 发一次真实决策请求做协议自检
+tools\laya-ctl.cmd stop
+```
+
+`laya-ctl.ps1` 是 Windows 优先的控制脚本，`.cmd` 是 cmd.exe / 双击用的入口。
+
+它有两个原本没有、后来加上的开关，用于**离线整合包**这种目录结构与仓库默认不同的情况：
+
+| 开关 | 作用 |
+| --- | --- |
+| `-Python <解释器路径>` | 指定 Python。默认 `<仓库>/.laya-venv/Scripts/python.exe` |
+| `-Model <检查点目录>` | 指定权重目录。默认 `<仓库>/models/laya-multilingual` |
+
+### 为什么要有 `laya-serve-local.py`
+
+`laya-serve` 自带的 `build_router()` 只从环境变量读配置，且只能用 **hub id** 指名模型，
+也就是必须能访问 `huggingface.co`。在访问不到该主机的网络里，服务**根本起不来**。
+
+`tools/laya-serve-local.py` 直接把一个指向本地目录的 Router 注入 `create_app(router=...)`
+（`laya/serve.py` 明确支持注入），绕开 hub 解析。同时强制 `HF_HUB_OFFLINE=1` 与
+`TRANSFORMERS_OFFLINE=1`：检查点从本地目录加载，`laya.Agent` 不会调用
+`snapshot_download`，万一有代码试图联网会直接报错而不是静默挂起。
+
+`tools/laya-model-fetch.py` 是配套的下载脚本，纯标准库、不依赖 torch / huggingface_hub /
+modelscope，只说 HTTP，专门从 ModelScope 拉 `laya.Agent` 真正需要的那几个文件
+（`model.safetensors`、`encoder/`、`tokenizer/`、`rl_agent_config.json`、`configuration.json`），
+不拉基准测试图片和 eval notebook。
+
+### 注意
+
+- 本地 Laya 只能做**选择题**（`choices`），不支持「指挥官」模式 —— 后者是给
+  OpenAI 兼容的大模型用的，本地小模型读不动战况简报。
+- 服务端同一时间只跑一个推理，多台电脑同时托管会排队。
+- `laya-state-report.py` 是离线分析工具：把捕获的真实请求喂回去，报告每组被截断到多少。
 
 ## 第一步：准备模型仓库与权重
 
