@@ -45,6 +45,29 @@
 评审文档里 `fix/autopilot-p0-buildstamp-and-stability` 的字样是**历史记录**，不必批量改写；
 但**从现在起新提交落在 `develop` 上**。
 
+### 2026-10-14 抢救审计
+
+对仓库做了一次"还有没有东西没被引用"的完整审计，结果记录在此，免得下次重查：
+
+| 对象 | 审计前的状态 | 处置 |
+|---|---|---|
+| `wip/reserved-counter-auto` 线 35 个提交 | 对象在本仓库，但**不被任何分支或 tag 引用** | 抢救为 `archive/wip-reserved-counter-auto`（`3961e6d`）+ 同名 tag |
+| 该线的 4 个历史快照 `07bc7ae` / `d083381` / `641bb4f` / `3961e6d` | 都悬空，且是同一条线的不同时刻 | 一并归档；`3961e6d`（35 提交）是最终态 |
+| 掉落的一次 stash `wip-engineOwned` | 悬空，2026-10-10 | **核对后确认已冗余** —— 内容等于提交 `ef49e87`（`RICH_SPEND` 5000→1500、`RICH_SPEND_MULTIPLE`、`moneyIdle()`、造兵改 `engineOwned`，测试断言文字都逐字相同），已丢弃 |
+| `develop` 的 107 提交 | 只挂在 `fix/…` 分支上，无 tag、无 Release | 打 `autopilot-redesign-v0.50`，另推 `develop` 分支 |
+
+审计后 `git fsck --unreachable` 为 0，上面每个提交都能从某个 ref 到达。
+
+**教训（比结论更重要）**：
+
+1. `git cat-file -t <sha>` 对那条线的 **4 个不同快照 SHA 全都返回 `commit`**，
+   看上去"东西都在"。但对象存在 ≠ 可达 —— `git fetch` 过的旧对象同样"存在"。
+   判据只能是 `git merge-base --is-ancestor <sha> <分支或 tag>`。
+2. 光看 `git log --oneline HEAD..<sha>` 会**低估**那条线。`07bc7ae` 看起来只有 14 个提交，
+   但它后面还有 `d083381` → `641bb4f` → `3961e6d`，最终态是 **35 个提交**。
+   差点只归档了其中 14 个。**任何一个快照 SHA 都要向最终态追到底。**
+3. 本次差点凭 `cat-file` 下"已经抢救了"的结论，**和第 3 节第 2 条记录的那个错误是同一类**。
+
 **推送前提**：GitHub 需要用户启动 **FastGithub.UI** 代理，否则 `git push` 报
 `Failed to connect to github.com:443`。
 
