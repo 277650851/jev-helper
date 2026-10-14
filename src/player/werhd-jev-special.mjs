@@ -689,7 +689,7 @@ export function maintainSpecial(api, memory, emit, catalog) {
     // `api.unit()`, and a crate id is not a unit id -- it came back undefined and the task was torn down as
     // `incomplete` on the very next turn, one step after the unit had been ordered.
     if (action.kind === 'collect_crate') {
-      const done = (result) => { for (const id of action.ids) memory.specialOrders.delete(id); emit({ kind: 'task', tick, task: 'collect_crate', description: `collect_crate ${result}: #${action.crateId}`, result, targetId: action.crateId }); return false; };
+      const done = (result) => { for (const id of action.ids) memory.specialOrders.delete(id); emit({ kind: 'task', tick, task: 'collect_crate', description: `collect_crate ${result}: #${action.crateId}`, result, targetId: action.crateId, resends: task.resends ?? 0 }); return false; };
       const crate = (api.crates?.() ?? []).find((c) => c.id === action.crateId);
       // A crate that is no longer listed was collected -- by us or by someone else; either way the order is over.
       if (!crate) return done('collected');
@@ -704,13 +704,16 @@ export function maintainSpecial(api, memory, emit, catalog) {
         const execution = executeSpecial(api, action);
         if (!execution.accepted) return done('rejected');
         task.submitted = tick;
+        // Counted like the capture and entry loops above: without this the one task kind that re-sends on a
+        // timer reported `resends: 0` forever, which reads as "the game accepted it first time".
+        task.resends = (task.resends ?? 0) + 1;
         emit({ kind: 'micro', tick, description: `collect_crate: 重新前往箱子 #${action.crateId}`, targetId: action.crateId, ids: action.ids });
       }
       return true;
     }
     if (action.kind === 'capture') {
       const engineer = own.get(action.ids[0]), target = api.unit(action.targetId);
-      const done = (result) => { for (const id of action.ids) memory.specialOrders.delete(id); emit({ kind: result === 'completed' ? 'observed' : 'task', tick, task: 'capture', description: `capture ${result}: #${action.targetId}`, result, targetId: action.targetId }); return false; };
+      const done = (result) => { for (const id of action.ids) memory.specialOrders.delete(id); emit({ kind: result === 'completed' ? 'observed' : 'task', tick, task: 'capture', description: `capture ${result}: #${action.targetId}`, result, targetId: action.targetId, resends: task.resends ?? 0 }); return false; };
       if (task.escort) return maintainEscort(api, memory, task, own, tick, emit, catalog, done);
       if (own.has(action.targetId)) return done('completed');
       if (!engineer) return target ? done('engineer_lost') : done('incomplete');
@@ -736,7 +739,7 @@ export function maintainSpecial(api, memory, emit, catalog) {
       for (const id of [...action.ids, ...(action.kind === 'load' ? [action.targetId] : [])]) memory.specialOrders.delete(id);
       emit({ kind: result === 'completed' ? 'observed' : 'task', tick, task: action.kind,
         description: `${action.kind} ${result}: ${entered.length}/${action.ids.length}`,
-        result, targetId: action.targetId, enteredIds: entered });
+        result, targetId: action.targetId, enteredIds: entered, resends: task.resends ?? 0 });
       return false;
     };
     if (entered.length === action.ids.length) return finish('completed');
@@ -784,7 +787,7 @@ function maintainDemolition(api, memory, task, own, tick, emit) {
     }
     emit({ kind: result === 'completed' ? 'observed' : 'task', tick, task: action.kind,
       description: `demolish_bridge ${result}`, result, bridgeId: bridge.id, x: bridge.x, y: bridge.y,
-      initialHitPoints: bridge.hitPoints, lastHitPoints: current?.hitPoints ?? task.hitPoints });
+      initialHitPoints: bridge.hitPoints, lastHitPoints: current?.hitPoints ?? task.hitPoints, resends: task.resends ?? 0 });
     return false;
   };
   if (!tile) return finish('lost_visibility');

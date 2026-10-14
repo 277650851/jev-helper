@@ -147,6 +147,15 @@ export function eventEntry(e, at) {
   if (kind === 'stale') return { ...base, currentTick: number(e.currentTick), latencyMs: number(e.latencyMs), budgetTicks: number(e.budgetTicks) };
   if (kind === 'start') return { ...base, maxDecisions: number(e.maxDecisions), policy: short(e.policy, 40) };
   if (kind === 'stop') return { ...base, reason: short(e.reason, 40) };
+  // A special task's own ending: `collect_crate` / house entry / capture / bridge repair, and whether it
+  // completed or was given up on. These events were ALWAYS emitted -- `special.mjs` calls
+  // `emit({ kind: 'task', result, ... })` at the end of every task -- and this serializer had no branch for
+  // them, so the entire class was discarded by the `return null` at the bottom. That is why the review's
+  // evidence had to be dug out by hand ("a civilian house that could not be entered was re-entered 497
+  // times", "one capture target was re-sent 89 times"): the game API has no command receipts
+  // (docs/game-api-requests.md §7.1), so an order it silently ignores looks exactly like one that worked,
+  // and `resends` on this record is the only place that difference becomes visible in a saved report.
+  if (kind === 'task') return { ...base, task: short(e.task, 32), result: short(e.result, 32), targetId: number(e.targetId), resends: number(e.resends), text: short(e.description, 160) };
   // The `auto: N` fallback tally, written once when a match ends. A kind of its own rather than extra fields
   // on `stop`, because `stop`'s shape is read by the panel and by analyze-log: widening a record that other
   // readers already parse changes its meaning for all of them at once.

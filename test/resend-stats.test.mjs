@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { emptyResendStats, recordResend, summarizeResends, formatResendReport, MAX_RESEND_ROWS } from '../src/resend-stats.mjs';
+import { eventEntry } from '../src/logbook.mjs';
 
 // The game API has no command receipts, so "this order was sent 89 times and nothing happened" is the only
 // evidence that the game refused it. These tests pin the two things that make the number trustworthy: the
@@ -60,9 +61,22 @@ test('a negative or missing resend count cannot inflate or corrupt the total', (
   assert.equal(s.tasks, 2);
 });
 
+test('a task outcome survives the log serializer, with its resend count', () => {
+  // `special.mjs` has always emitted these; `eventEntry` had no branch for the kind, so every capture /
+  // house-entry / crate / bridge outcome fell through to `return null` and never reached a saved report.
+  const e = eventEntry({ kind: 'task', tick: 5000, task: 'capture', result: 'uncapturable', targetId: 1489, resends: 89, description: 'capture uncapturable: #1489' }, 0);
+  assert.ok(e, 'the task kind must not fall through to the null tail');
+  assert.equal(e.task, 'capture');
+  assert.equal(e.result, 'uncapturable');
+  assert.equal(e.resends, 89);
+  assert.equal(e.targetId, 1489);
+  // The branch is specific, not a catch-all: an unknown kind is still dropped.
+  assert.equal(eventEntry({ kind: 'not-a-kind', tick: 1 }, 0), null);
+});
+
 test('an absent record is reported as absent, not as "nothing was repeated"', () => {
-  // A report written before this record existed has no `kind:"resends"` entry at all. Printing "0 次" for
-  // that is the same mistake as reading a truncated log as "it did not happen" (§0.47).
+  // A report written before this record existed has no `kind:"task"` entry at all. Printing "0 次" for that
+  // is the same mistake as reading a truncated log as "it did not happen" (§0.47).
   const text = formatResendReport(summarizeResends(undefined));
   assert.match(text, /没有记录|没有重复/);
   assert.match(text, /先确认/);
