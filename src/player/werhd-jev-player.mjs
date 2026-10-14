@@ -3,6 +3,7 @@ import { buildBrief, formSquads, squadUnits, sameIntent } from "./werhd-jev-comm
 import { assessStrategy, investmentGroups, chooseBuildingSite, chooseRallySite, weaponEffectiveness, counterValue, canUnitHurt, infantryProfile, scoutScore, currentWeapon as combatWeapon, activeWeapons, canFireAt, baseThreats, usableBuilders, ATTACK_FORCE_SIZE, ATTACK_AA_ESCORTS, vehicleOptions } from "./werhd-jev-strategy.mjs";
 import { updateCamera } from "./werhd-jev-camera.mjs";
 import { refreshCatalog, isDecoration } from "./werhd-jev-catalog.mjs";
+import { unitPurpose } from "../unit-role.mjs";
 import { trackObjective, isGuardedByObjective } from "./werhd-jev-objective.mjs";
 import { buildEnemyProfile, counterBrief } from "./werhd-jev-counter.mjs";
 import { fallbackCounter, summarizeFallbacks } from "../fallback-stats.mjs";
@@ -37,7 +38,7 @@ export function collectState(api, catalog) {
     inventory[unit.name] ??= {
       name: rule.label ?? unit.name,
       count: 0,
-      role: roleOf(rule),
+      role: roleOf(rule, unit.name),
     };
     inventory[unit.name].count++;
   }
@@ -128,7 +129,14 @@ function stateCredits(api) {
   return api.me().credits;
 }
 
-function roleOf(rule) {
+function roleOf(rule, name) {
+  // What the catalog doc says this is for, first. The rule-derived chain below can only answer in the
+  // rules' own vocabulary -- "factory: InfantryType", "support or technology", a raw category -- while
+  // `docs/ra2-unit-catalog.md` states the thing a player actually needs when ranking: this one is
+  // anti-air, this one breaks buildings, this one exists to kill miners. Unknown names fall through to
+  // the old chain, so a modded unit is described as before rather than wrongly.
+  const documented = unitPurpose(name);
+  if (documented) return documented;
   if (rule.yard) return "construction yard";
   if (rule.refinery) return "ore refinery; supplies a free miner";
   if (rule.harvester) return "ore miner";
@@ -701,7 +709,7 @@ export function candidateGroups(api, catalog, snapshot, memory) {
       if (need && state.self.credits >= Math.min(500, r.cost))
         build(
           `produce_${item.name}`,
-          `Build ${r.label}; cost ${r.cost}; ${roleOf(r)}. Needed now by our development plan.`,
+          `Build ${r.label}; cost ${r.cost}; ${roleOf(r, item.name)}. Needed now by our development plan.`,
           {
             type: "produce",
             name: item.name,
