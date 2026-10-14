@@ -215,6 +215,8 @@ export function optionLifecycle(entries = []) {
       options.set(option, o = {
         option, group, key, offered: 0, chosen: 0, modelTaken: 0, modelAccepted: 0,
         engineTaken: 0, engineAccepted: 0, engineRefused: 0, firstTick: null, lastTick: null,
+        // How often the key was the ONLY real option on the question, and how often the model still took it.
+        forcedOffered: 0, forcedChosen: 0,
       });
     }
     return o;
@@ -237,6 +239,17 @@ export function optionLifecycle(entries = []) {
         // The model's pick is only attributed when it is a key that was actually offered. A report whose
         // option list was cut by the log's ring buffer must not invent a lifecycle for a key nobody saw.
         if (keys.includes(g?.choice)) { const o = rec(group, g.choice); o.chosen++; touch(o, e.tick); }
+        // A `forced` question is one whose answer the engine's own preconditions already fixed: `wait` plus a
+        // single real option. Counted PER OPTION, because that is the granularity any fix works at -- "43% of
+        // questions are forced" is not actionable, "this key was forced 111 times and chosen 0" is, and the
+        // difference between the two decides whether the option should be engine-owned or left to the model.
+        if (classifyQuestion(keys) === 'forced') {
+          const only = keys.find((k) => k !== 'wait');
+          const o = rec(group, only);
+          o.forcedOffered++;
+          if (g?.choice === only) o.forcedChosen++;
+          touch(o, e.tick);
+        }
       }
       continue;
     }
@@ -273,6 +286,11 @@ export function optionLifecycle(entries = []) {
     // partition is what stops a finder from reporting the same candidate twice under two names.
     o.engineOnly = !o.unseen && o.chosen === 0 && (o.engineTaken > 0 || o.modelTaken > 0);
     o.modelOnly = o.chosen > 0 && o.engineTaken === 0;
+    // Forced on the model and never taken by it: this is the T-09 work list. Either the option is one the
+    // engine's precondition already decided (→ mark it engine-owned and stop asking) or the model genuinely
+    // will not take it (→ the question is not doing anything either way). Which of the two it is cannot be
+    // read off a report, so the list is a candidate set, not a verdict.
+    o.forcedNeverChosen = o.forcedOffered > 0 && o.forcedChosen === 0;
     o.family = `${o.group}:${familyOf(o.key)}`;
   }
   const only = (f) => all.filter((o) => f(o) && !o.abstain);
@@ -308,6 +326,11 @@ export function optionLifecycle(entries = []) {
     engineOnlyOptions: only((o) => o.engineOnly),
     deadFamilies: families.filter((f) => f.deadFamily),
     families,
+    // The forced-question half, per option. `forcedOptions` is everything the engine offered as a single
+    // real choice; `forcedNeverChosen` is the subset the model never once took -- the T-09 candidate list.
+    forcedQuestions: all.reduce((n, o) => n + o.forcedOffered, 0),
+    forcedOptions: only((o) => o.forcedOffered > 0).sort((a, b) => b.forcedOffered - a.forcedOffered),
+    forcedNeverChosen: only((o) => o.forcedNeverChosen).sort((a, b) => b.forcedOffered - a.forcedOffered),
     all,
   };
 }
@@ -420,6 +443,24 @@ export function formatOptionAudit(l = {}, { file = '', truncated = false } = {})
   if (truncated || !l.questions) {
     log(`⚠ 日志被截断或没有 decision 记录：${l.actionsWithoutQuestion} 条执行找不到对应的提问，"给出"列只是下界。`);
     log('  （战报是环形缓冲，losses/评审 §0.44 都记过："日志里没有"不等于"没发生"。）');
+  }
+
+  log('');
+  log(`★ 强制题：除 wait 外只有一个真实选项的提问共 ${l.forcedQuestions} 个，涉及 ${l.forcedOptions.length} 个选项`);
+  log(`  其中模型一次都没选过的 → ${l.forcedNeverChosen.length} 个（T-09 的候选清单：这些题问了等于没问）`);
+  if (l.forcedNeverChosen.length) {
+    log('    选项                                被强制   从没选   模型执行  引擎接管   存在区间');
+    for (const o of l.forcedNeverChosen.slice(0, 20)) {
+      log(`    ${o.option.padEnd(32)} ${String(o.forcedOffered).padStart(7)} ${String(o.forcedOffered - o.forcedChosen).padStart(8)} ${String(o.modelTaken).padStart(9)} ${String(o.engineTaken).padStart(9)}   ${o.firstTick ?? '?'}～${o.lastTick ?? '?'}`);
+    }
+    if (l.forcedNeverChosen.length > 20) log(`    …另有 ${l.forcedNeverChosen.length - 20} 个`);
+  }
+  // The other side of the same list: a forced option the model DOES take is a question worth asking, and
+  // owning it would take a real choice away. Printed so the candidate list above cannot be read as "all
+  // forced questions are worthless".
+  const forcedTaken = l.forcedOptions.filter((o) => o.forcedChosen > 0);
+  if (forcedTaken.length) {
+    log(`  （另有 ${forcedTaken.length} 个被强制的选项模型确实会选，例如 ${forcedTaken.slice(0, 3).map((o) => `${o.option}×${o.forcedChosen}`).join('、')}——这些不能接管）`);
   }
 
   log('');

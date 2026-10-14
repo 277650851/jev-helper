@@ -119,7 +119,40 @@ test('the rendered report names the dead option and keeps the three classes apar
   assert.match(lines, /模型从未见过的候选：.*→ 1 个/);
   assert.match(lines, /引擎独占：.*→ 1 个/);
   assert.match(lines, /construction:produce_GAPOWR/);
-  assert.doesNotMatch(lines, /tactics:assemble_force/, 'a candidate the model really uses is not a finding');
+  // A candidate the model really uses must not appear in any of the FINDING lists. It does appear once, in the
+  // parenthetical that lists forced options the model does take -- which exists precisely so the candidate
+  // list above cannot be misread as "every forced question is worthless".
+  const l = optionLifecycle(entries);
+  for (const list of ['deadOptions', 'unseenOptions', 'engineOnlyOptions', 'forcedNeverChosen']) {
+    assert.equal(l[list].some((o) => o.option === 'tactics:assemble_force'), false, `${list} must not hold it`);
+  }
+  assert.match(lines, /被强制的选项模型确实会选.*tactics:assemble_force/);
+});
+
+test('forced questions are counted per option, and the never-chosen ones are listed', () => {
+  // Every group in the fixture offers `wait` plus exactly one real option, so every question is forced. The
+  // split that matters is which of those options the model ever takes: `vehicles:produce_MTNK` and
+  // `construction:produce_GAPOWR` are never taken (T-09 candidates), `tactics:assemble_force` is taken twice
+  // and must therefore keep being asked.
+  const l = optionLifecycle(entries);
+  assert.equal(l.forcedQuestions, 7, 'one per decision entry in the fixture');
+  assert.deepEqual(l.forcedNeverChosen.map((o) => o.option).sort(), ['construction:produce_GAPOWR', 'vehicles:produce_MTNK']);
+
+  const tank = l.all.find((o) => o.option === 'vehicles:produce_MTNK');
+  assert.equal(tank.forcedOffered, 3);
+  assert.equal(tank.forcedChosen, 0);
+  assert.equal(tank.forcedNeverChosen, true);
+
+  const force = l.all.find((o) => o.option === 'tactics:assemble_force');
+  assert.equal(force.forcedOffered, 2);
+  assert.equal(force.forcedChosen, 2);
+  assert.equal(force.forcedNeverChosen, false);
+  assert.ok(l.forcedOptions.some((o) => o.option === 'tactics:assemble_force'), 'a taken forced option stays on the list');
+
+  // A group with four real options is not a forced question and must not be counted here.
+  const open = optionLifecycle([decision(1, { tactics: { choice: 'wait', options: { a: 'A', b: 'B', c: 'C', d: 'D', wait: 'w' } } })]);
+  assert.equal(open.forcedQuestions, 0);
+  assert.deepEqual(open.forcedNeverChosen, []);
 });
 
 test('per-id options are aggregated into a family, so one-per-unit producers do not hide the signal', () => {
