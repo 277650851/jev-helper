@@ -8,6 +8,13 @@ export const CRATE_RESEND = 120, CRATE_TIMEOUT = 1800;
 // as core infrastructure to defend -- but until now nothing ever moved it out of the way, so it stood there
 // and was killed while the engine counted it as something worth defending.
 export const MINER_FLEE_RADIUS = 5, MINER_FLEE_COOLDOWN = 300;
+// An engineer set to Guard clears the bombs around it: that is the game's own G key, and the order already
+// exists as `OrderType.Guard = 5` (werhd-player-api.d.ts:79), so countering Crazy Ivan needs no new
+// interface. What is missing is the bomb -- `PlayerConsoleUnit` has no `bomb` field and there is no event
+// stream -- so a script cannot see which unit was tagged and the only warning available is a visible Ivan.
+// The cooldown keeps one engineer from being re-ordered every turn while the Ivan sits in sight.
+export const IVAN_GUARD_COOLDOWN = 600, IVAN_GUARD_ARRIVE = 3;
+const IVAN = /^C?IVAN$/i;
 // Leaving a building once its job is done: no armed enemy within RELEASE_RADIUS for this long.
 export const ENTRY_RESENDS = 3;
 export const RELEASE_RADIUS = 10, RELEASE_TICKS = { siege: 150, forward: 900, base: 2700 }, REENTER_COOLDOWN = 1800;
@@ -210,9 +217,20 @@ export function specialGroups(api, catalog, snapshot, memory, groups) {
     if (flee.length) {
       const safety = group('salvage', 'Move a harvester out of an attacker\'s reach. It is the whole income, so losing one costs more than the ore it was mining.');
       memory.minerFleeAt ??= new Map();
+      const refineries = units.filter((u) => catalog[u.name]?.refinery);
       for (const { m, threat } of flee.slice(0, 3)) {
+        // A chrono miner does not outrun anything, it teleports: clicking its refinery sends it home
+        // instantly. `[CMIN]` carries `Teleporter=yes` in rules.ini and its chrono in/out sound is
+        // `ChronoMinerTeleport`; `HARV` / `HORV` have neither. So for it the correct escape is the refinery
+        // rather than the 10-tile step away from the attacker, which it cannot win at speed 5 with no
+        // weapon. The rule field is the intended source; the name is the fallback for a rules object that
+        // does not carry it (docs/game-api-requests.md:32 asks for exactly those flags on `rules()`).
+        const chrono = catalog[m.name]?.teleporter === true || /^CMIN$/i.test(String(m.name ?? ''));
+        const home = chrono
+          ? refineries.reduce((best, r) => (!best || distance(r.tile, m.tile) < distance(best.tile, m.tile) ? r : best), undefined)
+          : undefined;
         const homeFarther = base && distance(base.tile, threat.tile) > distance(m.tile, threat.tile);
-        const tile = homeFarther ? base.tile : (() => {
+        const tile = home ? { rx: home.tile.rx, ry: home.tile.ry } : homeFarther ? base.tile : (() => {
           const dx = m.tile.rx - threat.tile.rx, dy = m.tile.ry - threat.tile.ry;
           const len = Math.hypot(dx, dy) || 1;
           const size = api.map.size();
@@ -223,8 +241,33 @@ export function specialGroups(api, catalog, snapshot, memory, groups) {
         })();
         memory.minerFleeAt.set(m.id, tick);
         memory.minerFleeThreat.set(m.id, threat.id);
-        safety(`flee_miner_${m.id}`, `Move harvester #${m.id} to (${tile.rx},${tile.ry}) away from the attacker #${threat.id}. It is our only income; standing in the open loses it.`,
+        safety(`flee_miner_${m.id}`, home
+          ? `RECALL: send chrono harvester #${m.id} to (${tile.rx},${tile.ry}) — its refinery. A chrono miner teleports home when it is sent to the refinery, which is the only escape that works against an attacker it cannot outrun. It is our only income.`
+          : `Move harvester #${m.id} to (${tile.rx},${tile.ry}) away from the attacker #${threat.id}. It is our only income; standing in the open loses it.`,
           { type: 'special', kind: 'flee_miner', ids: [m.id], tile: { x: tile.rx, y: tile.ry }, threatId: threat.id, engineOwned: true });
+      }
+    }
+    // Crazy Ivan plants a timed bomb on our units or buildings, and an engineer set to Guard clears the bombs
+    // around it -- the game's own G key, and `OrderType.Guard = 5` is already in the player API, so this
+    // needs no new interface. What a script cannot do is SEE the bomb: `PlayerConsoleUnit` has no `bomb`
+    // field and there is no event stream (§6), so a visible Ivan is the only warning there is and the
+    // trigger has to be the threat rather than the bomb. It belongs in this block because it is the same
+    // job as the harvesters above: protect the thing the enemy is destroying. Computed here rather than
+    // from the `engineers` list, which is declared far below for the capture loop -- reading that from here
+    // is a temporal-dead-zone error the moment an Ivan is on screen.
+    const ivans = enemies.filter((e) => IVAN.test(String(e.name ?? '')));
+    if (ivans.length) {
+      memory.ivanGuardAt ??= new Map();
+      const nearest = (u) => Math.min(...ivans.map((e) => distance(e.tile, u.tile)));
+      const guard = units
+        .filter((u) => catalog[u.name]?.engineer && idle(u, memory, tick) && (memory.ivanGuardAt.get(u.id) ?? -1e9) + IVAN_GUARD_COOLDOWN <= tick)
+        .sort((a, b) => nearest(a) - nearest(b))[0];
+      if (guard) {
+        const near = ivans.reduce((best, e) => (!best || distance(e.tile, guard.tile) < distance(best.tile, guard.tile) ? e : best), undefined);
+        memory.ivanGuardAt.set(guard.id, tick);
+        const guardGroup = group('salvage', 'Get the thing the enemy is destroying out of harm: a harvester out of an attacker\'s reach, or an engineer onto a bombed position.');
+        guardGroup(`defuse_guard_${guard.id}`, `DEFUSE GUARD: the enemy ${catalog[near.name]?.label ?? near.name} #${near.id} at (${near.tile.rx},${near.tile.ry}) plants timed bombs on our units and buildings. Engineer #${guard.id} moves there and holds Guard: an engineer on Guard clears the bombs around it (the game's own G key). A script cannot see the bomb itself, so the Ivan is the only warning available.`,
+          { type: 'special', kind: 'defuse_guard', ids: [guard.id], tile: { x: near.tile.rx, y: near.tile.ry }, threatId: near.id, engineOwned: true });
       }
     }
   }
@@ -578,6 +621,20 @@ export function executeSpecial(api, action) {
     if (!miner) return { accepted: false, reason: 'unit_gone' };
     api.move(action.ids, action.tile.x, action.tile.y);
     return { accepted: true, ids: action.ids };
+  }
+  // The engineer has to be standing among the bombs before Guard means anything: Guard stops a unit where
+  // it is, so issuing it from across the map parks the engineer on empty ground. Walk first, guard on
+  // arrival. `OrderType.Guard` is the game's G key, which clears the bombs in the engineer's reach.
+  if (action.kind === 'defuse_guard') {
+    const engineer = (api.units('self') ?? []).find((u) => action.ids.includes(u.id));
+    if (!engineer) return { accepted: false, reason: 'unit_gone' };
+    const away = Math.hypot(engineer.tile.rx - action.tile.x, engineer.tile.ry - action.tile.y);
+    if (away > IVAN_GUARD_ARRIVE) {
+      api.move(action.ids, action.tile.x, action.tile.y);
+      return { accepted: true, ids: action.ids, arriving: true };
+    }
+    api.order(action.ids, api.OrderType?.Guard ?? 5);
+    return { accepted: true, ids: action.ids, threatId: action.threatId };
   }
   // Crate pickup: a unit standing on the crate tile collects it, so this is the documented `move` verb
   // (`docs/player-console-api.md:178` defines `gather` as mining to a named tile, which is a different thing).

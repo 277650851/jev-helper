@@ -16,7 +16,8 @@ const CAN_HURT_HEAVY = { damage: 90, rof: 65, range: 5.75, ag: true, versus: row
 
 const catalog = {
   YARD: { yard: true, factory: 'BuildingType', label: 'Yard', armor: 'concrete' },
-  CMIN: { label: 'Chrono Miner', harvester: true, armor: 'heavy', cost: 1400, speed: 4 },
+  CMIN: { label: 'Chrono Miner', harvester: true, armor: 'heavy', cost: 1400, speed: 4, teleporter: true },
+  REFINERY: { label: 'Ore Refinery', refinery: true, armor: 'concrete', cost: 2000 },
   HTNK: { label: 'Rhino', armor: 'heavy', category: 'AFV', weapon: CAN_HURT_HEAVY },
   WEAK: { label: 'Peashooter', armor: 'heavy', category: 'AFV', weapon: CANNOT_HURT_HEAVY },
 };
@@ -163,5 +164,24 @@ console.log('Harvester escape: a miner an attacker can actually hurt is moved ou
   const second = run().salvage?.actions?.flee_miner_50;
   assert.ok(second, 'a different attacker re-issues the escape');
   assert.equal(second.threatId, 901);
+}
+
+// 7. A chrono miner goes to its REFINERY, because that is what teleports it home.
+//
+// `[CMIN]` carries `Teleporter=yes` in rules.ini (HARV / HORV / CMON do not), and clicking a refinery with
+// a chrono miner selected sends it home instantly. The generic 10-tile step away from the attacker is the
+// wrong escape for a unit at speed 5 with no weapon: it cannot outrun what is chasing it.
+{
+  const refinery = { id: 70, name: 'REFINERY', kind: 'REFINERY', type: 2, tile: { rx: 22, ry: 22 }, hitPoints: 1000, maxHitPoints: 1000 };
+  own = [yard, refinery, miner(50, 30, 30)];
+  enemies = [enemyAt(900, 'HTNK', 30 + MINER_FLEE_RADIUS - 1, 30)];
+  tick = 30000; memory.minerFleeAt = new Map(); memory.minerFleeThreat = new Map();
+  const groups = run();
+  const action = groups.salvage?.actions?.flee_miner_50;
+  assert.ok(action, 'the chrono miner is still recalled out of danger');
+  assert.deepEqual([action.tile.x, action.tile.y], [22, 22],
+    'and it is sent to its refinery rather than 10 tiles into the open');
+  assert.match(groups.salvage.criteria.flee_miner_50, /RECALL/,
+    'the order says what it is: a recall, not a walk');
 }
 
