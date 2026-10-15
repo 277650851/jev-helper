@@ -53,18 +53,18 @@ test('the batch never exceeds the queue room or the balance', () => {
   assert.equal(executeCandidate(bare.api, action(), {}).count, 1, 'exactly one affordable is queued rather than refused');
 });
 
-test('only the infantry and vehicle pages queue in quantity', () => {
-  // The two pages the game queues by quantity. Everything else is one item per call: the structure queue
-  // holds a single building, and the aircraft and ship queues take one item and do not multiply it.
+test('the production pages queue in quantity; a building does not', () => {
+  // Infantry and vehicles, plus the aircraft and ships that belong to the same production page. Only buildings
+  // are one at a time: the structure queue holds a single item, so a quantity there is meaningless.
   const infantry = world({ queueType: 2 });
   assert.equal(executeCandidate(infantry.api, { type: 'produce', name: 'E1', queue: 2, cost: 180, minCredits: 500 }, {}).count, PRODUCE_BATCH);
   const vehicles = world({ queueType: 3 });
   assert.equal(executeCandidate(vehicles.api, action(), {}).count, PRODUCE_BATCH);
   const aircraft = world({ queueType: 4 });
-  assert.equal(executeCandidate(aircraft.api, { type: 'produce', name: 'ORCA', queue: 4, cost: 1200, minCredits: 500 }, {}).count, 1);
-  assert.deepEqual(aircraft.calls, [['produce', 'ORCA', 1]]);
+  assert.equal(executeCandidate(aircraft.api, { type: 'produce', name: 'ORCA', queue: 4, cost: 1200, minCredits: 500 }, {}).count, PRODUCE_BATCH);
+  assert.deepEqual(aircraft.calls, [['produce', 'ORCA', PRODUCE_BATCH]]);
   const ship = world({ queueType: 5 });
-  assert.equal(executeCandidate(ship.api, { type: 'produce', name: 'DEST', queue: 5, cost: 2000, minCredits: 500 }, {}).count, 1);
+  assert.equal(executeCandidate(ship.api, { type: 'produce', name: 'DEST', queue: 5, cost: 2000, minCredits: 500 }, {}).count, PRODUCE_BATCH);
 });
 
 test('a structure is still queued one at a time', () => {

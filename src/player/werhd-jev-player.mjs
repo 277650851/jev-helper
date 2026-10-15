@@ -1446,10 +1446,10 @@ export function executeCandidate(api, action, catalog) {
     // that filled up or a balance that fell since the question was asked shrinks the batch instead of
     // over-committing.
     //
-    // Only the INFANTRY and VEHICLE pages queue in quantity. A structure is one at a time because the game's
-    // structure queue holds one; aircraft and ships are one at a time for the same reason -- their queue
-    // takes a single item and `produce(name, quantity)` does not multiply it.
-    const batchable = !!api.QueueType && (action.queue === api.QueueType.Infantry || action.queue === api.QueueType.Vehicles);
+    // The production pages queue in quantity: infantry and vehicles, and the aircraft and ships that belong to
+    // the same production page. Only buildings are one at a time -- the structure queue holds a single item, so
+    // `produce(name, quantity)` on it is meaningless.
+    const batchable = !!api.QueueType && action.queue !== api.QueueType.Structures && action.queue !== api.QueueType.Armory;
     const cost = action.cost ?? 0;
     const room = Number.isFinite(queue?.maxSize) ? Math.max(1, queue.maxSize - (queue?.size ?? 0)) : Infinity;
     const affordable = cost > 0 ? Math.floor(api.me().credits / cost) : Infinity;
