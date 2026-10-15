@@ -890,57 +890,103 @@ function maintainEscort(api, memory, task, own, tick, emit, catalog, done) {
   return true;
 }
 
-// Free infantry, dropped almost anywhere, granted by OWNING one of the three buildings the rules give a
-// paratrooper special to. All three are taken from `docs/rules(规则文件).ini`, which declares exactly these:
-//   [CAAIRP] Tech Airport (科技机场)   -- `Capturable=yes`/`NeedsEngineer=yes`, so ANY faction that walks an
-//                                         engineer in gets it -- `SuperWeapon=ParaDropSpecial`;
-//   [CARADR] Radar Tower (雷达塔)      -- neutral and capturable too -- `SuperWeapon=ParaDropSpecial`;
-//   [AMRADR] American Airforce Command HQ -- its `UIName=Name:GAAIRC`, so the client shows 空指部 --
-//                                         `SuperWeapon=AmericanParaDropSpecial`.
-// They are every declaration in the file (lines 8991, 10509, 11054), and `[SuperWeaponTypes]` lists them
-// one-based (6=ParaDropSpecial, 7=AmericanParaDropSpecial) against the API's zero-based enum -> ParaDrop=5,
-// AmerParaDrop=6.
+// ---- superweapons -----------------------------------------------------------------------------------------
+// Every building the rules give a superweapon to, with the three facts the engine needs: which API enum to fire,
+// how long the charge takes, and whether it is aimed at the ENEMY. All of it read out of `docs/rules(规则文件).ini`:
 //
-// Which special a building grants is NOT which infantry arrive. The payload comes from `[General]` and follows
-// the OWNER's faction: `AllyParaDropNum=6` (E1), `SovParaDropNum=9` (E2), `AmerParaDropNum=8` (E1). So an
-// American owner of the airport (or the radar tower) drops 8 E1 through `ParaDropSpecial`, while the 空指部
-// carries the separate `AmericanParaDropSpecial`. Both charge for `RechargeTime=4` minutes and scatter inside
-// `ParadropRadius=1024` leptons. The only decision left is WHERE, and the decision layer has answered that --
-// which is why this needs no round trip.
+//   [NAMISL] Nuclear Missile Silo      MultiSpecial          MultiMissile    10 min  powered
+//   [GAWEAT] Weather Controller        LightningStormSpecial LightningStorm  10 min  powered
+//   [CAWEAT] Weather Controller (alt)  LightningStormSpecial LightningStorm  10 min  powered
+//   [NAIRON] Iron Curtain Device       IronCurtainSpecial    IronCurtain      5 min  powered
+//   [GACSPH] Chrono Sphere             ChronoSphereSpecial   ChronoSphere     7 min  powered
+//   [GADUMY] Dummy ChronoSphere        ChronoWarpSpecial     ChronoWarp       1 min
+//   [CAAIRP] Tech Airport              ParaDropSpecial       ParaDrop         4 min  (neutral, capturable)
+//   [CARADR] Radar Tower               ParaDropSpecial       ParaDrop         4 min  (neutral, capturable)
+//   [AMRADR] American AFCHQ (空指部)   AmericanParaDropSpecial AmerParaDrop    4 min
 //
-// The API can fire but cannot say whether the charge is up. `superweapon(type, x, y, x2?, y2?)` returns void,
-// and nothing on `PlayerConsoleUnit` reports a charge (`docs/game-api-requests.md` asks for it). So the cadence
-// comes from the rules: 4 minutes at the measured 14.83 ticks/s (63893 ticks over 4308.47 s on
-// jev-report-20261015-110417 -- the client runs the standard ~15 logic frames per second) is 3559 ticks. Every
-// attempt emits its tick and its tile, and those are what the next report compares against the E1/E2 count --
-// if a drop lands late or not at all, this is the constant that moves.
-export const PARADROP_TICKS = 3560;
-export const PARADROP_CARRIERS = [['CAAIRP', 'ParaDrop'], ['CARADR', 'ParaDrop'], ['AMRADR', 'AmerParaDrop']];
-export function maybeParadrop(api, memory, emit, catalog) {
-  // Both halves of the API have to be there: the fire call AND the enum that names the weapon type.
-  if (typeof api.superweapon !== 'function' || !api.SuperWeaponType) return;
-  const tick = api.tick();
-  // Reinforce what we are already doing, else hit the last structure we know of, else hold. Dropping on nothing
-  // is the one outcome with no upside, and a drop is never urgent enough to justify it.
+// Those nine are every `SuperWeapon=` declaration in the file. `[SuperWeaponTypes]` is one-based and the API enum
+// is zero-based (6=ParaDropSpecial, 7=AmericanParaDropSpecial against ParaDrop=5, AmerParaDrop=6), so the names
+// line up directly. Recharge times are `RechargeTime` in minutes; 60 s at the measured 14.83 ticks/s (63893 ticks
+// over 4308.47 s on jev-report-20261015-110417) is 890 ticks.
+//
+// `ENEMY_AIMED` is the whole of the aim rule: the nuke, the weather storm and the paratrooper drops are fired AT
+// the enemy. Iron Curtain and Chrono Sphere are aimed at OUR OWN units and Chrono Warp needs a second click after
+// the Chrono Sphere, so "hit the enemy" is simply the wrong rule for them -- they stay manual.
+export const TICKS_PER_MINUTE = 890;
+export const SUPERWEAPONS = [
+  ['NAMISL', 'MultiMissile', 10, true],
+  ['GAWEAT', 'LightningStorm', 10, true],
+  ['CAWEAT', 'LightningStorm', 10, true],
+  ['NAIRON', 'IronCurtain', 5, true],
+  ['GACSPH', 'ChronoSphere', 7, true],
+  ['GADUMY', 'ChronoWarp', 1, false],
+  ['CAAIRP', 'ParaDrop', 4, false],
+  ['CARADR', 'ParaDrop', 4, false],
+  ['AMRADR', 'AmerParaDrop', 4, false],
+];
+export const ENEMY_AIMED = new Set(['MultiMissile', 'LightningStorm', 'ParaDrop', 'AmerParaDrop']);
+// Two rows of `docs/ra2-unit-catalog.md` §7 do not survive a check against this file: `YAPPET` (Yuri's Psychic
+// Dominator) and `FORCESHIELD` (Force Shield) have no section here at all, and that table's `NUKE` row names the
+// WARHEAD section (line 19169) -- the building is `NAMISL`, which is what this table keys on. The catalog's own
+// header already warns its IDs are the Yuri's Revenge dictionary set, and this file has no `YuriCountry`.
+//
+// Two restrictions that table lists are engine-side rather than data (nothing in the file states them): the Iron
+// Curtain cannot be cast on infantry, and the Chrono Sphere cannot carry infantry. They matter here for the same
+// reason its water hazard does -- a teleported vehicle that lands in water sinks -- which is why those two stay
+// manual, together with Chrono Warp (a second click after the Chrono Sphere, `IsPowered=false`, 1 minute).
+//
+// A nuke or a storm kills our own units too, so it is never fired onto our own line. `[NukeMaker]` carries
+// `CellSpread=5` (the widest value in that section is 6), which is the blast this clearance is measured against:
+// a wasted superweapon is cheaper than one that lands on the army. Drops are ours, so they skip this.
+export const SUPERWEAPON_FRIENDLY_CLEARANCE = 6;
+// Where a superweapon is fired: the enemy main base if we have seen it, else the enemy position with the most
+// targets around it, else the last structure we know of, else where the current mission is going. That is the
+// doctrine -- hit the densest enemy target or the main base -- expressed against what a report actually records.
+export function superWeaponTarget(api, catalog, memory, radius = 4) {
+  const known = [...(memory.enemyBuildings?.values?.() ?? [])];
+  const yard = known.find((b) => catalog?.[b.name]?.yard);
+  if (yard) return { x: yard.x, y: yard.y, why: 'enemy main base' };
+  const enemies = (api.units('enemy') ?? []).filter((e) => e.tile);
+  let best;
+  for (const e of enemies) {
+    const near = enemies.filter((o) => Math.hypot(o.tile.rx - e.tile.rx, o.tile.ry - e.tile.ry) <= radius).length;
+    if (!best || near > best.near) best = { x: e.tile.rx, y: e.tile.ry, near };
+  }
+  if (best) return { x: best.x, y: best.y, why: `enemy cluster (${best.near} targets)` };
+  if (known.length) return { x: known[0].x, y: known[0].y, why: 'last known enemy structure' };
   const mission = memory.mission;
-  const target = Number.isFinite(mission?.x) && Number.isFinite(mission?.y) ? { x: mission.x, y: mission.y }
-    : memory.forwardPoint ? { x: memory.forwardPoint.rx, y: memory.forwardPoint.ry } : undefined;
-  if (!target) return;
-  const owned = new Set(api.units('self').map((u) => u.name));
-  for (const [building, weapon] of PARADROP_CARRIERS) {
-    if (!owned.has(building)) continue;
-    const fired = (memory.paradrop ??= {});
-    if (fired[weapon] !== undefined && tick - fired[weapon] < PARADROP_TICKS) continue;
+  if (Number.isFinite(mission?.x) && Number.isFinite(mission?.y)) return { x: mission.x, y: mission.y, why: 'current mission' };
+  return memory.forwardPoint ? { x: memory.forwardPoint.rx, y: memory.forwardPoint.ry, why: 'forward point' } : undefined;
+}
+export function maybeFireSuperweapons(api, memory, emit, catalog) {
+  // Both halves of the API have to be there: the fire call AND the enum that names the weapon type. Without the
+  // enum a wrong index fires something else entirely (0 is the nuke).
+  if (typeof api.superweapon !== 'function' || !api.SuperWeaponType) return;
+  const tick = api.tick(), own = api.units('self'), owned = new Set(own.map((u) => u.name));
+  // An `IsPowered=true` charge PAUSES while the building is unpowered, so a powered special is not attempted
+  // during a brown-out -- the cadence below is measured from the last attempt and would drift early otherwise.
+  // The margin is computed here because this runs outside `collectState`.
+  const margin = own.reduce((n, u) => n + (catalog?.[u.name]?.power ?? 0), 0);
+  let aim;
+  for (const [building, weapon, minutes, powered] of SUPERWEAPONS) {
+    if (!owned.has(building) || !ENEMY_AIMED.has(weapon)) continue;
+    if (powered && margin < 0) continue;
+    const fired = (memory.superweapon ??= {});
+    if (fired[weapon] !== undefined && tick - fired[weapon] < minutes * TICKS_PER_MINUTE) continue;
+    aim ??= superWeaponTarget(api, catalog, memory);
+    if (!aim) return;
+    const drop = weapon === 'ParaDrop' || weapon === 'AmerParaDrop';
+    if (!drop && own.some((u) => u.tile && Math.hypot(u.tile.rx - aim.x, u.tile.ry - aim.y) <= SUPERWEAPON_FRIENDLY_CLEARANCE)) continue;
     fired[weapon] = tick;
-    api.superweapon(api.SuperWeaponType[weapon], target.x, target.y);
-    emit({ kind: 'micro', tick, reply: 'paradrop', target,
-      description: `伞兵空投 ${weapon}（载体 ${building}）：投放 (${target.x},${target.y})，下一次最早在第 ${tick + PARADROP_TICKS} 拍` });
+    api.superweapon(api.SuperWeaponType[weapon], aim.x, aim.y);
+    emit({ kind: 'micro', tick, reply: 'superweapon', target: { x: aim.x, y: aim.y },
+      description: `超武 ${weapon}（载体 ${building}）：${drop ? '空投' : '攻击'} ${aim.why} (${aim.x},${aim.y})，下一次最早第 ${tick + minutes * TICKS_PER_MINUTE} 拍` });
   }
 }
 export function maintainSpecial(api, memory, emit, catalog) {
   releaseGarrisons(api, memory, emit);
-  // Independent of `specialTasks`, so it runs before the early return below: owning the airport IS the task.
-  maybeParadrop(api, memory, emit, catalog);
+  // Independent of `specialTasks`, so it runs before the early return below: owning the building IS the task.
+  maybeFireSuperweapons(api, memory, emit, catalog);
   if (!memory.specialTasks?.length) return;
   const own = new Map(api.units('self').map((u) => [u.id, u]));
   const tick = api.tick();
