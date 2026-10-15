@@ -1944,9 +1944,14 @@ export function maintainBattle(api, catalog, memory, emit) {
     }
     const current = enemies.find((e) => e.id === last?.targetId);
     const canHit = (e) => e.zone !== 1 || activeWeapons(u, catalog).some(w=>w.aa);
+    // `canHit` answers air-vs-ground and `canFireAt` answers range and line of sight -- neither answers whether
+    // this unit can HURT that target, so a dog standing next to a tank was ordered onto it: the dog's bite does
+    // nothing to heavy armour (`docs/ra2-unit-catalog.md`: 军犬「无法攻击载具、建筑」). Every other attack site in
+    // this file already asks `canUnitHurt` -- the naval branch just below, the mission branch, and the base
+    // defence loop -- which is what made this one the last place a dog still got sent at armour.
     const options = enemies.filter(
       (e) =>
-        canHit(e) && canFireAt(api, catalog, u, e) && !spared.has(e.id),
+        canHit(e) && canFireAt(api, catalog, u, e) && canUnitHurt(u, e, catalog, api) && !spared.has(e.id),
     );
     options.sort((a,b) => combatTargetScore(api,catalog,u,b,mission?.targetId) -
       combatTargetScore(api,catalog,u,a,mission?.targetId));
