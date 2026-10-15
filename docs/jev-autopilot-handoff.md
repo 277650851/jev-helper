@@ -250,9 +250,18 @@
     - **夹具的三条硬条件（每条都花了一轮才找到）**：① `economy.factories` **只数战车工厂**
       （`NAWEAP`），兵营不算；② 科技建筑的 `buildCategory` 必须是 **`'Tech'`**（建造候选过滤要求它，
       真实的 `[GATECH] BuildCat=Tech`）；③ 要真经济计划：**2 座矿场 + 2 辆矿车** → `targetMiners 3` → 缺口 1。
-    - **下一步的探针**：在夹具里逐门打印 —— `coreReady` 各分量、`candidates`、`cg.actions` 在 `add` 前后、
-      以及 `essential`/预备金过滤那一步。`strategy.critical`、`free(Structures)`、`available` 三项已排除。
-    - **验收判据**：`construction` 组的选项里出现 `produce_GACSPH`（同上面那份报告的读法）。
+    - **下一步的探针（已被证明比"改 coreReady"更有效）**：直接跑夹具矩阵，用**字面构造**战车工厂
+      （`NAWEAP` **不在共用测试 catalog 里**，用 `u()` 会抛 `TypeError: ... (reading 'weapon')` ——
+      我前三次"测试没变绿"正是这个异常，不是断言失败）。**更正上一版结论**：
+      - `produce_GATECH` 在**未修改的代码**里就出现在 construction 选项里（`ref=2 miners=2 fac=1 pwr=180`
+        → `keys=[produce_GATECH]`）→ **计划门并没有挡住科技步**，上一版写的"coreReady 使 techPlan 不可达"
+        未经证实，不要再据此改 `coreReady`；
+      - 而 `produce_GACSPH` 在三种夹具里**都没有**，而当时 `pwr=180`、而超时空传送自身 **`Power=-200`**
+        → **最可能的门是我自己给超武加的电力守卫**（`powerMargin >= Math.max(0, -r.power)`）。
+      - **下一步只需一次探针**：把夹具的电力余量抬到 > 200（加电厂），看 `produce_GACSPH` 是否出现。
+        出现 → 结论是"电力守卫过严"，改法应是把**电厂与超武一起**作为一次投资提供（而不是放宽到 `>= 0`，
+        那会在 0~49 余量时拉闸）；不出现 → 再查 `superWeaponChoices` 的 `ready/queued/owned` 三个入参。
+    - **验收判据不变**：`construction` 组的选项里出现 `produce_GACSPH`。
 15. **超时空传送 / 铁幕仍未自动释放**：`ChronoSphere` 需要先确认
     `superweapon(type, x, y, x2?, y2?)` 的**双点语义**（起点=我方载具、终点=敌方落点）——它是本客户端
     API 声明但**没有任何报告验证过**的形式；两条硬约束必须建在这之上：`[GACSPH]` 只能载具（不能传送步兵）、
