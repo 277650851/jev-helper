@@ -1382,6 +1382,12 @@ export function missionGate(api, memory, action) {
   return { accepted: false, reason: "mission_locked", lockedTargetId: lock.targetId, lockAgeTicks: tick - lock.tick };
 }
 
+// How many units one accepted production option may queue at once. The extension used to queue exactly one
+// and re-ask every decision round, which is the problem `docs/game-api-requests.md` §7.5 records: "一次只敢排
+// 1 个; 钱曾堆到 5.7 万到 7 万却不造兵". It is also the cap, not the target: an option that states how many
+// the plan is still short of (`count`, set by the force plan) queues that many, and a group that says nothing
+// gets this. Three is a queue-filling step that still leaves the balance able to answer the next question.
+export const PRODUCE_BATCH = 3;
 export function executeCandidate(api, action, catalog) {
   if (!action || action.type === "wait")
     return { accepted: false, reason: "wait" };
@@ -1423,7 +1429,8 @@ export function executeCandidate(api, action, catalog) {
     return { accepted: true };
   }
   if (action.type === "produce") {
-    if (api.production.queues().find((q) => q.type === action.queue)?.size > 0)
+    const queue = api.production.queues().find((q) => q.type === action.queue);
+    if (queue?.size > 0)
       return { accepted: false, reason: "queue_changed" };
     if (
       !api.production
@@ -1432,8 +1439,21 @@ export function executeCandidate(api, action, catalog) {
       api.me().credits < (action.minCredits ?? action.cost)
     )
       return { accepted: false, reason: "production_changed" };
-    api.produce(action.name);
-    return { accepted: true };
+    // Synchronised production: queue what the plan is short of, in one call, instead of one unit per decision
+    // round. `action.count` is that shortfall where the offering group can state it (the force plan does);
+    // otherwise this is the batch step. The batch is still decided against the LIVE queue and balance here --
+    // the same re-check and the same arithmetic `executeProduction` uses for a commander order -- so a queue
+    // that filled up or a balance that fell since the question was asked shrinks the batch instead of
+    // over-committing. Structures stay one at a time: the game's structure queue holds one, and a second power
+    // plant is not a batch.
+    const structure = !!api.QueueType && (action.queue === api.QueueType.Structures || action.queue === api.QueueType.Armory);
+    const cost = action.cost ?? 0;
+    const room = Number.isFinite(queue?.maxSize) ? Math.max(1, queue.maxSize - (queue?.size ?? 0)) : Infinity;
+    const affordable = cost > 0 ? Math.floor(api.me().credits / cost) : Infinity;
+    const count = structure ? 1
+      : Math.max(1, Math.min(PRODUCE_BATCH, Math.max(1, Math.floor(action.count ?? PRODUCE_BATCH)), room, affordable));
+    api.produce(action.name, count);
+    return { accepted: true, count };
   }
   if (action.type === "mission") {
     if (action.mode === "defend") {

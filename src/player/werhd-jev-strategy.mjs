@@ -723,7 +723,7 @@ export function investmentGroups(api, catalog, snapshot, memory, groups) {
       .filter(i=>i.value>0).sort((a,b)=>b.value-a.value)[0];
     if(item) {
       forcePlan={name:item.name,cost:item.cost,queue:item.queue,category:'vehicles',purpose:'mobilize',...(siege?{targetRole:'fortifications'}:{})};
-      if(s.self.credits>=Math.min(250,item.cost)) add(groups.vehicles,item,`FORM THE ATTACK FORCE: ${mobileCount}/${ATTACK_FORCE_SIZE} mobile combat vehicles; ${escortNeeded?`only ${s.mobileAntiAirCount}/${ATTACK_AA_ESCORTS} required anti-air escorts against observed air threats; `:''}${siege?'counter the visible enemy fortifications using building armor and weapon range; ':''}complete the group before more discretionary towers or technology`,Math.min(250,item.cost));
+      if(s.self.credits>=Math.min(250,item.cost)) add(groups.vehicles,item,`FORM THE ATTACK FORCE: ${mobileCount}/${ATTACK_FORCE_SIZE} mobile combat vehicles; ${escortNeeded?`only ${s.mobileAntiAirCount}/${ATTACK_AA_ESCORTS} required anti-air escorts against observed air threats; `:''}${siege?'counter the visible enemy fortifications using building armor and weapon range; ':''}complete the group before more discretionary towers or technology`,Math.min(250,item.cost),undefined,{count:ATTACK_FORCE_SIZE-mobileCount});
     }
   }
   const queuedCounter = (strategy.underPressure||forceNeeded) && queue(api.QueueType.Vehicles)?.items.find(i=>groundRole(i.name) && !catalog[i.name]?.harvester && catalog[i.name]?.weapon?.damage>0);
