@@ -1234,7 +1234,13 @@ export function candidateGroups(api, catalog, snapshot, memory) {
   // One question-free route while the enemy base is unknown, two once it is known. The gate counts the routes
   // already walking instead of silencing the group as soon as one unit leaves, which is what makes a second
   // direction possible at all.
-  const scoutUnowned = enemies.length === 0 && !memory.enemyBuildings.size;
+  // The comment below states the intent -- while the enemy base is unknown the engine keeps its single option and
+  // OWNS it, one option and no question. The `enemies.length === 0` clause defeated that: any enemy unit coming
+  // into sight flipped the flag, `routesWanted` went to two and `engineOwned` off, so the engine asked instead.
+  // Measured on jev-report-20261015-122829: the scouting group was asked 128 times with 115 `wait` answers and the
+  // first scout did not leave until t9584, with the base still unfound. A visible unit says nothing about where
+  // the base is; the base is what scouting is for.
+  const scoutUnowned = !memory.enemyBuildings.size;
   const routesWanted = scoutUnowned ? 1 : SCOUT_ROUTES;
   const shouldExplore =
     (!memory.enemyBuildings.size || !readiness.ready || objectiveUnseen) && liveRoutes.length < routesWanted && !state.baseUnderAttack;

@@ -36,7 +36,10 @@ test('a frontier is walked by a party, not by one unit', () => {
 });
 
 test('two frontier options carry different units, so both directions can be walked at once', () => {
-  const w = scene({ own: crew(), enemies: [u(900, 'HTNK', T.Vehicle, 40, 40)] });
+  // A KNOWN ENEMY BUILDING is what opens the second route: while the base is unknown the engine owns one route
+  // instead (see `player-opening.test.mjs`, and the test at the bottom of this file). These fixtures used to use
+  // an enemy UNIT for that, which is exactly the condition that took the decision away from the engine.
+  const w = scene({ own: crew(), enemies: [u(900, 'NAREFN', T.Building, 40, 40)] });
   const actions = explore(w);
   const keys = Object.keys(actions).filter((k) => k.startsWith('explore_'));
   assert.equal(keys.length, SCOUT_ROUTES, `both routes are offered (${keys})`);
@@ -48,7 +51,7 @@ test('two frontier options carry different units, so both directions can be walk
 
 test('a frontier a route is already walking is not offered again, but the second route opens', () => {
   const target = { x: 40, y: 40 };
-  const w = scene({ own: crew(), enemies: [u(900, 'HTNK', T.Vehicle, 40, 40)], scoutMissions: [{ mode: 'explore', ids: [10], x: target.x, y: target.y, since: 12000 - 100 }] });
+  const w = scene({ own: crew(), enemies: [u(900, 'NAREFN', T.Building, 40, 40)], scoutMissions: [{ mode: 'explore', ids: [10], x: target.x, y: target.y, since: 12000 - 100 }] });
   const actions = explore(w);
   const keys = Object.keys(actions).filter((k) => k.startsWith('explore_'));
   assert.ok(keys.length, 'one route out of two still leaves the other direction to walk');
@@ -64,11 +67,11 @@ test('once both routes are out, nothing is asked until one of them ends', () => 
     { mode: 'explore', ids: [10], x: 40, y: 40, since },
     { mode: 'explore', ids: [11], x: 60, y: 60, since: 12000 - 100 },
   ];
-  const walking = scene({ own: crew(), enemies: [u(900, 'HTNK', T.Vehicle, 40, 40)], scoutMissions: live(12000 - 100) });
+  const walking = scene({ own: crew(), enemies: [u(900, 'NAREFN', T.Building, 40, 40)], scoutMissions: live(12000 - 100) });
   assert.deepEqual(exploreKeys(walking), [], 'both routes are walking, so there is nothing to ask');
   // Past the horizon a route is stuck rather than travelling, and its slot opens again -- the case the old
   // 450-tick window existed for.
-  const stuck = scene({ own: crew(), enemies: [u(900, 'HTNK', T.Vehicle, 40, 40)], scoutMissions: live(12000 - SCOUT_TRAVEL_TICKS - 1) });
+  const stuck = scene({ own: crew(), enemies: [u(900, 'NAREFN', T.Building, 40, 40)], scoutMissions: live(12000 - SCOUT_TRAVEL_TICKS - 1) });
   assert.ok(exploreKeys(stuck).length > 0, 'an expired route frees its slot');
 });
 
