@@ -1021,7 +1021,12 @@ export function maybeRepairVehicles(api, catalog, memory, emit) {
   if (!hurt.length) return;
   const worst = hurt[0];
   const naval = !!catalog?.[worst.name]?.naval;
-  const repairer = own.find((u) => (u.transport?.unitIds ?? []).some((id) => catalog?.[api.unit?.(id)?.name]?.engineer));
+  // Only a carrier whose weapon IS its passenger's can repair: `r.gunner` is that relation (`[FV]` is the rule
+  // that has it), and every other place in this file that depends on it tests the flag. Without it any transport
+  // holding an engineer was adopted as the repair vehicle and ordered to repair -- work it cannot do -- and
+  // because the repairer outranks the depot in the choice below, that also cancelled the depot order that would
+  // have worked.
+  const repairer = own.find((u) => catalog?.[u.name]?.gunner && (u.transport?.unitIds ?? []).some((id) => catalog?.[api.unit?.(id)?.name]?.engineer));
   const depot = own.find((u) => u.type === building && (naval ? REPAIR_YARDS.has(u.name) : REPAIR_BUILDINGS.has(u.name)));
   // The order names the object to be repaired: the vehicle in the repair-vehicle case, the building in the other.
   const ids = repairer ? [repairer.id] : depot ? [worst.id] : undefined;

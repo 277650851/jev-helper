@@ -1008,6 +1008,13 @@ export function candidateGroups(api, catalog, snapshot, memory) {
     // and clears its defenders while the engineer follows (special groups). Capture missions can be
     // on a clock (0.7.3: the Battle Lab fell at 32:30 both times), so the push does not wait for the
     // full attack threshold, only for CAPTURE_PUSH_UNITS.
+    // The destroy variant below names the objective as `targetId`, so its party becomes `api.attack(party,
+    // objective)`. That party used to be the unfiltered `active` -- dogs included -- and a dog does 0% to
+    // concrete (`[ADOG]` fires `[ParasiteDog]`, whose Verses are 0% against concrete), so the objective mission
+    // was ordering it to do nothing. The two sibling attack producers in this same file filter with
+    // `canUnitHurt` first; the whole party is still used when NOTHING can hurt the target, so an infantry-only
+    // or engineer-only force keeps the option.
+    const objectiveAble = objectiveTarget ? active.filter((u) => canUnitHurt(u, objectiveTarget, catalog, api)) : [];
     const pushReady = captureMission && (ready || ids.length >= CAPTURE_PUSH_UNITS);
     const offerCapturePush = () => {
       const c = { rx: active.reduce((n, u) => n + u.tile.rx, 0) / active.length, ry: active.reduce((n, u) => n + u.tile.ry, 0) / active.length };
@@ -1030,7 +1037,7 @@ export function candidateGroups(api, catalog, snapshot, memory) {
         type: "mission",
         mode: "attack",
         label: `本局目标 ${objectiveTarget.label}`,
-        ids,
+        ids: objectiveAble.length ? objectiveAble.map((u) => u.id) : ids,
         targetId: objectiveTarget.id,
         x: objectiveTarget.x,
         y: objectiveTarget.y,

@@ -277,10 +277,26 @@ export function weaponEffectiveness(w, targets, catalog, api) {
   const samples = targets.length ? targets : [{ type: api.ObjectType.Infantry }, { type: api.ObjectType.Vehicle }];
   return samples.reduce((sum, t) => {
     if (t.zone === (api?.ZoneType?.Air ?? 1) ? !w.aa : w.ag === false) return sum;
-    const armor = catalog[t.name]?.armor;
-    const index = t.armor ?? Object.entries(api.ArmorType ?? {}).find(([k, v]) => /^\d+$/.test(k) && String(v).toLowerCase() === armor)?.[0]
-      ?? (t.type === api.ObjectType.Infantry ? (api.ArmorType?.None ?? 0) : (api.ArmorType?.Heavy ?? 5));
-    const verses = w.verses?.[index] ?? w.versus?.[index] ?? 1;
+    const armor = t.armor ?? catalog[t.name]?.armor;
+    // The armour is either the numeric index (a state summary carries the `ArmorType` value) or the WORD (the
+    // catalog lowercases `ArmorType[rule.armor]`). `t.armor` used to be taken as the index directly, which
+    // short-circuited the word lookup: `versus['heavy']` came back undefined and fell through to 1, so EVERY
+    // matchup scored as 100% and the "effect against the visible enemy" numbers the model compares were flat.
+    // Resolved here the same way `canEngageTarget` resolves it, for the same reason.
+    const asIndex = Number(armor);
+    const resolved = Number.isInteger(asIndex) && asIndex >= 0 && asIndex < ARMOR_WORDS.length
+      ? asIndex
+      : armor === undefined ? -1 : ARMOR_WORDS.indexOf(String(armor).toLowerCase());
+    const index = resolved >= 0 ? resolved : (t.type === api.ObjectType.Infantry ? (api.ArmorType?.None ?? 0) : (api.ArmorType?.Heavy ?? 5));
+    // The row says which convention it is in (`versesArePercent`: any entry above 2 means percentages), and the
+    // two written forms are documented as the same weapon at the same strength, so they have to score the same
+    // -- `test/player-counter.test.mjs` test 8 pins exactly that. They are normalised to the PERCENT scale: a
+    // fraction row is multiplied up rather than a percent row divided down, because the number is also shown to
+    // the model, and `Math.round` collapsed a small arms score against heavy armour to 0 on the way down (the
+    // criterion that says "small arms do hurt heavy armour, if little"). The `?? 1` fallback used to hide the
+    // missing scale: with the armour index broken above, every lookup missed and both forms read 1.
+    const raw = w.verses?.[index] ?? w.versus?.[index] ?? 1;
+    const verses = versesArePercent(w) ? raw : raw * 100;
     return sum + (w.damage || 0) * verses * 15 / (w.rof || 30) * Math.max(0.5, (w.range || 4) / 5);
   }, 0) / samples.length;
 }
@@ -819,13 +835,17 @@ export function investmentGroups(api, catalog, snapshot, memory, groups) {
   // refinery, most of them queueing at the pad, credits dry from 877s, `economic_stall`, defeat. This is the same
   // capital question as the tech step, so it is offered the same way: the model decides, and the criterion says
   // why.
-  // A refinery drains power, so it never competes with the power plant a base is missing: without spare power the
-  // brown-out costs more than the extra loading does (`player-strategy.test.mjs` pins "power first").
+  // A refinery drains power (50 in the live rules), so it never competes with the power plant a base is missing,
+  // and the drain is charged against the spare exactly as the tower, tech and superweapon producers charge
+  // theirs -- `>= 0` allowed a brown-out at any margin under 50, which is what the comment above says this
+  // guard prevents (`player-strategy.test.mjs` pins "power first").
   // It also requires one to already stand: with none, the opening's own order (power, barracks, refinery) owns
   // that question, and this rule is only about miners that are already waiting at a full pad.
-  const refineryItem = (s.economy?.refineries ?? 0) > 0 && (s.economy.refineries < (s.economy?.targetRefineries ?? 0))
-    && !strategy.recovery && (s.economy?.powerMargin ?? 0) >= 0
-    ? available.find((i) => catalog[i.name]?.refinery) : undefined;
+  const refineryRule = available.find((i) => catalog[i.name]?.refinery);
+  const refineryItem = refineryRule && (s.economy?.refineries ?? 0) > 0
+    && (s.economy.refineries < (s.economy?.targetRefineries ?? 0)) && !strategy.recovery
+    && (s.economy?.powerMargin ?? 0) >= Math.max(0, -(catalog[refineryRule.name]?.power ?? 0))
+    ? refineryRule : undefined;
   if (refineryItem) {
     const r = catalog[refineryItem.name];
     add(cg, { ...refineryItem, queue: api.QueueType.Structures },
