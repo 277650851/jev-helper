@@ -679,10 +679,21 @@ export function investmentGroups(api, catalog, snapshot, memory, groups) {
   const economyPlan = miner && { name: miner.name, cost: catalog[miner.name].cost, queue: api.QueueType.Vehicles };
   // Enough to pay for the miner is enough. The old floor of 500 was read as "save up to 500 first",
   // which meant that a harvester costing more than the credits on hand was never queued at all.
+  //
+  // A bounded fallback, and deliberately NOT `engineOwned`: the choice stays the model's (the test below pins
+  // that, and it was a decision, not an oversight), but every premise of a stall is already proven here -- the
+  // vehicle queue is idle, the miner is fully affordable, and the deficit is real. `docs/jev-player-flow.md`
+  // names exactly this shape "a stall, not a decision", and the money-idle row of the review's takeover table
+  // prescribes `auto: 2` for it. What it cost without the fallback, measured on jev-report-20261015-092542:
+  // the vehicles group was asked 456 times, 455 of them with the miner as the ONLY real option, and the model
+  // declined 417; `produce_CMIN` alone was declined 171 times with confidence above the audit's cut, while
+  // `state.economy.starving` was true for 587 of 1316 decisions and `outran` for 376 -- and the postmortem
+  // verdict is `economic_stall`, credits dry from 1875s for 55% of the rest. `auto` is what lets the engine act
+  // after the model has had `PLAN_STEP_AUTO` chances, and the `gates` record will show whether it ever fires.
   if (economyPlan && s.self.credits >= economyPlan.cost) {
     add(groups.vehicles, { ...miner, queue: api.QueueType.Vehicles },
       `ECONOMY FIRST: ${s.harvesters} miners present against a target of ${s.economy?.targetMiners ?? 3}. Harvesters are the only income, so complete this before any other production`,
-      economyPlan.cost);
+      economyPlan.cost, undefined, { auto: PLAN_STEP_AUTO });
   }
   const standoff = attackers.filter(e => strategy.rangeThreats.some(t => t.id === e.id));
   const mobileCount = units.filter(u => u.type === api.ObjectType.Vehicle && u.primaryWeapon && !catalog[u.name]?.harvester && !catalog[u.name]?.naval && catalog[u.name]?.category !== 'AirPower').length;

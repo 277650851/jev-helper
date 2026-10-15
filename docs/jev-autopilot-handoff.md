@@ -215,6 +215,19 @@
 9. **升级箱会占用侦察兵** —— 已按距离缓解，但未与"侦察前线"的收益做显式比较。
 10. **`tools/` 下其余脚本仍不在测试覆盖内**（`audit-report` 的渲染与 `postmortem` 的判定已抽成可测函数）。
 11. 有提交未推送时，先确认 FastGithub 是否在运行。
+12. **`ECONOMY FIRST` 矿车的 `auto` 兜底（本轮新加）需要一份战报确认它到底开不开火**：
+    判据在 `gates` 记录里 —— `vehicles` 组的 `produce_*MINER` 若出现 `armed` 且 **`fired > 0`**，
+    说明模型连续拒绝 `PLAN_STEP_AUTO` 次后引擎接管了；若 `armed` 很多而 `fired` 恒为 0，说明拒绝次数
+    没到阈值，或被同组别的 `auto` 抢先（`autos[0]` 取最小的那个）。
+    - 依据：`jev-report-20261015-092542` 里 `vehicles` 被问 456 次（455 次只有矿车这一个真实选项）、
+      被拒 417 次，`produce_CMIN` 单独就拒了 171 次且高于 audit 置信切点；同期 `starving` 为真
+      587/1316、`outran` 376，postmortem 判 `economic_stall`。
+    - **刻意没加 `engineOwned`**：`player-strategy.test.mjs` 有一条断言把"矿车不算引擎自己的决定"钉住了，
+      那是有意为之；`auto` 才是评审给"钱闲着的建造"那一格开的药。
+13. **同一份战报里 `produce_MGTK` 被拒 173 次，但没动它**：FORM THE ATTACK FORCE 的门槛是
+    `credits >= min(250, cost)`（定金，不是全额可付），前提不如矿车干净 —— 给它加 `auto` 可能排一个
+    付不起的单位（执行时会被 `production_changed` 拒掉，白走一轮）。要做的话先把门槛
+    改成"扣除 reserve 后全额可付"，那是一次独立改动。
 
 ---
 

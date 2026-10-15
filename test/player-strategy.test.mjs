@@ -214,6 +214,11 @@ snap=collectState(api,catalog);groups=candidateGroups(api,catalog,snap,{});
 assert.equal(snap.state.strategy.investment.name,'MINER','miner expansion must outrank discretionary technology');
 assert.ok(groups.vehicles.actions.produce_MINER);
 assert.notEqual(groups.vehicles.actions.produce_MINER.engineOwned,true,'the shared option builder feeds vehicles and defenses too; only the construction plan step is the engine\'s own decision');
+// ...but it does carry the bounded fallback, because every premise of a stall is proven before it is offered
+// (queue idle, fully affordable, real deficit). jev-report-20261015-092542 declined `produce_CMIN` 171 times
+// with confidence while `starving` was true for 587 of 1316 decisions, and the postmortem verdict was
+// `economic_stall`. The model still answers first; the engine acts after PLAN_STEP_AUTO declines.
+assert.equal(groups.vehicles.actions.produce_MINER.auto,PLAN_STEP_AUTO,'a stall gets the same bounded fallback a plan step does');
 assert.ok(!groups.vehicles.actions.produce_TANK,'do not spend the reserved miner budget on armor');
 assert.equal(snap.state.decisionReadiness.vehicles.priority,'economy');
 assert.match(groups.vehicles.instructions,/ECONOMY FIRST/);
