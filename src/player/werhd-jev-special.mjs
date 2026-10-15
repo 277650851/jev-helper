@@ -147,6 +147,14 @@ export function specialGroups(api, catalog, snapshot, memory, groups) {
       // decides the rest is the walk, which is what actually costs the match's only scout.
       const isFree = (u) => u.id === memory.scoutId || !!catalog[u.name]?.attackDog;
       const u = pool
+        // A crate is a tile on the ground, and a crate is collected by standing on it. Fixed-wing aircraft
+        // cannot do that: `[ORCA]` (Intruder) and `[BEAG]` (Black Eagle) carry `AirportBound=yes`, which
+        // rules.ini annotates as "if I need to land and there is no airport I crash, because I can only
+        // land at an airport". Helicopters are NOT excluded by this and must not be: `[SHAD]` (Nighthawk)
+        // is `JumpJet=yes` with no `AirportBound`, so it lands like any ground unit, and so is the Kirov.
+        // The check is therefore the field and never "is it an aircraft" -- excluding aircraft outright
+        // would take the Nighthawk out of the pool for no reason.
+        .filter((x) => catalog[x.name]?.airportbound !== true)
         .map((x) => ({ x, cost: distance(x.tile, c.tile) - (isFree(x) ? 6 : 0) }))
         .sort((a, b) => a.cost - b.cost)[0]?.x;
       if (!u) break;

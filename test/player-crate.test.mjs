@@ -149,3 +149,30 @@ assert.equal(snapshot.state.infrastructure.crates, 1, 'the crate count reaches t
   assert.ok(taken.some((x) => x.id === 'salvage' && x.choice === 'crate_77'), 'and the engine collects it');
 }
 console.log('Upgrade crates: read from crates(), collected with move, released when gone, nearest first, engine-owned when lone');
+
+// A crate is collected by standing on its tile, so a unit that cannot land cannot collect it.
+// `[ORCA]` (Intruder) and `[BEAG]` (Black Eagle) are `AirportBound=yes`, which rules.ini annotates as "if I
+// need to land and there is no airport I crash, because I can only land at an airport". A helicopter is NOT
+// excluded and must not be: `[SHAD]` (Nighthawk) is `JumpJet=yes` with no `AirportBound`, so the rule is the
+// field, never "is it an aircraft". The intruder here is placed CLOSER than the helicopter, so the assertion
+// can actually fail -- that is the whole point of the fixture.
+{
+  catalog.ORCA = { label: 'Intruder', cost: 900, airportbound: true };
+  catalog.SHAD = { label: 'Nighthawk', cost: 1000, jumpjet: true };
+  const added = own.length;
+  own.push({ id: 30, name: 'ORCA', kind: 'ORCA', type: 1, tile: { rx: 40, ry: 40 }, hitPoints: 200, maxHitPoints: 200, isIdle: true });
+  own.push({ id: 31, name: 'SHAD', kind: 'SHAD', type: 1, tile: { rx: 44, ry: 40 }, hitPoints: 200, maxHitPoints: 200, isIdle: true });
+  crates = [crate(901, 40, 40)];                 // directly under the Intruder
+  tick = 6000;
+  const groups = {};
+  specialGroups(api, catalog, snapshot, {}, groups);
+  const entry = Object.entries(groups.salvage?.actions ?? {}).find(([k]) => k.startsWith('crate_'));
+  assert.ok(entry, 'the crate is offered');
+  // NOT [31] and not [30]: the pool the picker draws from is ground units only, so a crate sitting under an
+  // aircraft is walked to by the nearest ground unit instead. That is what this fixture measured when the
+  // report "an aircraft was sent for a crate" was chased -- the crate path never sends one, and the finding
+  // is kept as a regression guard for the day somebody widens that pool.
+  assert.deepEqual(entry[1].ids, [2], 'a crate under an aircraft goes to a ground unit, not to the aircraft');
+  own.length = added;                            // leave the fixture as the other cases found it
+  crates = [];
+}
