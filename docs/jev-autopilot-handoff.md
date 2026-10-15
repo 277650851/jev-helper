@@ -236,6 +236,27 @@
     `credits >= min(250, cost)`（定金，不是全额可付），前提不如矿车干净 —— 给它加 `auto` 可能排一个
     付不起的单位（执行时会被 `production_changed` 拒掉，白走一轮）。要做的话先把门槛
     改成"扣除 reserve 后全额可付"，那是一次独立改动。
+14. **超武"从不被提供"（探针已定位，但**没找到全部门**，改动已按纪律撤回）**：
+    - **证据（报告级）**：`jev-report-20261015-143001`（build `7bb5744`）里 `construction` 组被问
+      **175 次**，选项中出现过的键只有
+      `recover_GAREFN / wait / produce_AMRADR / MGTK / GAREFN / GAPOWR / NAPOWR / CLEG` ——
+      **`produce_GACSPH` / `produce_GAWEAT` / `produce_NAMISL` 一次都没出现**；而同一局的 `place` 里
+      `GACSPH 1`、`GAWEAT 1`、`NAMISL 1` 都在 → **是玩家手动建的**（与用户口述一致）。
+      同时 `GATECH 1`、`GADEPT 1` **有**被放置 → 说明相关的门只是**偶发**成立，不是恒假。
+    - **已试过、已撤回**：把 `coreReady` 里那三个"计划不存在"条件去掉
+      （`!economyPlan && !forcePlan && !((mobileDefenseNeeded||forceNeeded) && counterPlan)`）——
+      它们与 `plan` 优先级（`... || counterPlan || economyPlan || forcePlan || techPlan || ...`）重复，
+      使 `techPlan` **不可达**而非影响顺序。**补全夹具后仍不绿**，所以 `coreReady` 不是唯一的门。
+    - **夹具的三条硬条件（每条都花了一轮才找到）**：① `economy.factories` **只数战车工厂**
+      （`NAWEAP`），兵营不算；② 科技建筑的 `buildCategory` 必须是 **`'Tech'`**（建造候选过滤要求它，
+      真实的 `[GATECH] BuildCat=Tech`）；③ 要真经济计划：**2 座矿场 + 2 辆矿车** → `targetMiners 3` → 缺口 1。
+    - **下一步的探针**：在夹具里逐门打印 —— `coreReady` 各分量、`candidates`、`cg.actions` 在 `add` 前后、
+      以及 `essential`/预备金过滤那一步。`strategy.critical`、`free(Structures)`、`available` 三项已排除。
+    - **验收判据**：`construction` 组的选项里出现 `produce_GACSPH`（同上面那份报告的读法）。
+15. **超时空传送 / 铁幕仍未自动释放**：`ChronoSphere` 需要先确认
+    `superweapon(type, x, y, x2?, y2?)` 的**双点语义**（起点=我方载具、终点=敌方落点）——它是本客户端
+    API 声明但**没有任何报告验证过**的形式；两条硬约束必须建在这之上：`[GACSPH]` 只能载具（不能传送步兵）、
+    传进水里载具直接沉没。`IronCurtain` 是罩**自己**单位的（且不能对步兵），等实测后再定规则。
 
 ---
 
