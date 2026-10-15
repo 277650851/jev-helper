@@ -1,5 +1,12 @@
 import { isAirSupport, effectiveness, counterValue, canAnswerVisible, canEngageTarget, canUnitHurt, defenseProfile, WALL_RING_SEGMENTS } from './werhd-jev-strategy.mjs';
 import { isCapturable } from './werhd-jev-catalog.mjs';
+// `attackDog` is not a field of the live rule object (nor of any catalog table in this repo), so every dog test in
+// this file read false in a real match: the crate pool lost its free-dog entries, the `isFree` exemption that lets
+// a dog detour without the army being spare, and the Tanya response's documented "dogs first" order -- all
+// silently, because the field was simply undefined. This file gives a name-test fallback for every other fact the
+// console rule object does not carry (Ivan, Tanya, Spy, the chrono miner); this is now the same, with the field
+// still honoured for a build or fixture that exposes it.
+export const isAttackDog = (name, catalog) => !!catalog?.[name]?.attackDog || /^C?ADOG$|^DOG$/i.test(String(name));
 export const ATTACK_STUCK_TICKS = 2700, CAPTURE_RESENDS = 3, SIEGE_RANGE = 8, BASE_GARRISON_SPARE = 8;
 // A crate is a single tile on the ground, so walking there is quick and the resend window is short. The
 // timeout is generous on purpose: a crate across the map behind a bridge is still worth the trip.
@@ -157,7 +164,7 @@ export function specialGroups(api, catalog, snapshot, memory, groups) {
     // once the base is gone there is no scout to spare and one combat unit is detached, but only when the army
     // can spare it -- trading a tank for a box with 20 enemies on the field is a bad deal.
     const scout = units.find((u) => u.id === memory.scoutId);
-    const dog = units.filter((u) => catalog[u.name]?.attackDog && idle(u, memory, tick));
+    const dog = units.filter((u) => isAttackDog(u.name, catalog) && idle(u, memory, tick));
     const combat = units.filter((u) => u.type !== api.ObjectType.Building && (catalog[u.name]?.weapon?.damage ?? 0) > 0
       && u.id !== memory.scoutId && idle(u, memory, tick) && !catalog[u.name]?.engineer)
       .sort((a, b) => (catalog[a.name]?.cost ?? 0) - (catalog[b.name]?.cost ?? 0));
@@ -182,7 +189,7 @@ export function specialGroups(api, catalog, snapshot, memory, groups) {
       // including crates a tank was already standing next to. The scout's own advantage is that it is
       // out in the fog anyway, so it keeps a small head start rather than winning automatically; what
       // decides the rest is the walk, which is what actually costs the match's only scout.
-      const isFree = (u) => u.id === memory.scoutId || !!catalog[u.name]?.attackDog;
+      const isFree = (u) => u.id === memory.scoutId || isAttackDog(u.name, catalog);
       const u = pool
         // A crate is a tile on the ground, and a crate is collected by standing on it. Fixed-wing aircraft
         // cannot do that: `[ORCA]` (Intruder) and `[BEAG]` (Black Eagle) carry `AirportBound=yes`, which
@@ -191,7 +198,7 @@ export function specialGroups(api, catalog, snapshot, memory, groups) {
         // is `JumpJet=yes` with no `AirportBound`, so it lands like any ground unit, and so is the Kirov.
         // The check is therefore the field and never "is it an aircraft" -- excluding aircraft outright
         // would take the Nighthawk out of the pool for no reason.
-        .filter((x) => catalog[x.name]?.airportbound !== true)
+        .filter((x) => catalog[x.name]?.airportBound !== true)
         .map((x) => ({ x, cost: distance(x.tile, c.tile) - (isFree(x) ? 6 : 0) }))
         .sort((a, b) => a.cost - b.cost)[0]?.x;
       if (!u) break;
@@ -335,7 +342,7 @@ export function specialGroups(api, catalog, snapshot, memory, groups) {
       const killer = units
         .filter((u) => u.type !== api.ObjectType.Building && idle(u, memory, tick)
           && (memory.tanyaAt.get(u.id) ?? -1e9) + TANYA_COOLDOWN <= tick && canUnitHurt(u, her, catalog, api))
-        .sort((a, b) => Number(!!catalog[b.name]?.attackDog) - Number(!!catalog[a.name]?.attackDog) || distance(a.tile, her.tile) - distance(b.tile, her.tile))[0];
+        .sort((a, b) => Number(isAttackDog(b.name, catalog)) - Number(isAttackDog(a.name, catalog)) || distance(a.tile, her.tile) - distance(b.tile, her.tile))[0];
       if (killer) {
         memory.tanyaAt.set(killer.id, tick);
         const heroGroup = group('salvage', 'Get the thing the enemy is destroying out of harm: a harvester out of an attacker\'s reach, or an engineer onto a bombed position.');
@@ -349,10 +356,15 @@ export function specialGroups(api, catalog, snapshot, memory, groups) {
     const r = catalog[u.name];
     if (!r || r.yard) continue;
     const deployedRule = catalog[r.deploysInto];
-    if (r.deploysInto && deployedRule && !deployedRule.yard && deployedRule.weapon?.damage > 0 && snapshot.state.baseUnderAttack && enemies.some(e => distance(e.tile,u.tile) < (deployedRule.weapon.range || 6)))
+    // `damage > 0` was the only weapon test, so ANY enemy inside the deployed weapon's range immobilised the unit
+    // into a gun that may not be able to shoot it: an aircraft in range deployed every idle canDeploy tank into a
+    // cannon with no AA flag, and the pack-up condition below then refused to reverse it while that aircraft was
+    // still inside the range. Every other target choice in this file gates on engagement; these two now do too.
+    if (r.deploysInto && deployedRule && !deployedRule.yard && deployedRule.weapon?.damage > 0 && snapshot.state.baseUnderAttack
+      && enemies.some(e => canEngageTarget(deployedRule, e, catalog, api) && distance(e.tile,u.tile) < (deployedRule.weapon.range || 6)))
       posture(`morph_${u.id}`, `Deploy ${r.label} #${u.id} into ${deployedRule.label} to hold the threatened approach; it will lose mobility.`,
         { type: 'special', kind: 'deploy_morph', ids: [u.id], order: { type: api.OrderType.DeploySelected } });
-    if (r.tickTank && r.undeploysInto && !enemies.some(e => distance(e.tile,u.tile) < (r.weapon?.range || 6)))
+    if (r.tickTank && r.undeploysInto && !enemies.some(e => distance(e.tile,u.tile) < (r.weapon?.range || 6) && canEngageTarget(r, e, catalog, api)))
       posture(`mobilize_${u.id}`, `Pack up ${r.label} #${u.id} into ${r.undeploysInto} to join the mobile force; no visible enemy is in its firing range.`,
         { type: 'special', kind: 'undeploy_morph', ids: [u.id], order: { type: api.OrderType.DeploySelected } });
   }

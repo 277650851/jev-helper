@@ -157,7 +157,7 @@ console.log('Upgrade crates: read from crates(), collected with move, released w
 // field, never "is it an aircraft". The intruder here is placed CLOSER than the helicopter, so the assertion
 // can actually fail -- that is the whole point of the fixture.
 {
-  catalog.ORCA = { label: 'Intruder', cost: 900, airportbound: true };
+  catalog.ORCA = { label: 'Intruder', cost: 900, airportBound: true };
   catalog.SHAD = { label: 'Nighthawk', cost: 1000, jumpjet: true };
   const added = own.length;
   own.push({ id: 30, name: 'ORCA', kind: 'ORCA', type: 1, tile: { rx: 40, ry: 40 }, hitPoints: 200, maxHitPoints: 200, isIdle: true });
