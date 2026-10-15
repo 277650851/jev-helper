@@ -14,6 +14,12 @@ export const MINER_FLEE_RADIUS = 5, MINER_FLEE_COOLDOWN = 300;
 // stream -- so a script cannot see which unit was tagged and the only warning available is a visible Ivan.
 // The cooldown keeps one engineer from being re-ordered every turn while the Ivan sits in sight.
 export const IVAN_GUARD_COOLDOWN = 600, IVAN_GUARD_ARRIVE = 3;
+// One engineer belongs to the base itself. The capture loop trains engineers for the neutral buildings and
+// they walk off and stay there, so a base with a barracks can end a match with nobody to defuse an Ivan's
+// bomb, repair a damaged structure or hold a doorway. `HOME_ENGINEER` is that slot and
+// `HOME_ENGINEER_RADIUS` is the walk that counts as "at home" -- the same radius decides which engineer the
+// defuse guard takes, so the slot and the guard agree on what a home engineer is.
+export const HOME_ENGINEER = 1, HOME_ENGINEER_RADIUS = 12;
 const IVAN = /^C?IVAN$/i;
 // Leaving a building once its job is done: no armed enemy within RELEASE_RADIUS for this long.
 export const ENTRY_RESENDS = 3;
@@ -267,9 +273,15 @@ export function specialGroups(api, catalog, snapshot, memory, groups) {
     if (ivans.length) {
       memory.ivanGuardAt ??= new Map();
       const nearest = (u) => Math.min(...ivans.map((e) => distance(e.tile, u.tile)));
+      // The base's own engineer goes first, and only then the one nearest the Ivan. "Closest to the threat"
+      // alone picked an engineer out on a derrick over the one standing at home, which is the opposite of
+      // what the order is for: the engineer is walking to bombs planted on OUR units and buildings, so the
+      // engineer whose job is the base is the one that should go. `idle` still keeps a unit that is already
+      // on a task out of the pool.
+      const atHome = (u) => distance(u.tile, base.tile) <= HOME_ENGINEER_RADIUS;
       const guard = units
         .filter((u) => catalog[u.name]?.engineer && idle(u, memory, tick) && (memory.ivanGuardAt.get(u.id) ?? -1e9) + IVAN_GUARD_COOLDOWN <= tick)
-        .sort((a, b) => nearest(a) - nearest(b))[0];
+        .sort((a, b) => Number(atHome(b)) - Number(atHome(a)) || nearest(a) - nearest(b))[0];
       if (guard) {
         const near = ivans.reduce((best, e) => (!best || distance(e.tile, guard.tile) < distance(best.tile, guard.tile) ? e : best), undefined);
         memory.ivanGuardAt.set(guard.id, tick);
@@ -516,8 +528,19 @@ export function specialGroups(api, catalog, snapshot, memory, groups) {
   // taken and the rest of the field was left sitting there. The count now tracks the targets rather
   // than being clamped to two -- an oil derrick is income, and income lost at the opening is what the
   // rest of the match is played without. Capped by the target list, so this cannot run away.
-  const engineersWanted = Math.min(captureTargets.length, Math.min(4, captureTargets.length)) + (wanted && armedNear(wanted.tile) ? 1 : 0) + (huts.length && bridgeUrgent ? 1 : 0);
-  const objectiveEngineer = wanted && engineers.length < engineersWanted;
+  // The demand used to be sized by the capture targets alone, which is why a base that had just trained its
+  // one engineer and sent it to a derrick never trained another one: the targets were staffed, the base was
+  // not. `HOME_ENGINEER` adds that slot when the barracks stands and nothing is within
+  // `HOME_ENGINEER_RADIUS` of the base -- an engineer standing on a distant derrick does not cover home.
+  // `objectiveEngineer` is still decided by the capture demand, so the defensive slot cannot by itself turn
+  // the option into an engine-owned "MISSION OBJECTIVE" capture (review §4: a takeover must not take the
+  // real choice away, and §0.49 judged this option one the model keeps).
+  const captureEngineers = Math.min(captureTargets.length, Math.min(4, captureTargets.length)) + (wanted && armedNear(wanted.tile) ? 1 : 0) + (huts.length && bridgeUrgent ? 1 : 0);
+  const hasBarracks = buildings.some((b) => catalog[b.name]?.factory === 'InfantryType');
+  const homeEngineers = engineers.filter((u) => distance(u.tile, base.tile) <= HOME_ENGINEER_RADIUS).length;
+  const homeEngineer = hasBarracks && homeEngineers < HOME_ENGINEER;
+  const engineersWanted = captureEngineers + (homeEngineer ? HOME_ENGINEER : 0);
+  const objectiveEngineer = wanted && engineers.length < captureEngineers;
   // The opening a barracks is supposed to enable: go and take the neutral buildings. They are the cheapest
   // advantage on the map -- `[ENGINEER] Cost=500, Strength=75` in rules.ini, i.e. CHEAPER THAN A GRIZZLY
   // (MTNK 750), while a tech oil derrick pays `ProduceCashStartup=1000` the moment it is taken plus 20 a
@@ -530,11 +553,19 @@ export function specialGroups(api, catalog, snapshot, memory, groups) {
   const engineerCost = catalog[engineerRule?.name]?.cost ?? 500;
   const neutralTarget = captureTargets.find((c) => c.neutral && !c.defended);
   const earlyEngineer = !!neutralTarget && !!engineerRule && snapshot.state.self.credits >= engineerCost;
-  if (engineersWanted > engineers.length && freeQueue(api.QueueType.Infantry) && (snapshot.state.self.credits > 1800 || objectiveEngineer || earlyEngineer)) {
-    const engineer = available.find((u) => catalog[u.name]?.engineer && afford(catalog[u.name], objectiveEngineer || earlyEngineer ? 0 : 1200));
+  // The slot at home waits for the engineer's own price too: `[ENGINEER] Cost=500` in rules.ini is cheaper
+  // than a Grizzly (MTNK 750), so there is no reason to make it sit behind the 1800-credit cushion that the
+  // capture case needed (and no capture target is a precondition for it). The extra 1200 the training call
+  // used to reserve is dropped for the same reason.
+  const homeEngineerReady = homeEngineer && !!engineerRule && snapshot.state.self.credits >= engineerCost;
+  // A remote engineer cannot cover the slot at home: with one engineer out on a derrick and nothing left on
+  // the field to capture, `engineersWanted` can equal the engineer count while the base still has nobody, so
+  // the gate asks for the home slot explicitly instead of relying on the arithmetic.
+  if ((engineersWanted > engineers.length || homeEngineer) && freeQueue(api.QueueType.Infantry) && (snapshot.state.self.credits > 1800 || objectiveEngineer || earlyEngineer || homeEngineerReady)) {
+    const engineer = available.find((u) => catalog[u.name]?.engineer && afford(catalog[u.name], objectiveEngineer || earlyEngineer || homeEngineerReady ? 0 : 1200));
     const first = captureTargets[0];
     if (engineer) addProduction(group('infantry', ''), { ...engineer, queue: api.QueueType.Infantry },
-      huts.length && bridgeUrgent ? `PRIORITY: train an engineer to repair the bridge (${bridgeWhy})` : objectiveEngineer ? `MISSION OBJECTIVE: train an engineer to capture ${catalog[wanted.name]?.label ?? wanted.name} #${wanted.id}` : first ? `OBJECTIVE: train an engineer to capture ${catalog[first.unit.name]?.label ?? first.unit.name} #${first.unit.id}${captureTargets.length > 1 ? ` and ${captureTargets.length - 1} more capturable structure${captureTargets.length > 2 ? 's' : ''}` : ''}` : 'Train one engineer for visible bridge repair',
+      huts.length && bridgeUrgent ? `PRIORITY: train an engineer to repair the bridge (${bridgeWhy})` : objectiveEngineer ? `MISSION OBJECTIVE: train an engineer to capture ${catalog[wanted.name]?.label ?? wanted.name} #${wanted.id}` : first ? `OBJECTIVE: train an engineer to capture ${catalog[first.unit.name]?.label ?? first.unit.name} #${first.unit.id}${captureTargets.length > 1 ? ` and ${captureTargets.length - 1} more capturable structure${captureTargets.length > 2 ? 's' : ''}` : ''}` : homeEngineer ? `DEFENSIVE SLOT: no engineer is within ${HOME_ENGINEER_RADIUS} tiles of the base, so nothing here can defuse a Crazy Ivan's bomb, repair a damaged structure or hold a doorway. Train one to stay home.` : 'Train one engineer for visible bridge repair',
       undefined, { auto: objectiveEngineer ? 1 : (first || bridgeUrgent) && snapshot.state.self.credits >= catalog[engineer.name].cost + 1500 ? 3 : bridgeUrgent ? 3 : undefined,
         // When the engineer is being trained to CAPTURE a stated mission objective, the engine has already
         // tied it to that objective -- the option exists only because the mission needs it, and it is the
