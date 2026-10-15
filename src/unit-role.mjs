@@ -26,6 +26,11 @@ export const UNIT_PURPOSE = {
   ENGINEER: 'engineer; captures or repairs buildings, no weapon and very fragile',
   JUMPJET: 'flying infantry; raids power plants and miners behind the lines, thin against anti-air',
   GHOST: 'SEAL; C4 destroys buildings and shreds infantry, almost useless against tanks',
+  // Tanya. The runtime key is the section name in rules(规则文件).ini, `[TANY]`; `TANYA` is the dictionary ID
+  // the tool-bar text uses and is not a section at all (`docs/ra2-unit-catalog.md` line 24), so the row was
+  // never matched until now. Both keys point at the same line, and the dictionary spelling is kept because it
+  // is the one a human reading a report will have seen.
+  TANY: 'hero; C4 demolishes buildings and kills infantry instantly, negligible against tanks',
   TANYA: 'hero; C4 demolishes buildings and kills infantry instantly, negligible against tanks',
   IVAN: 'plants a timed bomb on a unit or building; weak in a straight fight and the bomb can be defused',
   CIVAN: 'teleporting Ivan; plants a bomb inside the enemy base, very fragile',

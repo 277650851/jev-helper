@@ -1,4 +1,4 @@
-import { isAirSupport, effectiveness, counterValue, canAnswerVisible, canEngageTarget, defenseProfile, WALL_RING_SEGMENTS } from './werhd-jev-strategy.mjs';
+import { isAirSupport, effectiveness, counterValue, canAnswerVisible, canEngageTarget, canUnitHurt, defenseProfile, WALL_RING_SEGMENTS } from './werhd-jev-strategy.mjs';
 import { isCapturable } from './werhd-jev-catalog.mjs';
 export const ATTACK_STUCK_TICKS = 2700, CAPTURE_RESENDS = 3, SIEGE_RANGE = 8, BASE_GARRISON_SPARE = 8;
 // A crate is a single tile on the ground, so walking there is quick and the resend window is short. The
@@ -21,6 +21,13 @@ export const IVAN_GUARD_COOLDOWN = 600, IVAN_GUARD_ARRIVE = 3;
 // defuse guard takes, so the slot and the guard agree on what a home engineer is.
 export const HOME_ENGINEER = 1, HOME_ENGINEER_RADIUS = 12;
 const IVAN = /^C?IVAN$/i;
+// Tanya's section in rules(规则文件).ini is `[TANY]` (with `UIName=Name:TANYA`); `TANYA` is the dictionary ID
+// and is not a section at all (`docs/ra2-unit-catalog.md` line 24). Both are matched here: a threat test that
+// misses a hero by one letter is worse than no test, and the purpose table was keyed on the wrong one.
+const TANY = /^TANYA?$/i;
+// The hero's own rhythm: long enough that one killer is not re-ordered every turn while she stands in sight,
+// short enough that an order the game refused is tried again before she reaches a building.
+export const TANYA_COOLDOWN = 600;
 // The only unit in rules(规则文件).ini with `Infiltrate=yes`. The console's rule object carries neither
 // `agent` nor `infiltrate` (`werhd-player-api.d.ts` lists `engineer` and `occupier`), so the name is the only
 // handle there is -- the same reason `IVAN` above is a name test.
@@ -312,6 +319,28 @@ export function specialGroups(api, catalog, snapshot, memory, groups) {
         const guardGroup = group('salvage', 'Get the thing the enemy is destroying out of harm: a harvester out of an attacker\'s reach, or an engineer onto a bombed position.');
         guardGroup(`defuse_guard_${guard.id}`, `DEFUSE GUARD: the enemy ${catalog[near.name]?.label ?? near.name} #${near.id} at (${near.tile.rx},${near.tile.ry}) plants timed bombs on our units and buildings. Engineer #${guard.id} moves there and holds Guard: an engineer on Guard clears the bombs around it (the game's own G key). A script cannot see the bomb itself, so the Ivan is the only warning available.`,
           { type: 'special', kind: 'defuse_guard', ids: [guard.id], tile: { x: near.tile.rx, y: near.tile.ry }, threatId: near.id, engineOwned: true });
+      }
+    }
+    // Tanya is the other half of the same problem, and needs a different answer. An engineer on Guard clears an
+    // Ivan's bombs, but nothing an engineer can do answers a hero who kills infantry outright: she has to be
+    // killed, and the unit that does that is a dog -- 200 credits, and it one-shots any infantry. "Send a tank"
+    // is not the answer either: `[TANY]` is `Crushable=no` and `Armor=flak` in rules(规则文件).ini, so a tank
+    // neither drives over her nor shrugs off her pistols. The response is therefore the nearest unit whose
+    // weapon can actually hurt her, dogs first, and `canUnitHurt` is the same test the rest of the engine runs
+    // before sending anything at anything.
+    const tanyas = enemies.filter((e) => TANY.test(String(e.name ?? '')));
+    if (tanyas.length) {
+      memory.tanyaAt ??= new Map();
+      const her = tanyas.reduce((best, e) => (!best || distance(e.tile, base.tile) < distance(best.tile, base.tile) ? e : best), undefined);
+      const killer = units
+        .filter((u) => u.type !== api.ObjectType.Building && idle(u, memory, tick)
+          && (memory.tanyaAt.get(u.id) ?? -1e9) + TANYA_COOLDOWN <= tick && canUnitHurt(u, her, catalog, api))
+        .sort((a, b) => Number(!!catalog[b.name]?.attackDog) - Number(!!catalog[a.name]?.attackDog) || distance(a.tile, her.tile) - distance(b.tile, her.tile))[0];
+      if (killer) {
+        memory.tanyaAt.set(killer.id, tick);
+        const heroGroup = group('salvage', 'Get the thing the enemy is destroying out of harm: a harvester out of an attacker\'s reach, or an engineer onto a bombed position.');
+        heroGroup(`tanya_${her.id}`, `KILL TANYA: the enemy hero #${her.id} at (${her.tile.rx},${her.tile.ry}) kills infantry outright and blows buildings up with C4, and she cannot be crushed (Crushable=no). Send ${catalog[killer.name]?.label ?? killer.name} #${killer.id} at her -- a dog kills any infantry in one bite.`,
+          { type: 'special', kind: 'kill_hero', ids: [killer.id], targetId: her.id, threatId: her.id, order: { type: api.OrderType.Attack, target: { objectId: her.id } }, engineOwned: true });
       }
     }
   }
