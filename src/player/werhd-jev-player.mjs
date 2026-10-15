@@ -960,7 +960,15 @@ export function candidateGroups(api, catalog, snapshot, memory) {
   const readiness = forceReadiness(api, catalog, state, army, tanks, memory);
   state.forceReadiness = readiness;
   memory.lastReady = readiness.ready;
-  if (infantryArmy && state.self.credits >= 3000 && (combatFoot < readiness.threshold || state.self.credits >= RICH_INFANTRY_SPEND && combatFoot < footCap)) for (const a of combatTraining) a.auto = 2;
+  // The infantry auto is bounded by the FORCE TARGET, and the second clause needs money that is actually PILING
+  // UP -- rising credits -- rather than a large balance. `credits >= RICH_INFANTRY_SPEND` could not tell the
+  // starting bank from a pile-up, and it is true from the opening 10,000: jev-report-20261015-140410 has 61 model
+  // `wait`s in the infantry group against 6 engine `produce_E1` and 5 `produce_ADOG`, 11 soldiers and 7 dogs
+  // before the enemy base was found, with the money being spent on power and a refinery at the time. The
+  // contracts stay: the 0.5.8 deadlock (a barracks, 57,000 credits, no war factory, nothing trained for 65
+  // minutes) piles money up and still arms, and an infantry-only army still keeps training while it does.
+  const pilingUp = !!state.economy?.surplus || (state.economy?.trend ?? 0) > 0;
+  if (infantryArmy && state.self.credits >= 3000 && (combatFoot < readiness.threshold || pilingUp && combatFoot < footCap)) for (const a of combatTraining) a.auto = 2;
   // Ready on paper but only a handful of units free to move: gather first instead of feeding them in.
   const tooFew = readiness.canBuildAnything && active.length < MIN_ATTACK_UNITS;
   const ready = readiness.ready && !tooFew;
