@@ -338,8 +338,16 @@ export function economyPlan(api, catalog, state, memory, units) {
   // `ceil(targetMiners / MINERS_PER_REFINERY)` is that capacity, floored at what already stands so the
   // number can never under-report, and capped by REFINERY_TARGET_MAX. Without `outran` nothing is asked
   // for beyond what exists -- the original over-correction stays corrected.
-  const targetRefineries = outran
-    ? Math.min(REFINERY_TARGET_MAX, Math.max(refineries, Math.ceil(targetMiners / MINERS_PER_REFINERY)))
+  // The capacity rule is not only for `outran`. A base can out-grow ONE refinery while the army is not being shot
+  // faster than that refinery earns: jev-report-20261015-125130 is that shape and it lost to `economic_stall` --
+  // six miners standing against one refinery, so `MINERS_PER_REFINERY` was exceeded three times over and most of
+  // them queued to unload while the credits ran dry, and the branch above never fired. Asking for the capacity
+  // the STANDING miners need is not the over-correction of asking for a refinery on spec (that stays corrected,
+  // because nothing is asked for until more miners are already on the field than can unload); it is asking for
+  // somewhere for the miners already bought to dump their ore.
+  const capacity = Math.ceil(Math.max(targetMiners, miners.length) / MINERS_PER_REFINERY);
+  const targetRefineries = outran || miners.length > refineries * MINERS_PER_REFINERY
+    ? Math.min(REFINERY_TARGET_MAX, Math.max(refineries, capacity))
     : Math.max(1, Math.min(refineries, REFINERY_TARGET_MAX));
   return { targetMiners, targetRefineries, incomeRate, trend, surplus, starving, idleMiners, outran, lostInWindow, replacementCost, reason };
 }

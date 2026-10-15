@@ -117,6 +117,23 @@ test('the miner ceiling is six, and the refinery target is a total that follows 
   assert.equal(e.targetRefineries,3,'six miners need three refineries at two per refinery, and the target is a total');
 });
 
+test('a base whose standing miners outgrow its refineries asks for the capacity they need', () => {
+  // jev-report-20261015-125130: six miners against ONE refinery with `outran` false, and the match lost to
+  // `economic_stall` -- most of those miners queued to unload while the credits ran dry. `outran` is about the
+  // replacement bill; this is about the ore the base has already paid for, and until now no code path could even
+  // OFFER a second refinery (`candidates` filtered out every building already owned).
+  const own=[...base, unit(50,'REFINERY',2,20,12),
+    ...Array.from({length:6},(_,i)=>({...unit(60+i,'HARV',7,30+i,12),isIdle:false}))];
+  const { api, memory } = world({ own, credits:9000, tick:5000, offers });
+  const snap=collectState(api,catalog);
+  const groups=candidateGroups(api,catalog,snap,memory);
+  const e=snap.state.economy;
+  assert.equal(e.outran,false,'no losses, so this is not the replacement bill');
+  assert.equal(e.targetRefineries,3,'six miners need three refineries at two per refinery');
+  assert.ok(groups.construction?.actions?.produce_REFINERY,
+    `and the second refinery is actually offered (${Object.keys(groups.construction?.actions ?? {}).join(',')})`);
+});
+
 test('without outran the refinery target never under-reports what already stands', () => {
   // It used to be `... ? 2 : 1`, so a base holding three refineries told the model "currently 1 refinery"
   // in the construction brief. Nothing acted on the field, but the brief is what the model reads.

@@ -813,6 +813,25 @@ export function investmentGroups(api, catalog, snapshot, memory, groups) {
         r.cost);
     }
   }
+  // The economy target can ask for refining capacity the base has already outgrown, and until now there was no
+  // path that could OFFER it: the recovery group returns early once a yard, a refinery and a miner exist, and
+  // `candidates` filters refineries out. jev-report-20261015-125130 is what that costs -- six miners on one
+  // refinery, most of them queueing at the pad, credits dry from 877s, `economic_stall`, defeat. This is the same
+  // capital question as the tech step, so it is offered the same way: the model decides, and the criterion says
+  // why.
+  // A refinery drains power, so it never competes with the power plant a base is missing: without spare power the
+  // brown-out costs more than the extra loading does (`player-strategy.test.mjs` pins "power first").
+  // It also requires one to already stand: with none, the opening's own order (power, barracks, refinery) owns
+  // that question, and this rule is only about miners that are already waiting at a full pad.
+  const refineryItem = (s.economy?.refineries ?? 0) > 0 && (s.economy.refineries < (s.economy?.targetRefineries ?? 0))
+    && !strategy.recovery && (s.economy?.powerMargin ?? 0) >= 0
+    ? available.find((i) => catalog[i.name]?.refinery) : undefined;
+  if (refineryItem) {
+    const r = catalog[refineryItem.name];
+    add(cg, { ...refineryItem, queue: api.QueueType.Structures },
+      `ECONOMY CAPACITY: ${s.economy.refineries} refiner${s.economy.refineries === 1 ? 'y' : 'ies'} for ${s.harvesters} miner${s.harvesters === 1 ? '' : 's'}. A refinery can only load so many, so the surplus queues at the pad instead of earning -- the miners are already paid for, and this is what lets them work. Target capacity ${s.economy.targetRefineries}; cost ${r.cost}.`,
+      r.cost);
+  }
   const urgentDefense = strategy.underPressure && coverage < (strategy.critical ? 6 : 2) && defensePlan;
   const mobileFirst = defenseUnits.length >= 2 && (counterPlan || forcePlan);
   const plan = mobileFirst || urgentDefense || counterPlan || economyPlan || forcePlan || techPlan || defensePlan;
@@ -853,7 +872,7 @@ export function investmentGroups(api, catalog, snapshot, memory, groups) {
     // the defences' build orders) stays corrected because this needs `outran` to be true.
     const essential = id === 'construction' && (r.power > 0
       || r.factory === 'InfantryType' && !buildings.some(b => catalog[b.name]?.factory === 'InfantryType')
-      || r.refinery && (!s.economy.refineries || s.economy.outran && s.economy.refineries < s.economy.targetRefineries)
+      || r.refinery && (!s.economy.refineries || s.economy.refineries < s.economy.targetRefineries)
       || r.factory === 'UnitType' && !r.naval && !s.economy.factories);
     if (!essential && s.uncommittedCredits - a.cost < strategy.reserve) { delete g.actions[key]; delete g.criteria[key]; }
   }

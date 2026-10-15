@@ -952,7 +952,10 @@ export function superWeaponTarget(api, catalog, memory, radius = 4) {
     const near = enemies.filter((o) => Math.hypot(o.tile.rx - e.tile.rx, o.tile.ry - e.tile.ry) <= radius).length;
     if (!best || near > best.near) best = { x: e.tile.rx, y: e.tile.ry, near };
   }
-  if (best) return { x: best.x, y: best.y, why: `enemy cluster (${best.near} targets)` };
+  // A "cluster" of one is not a concentration, it is a single unit: jev-report-20261015-125130 fired the
+  // paratrooper drop at `enemy cluster (1 targets)` four times. Two is the floor -- below that the known enemy
+  // positions are the better aim.
+  if (best && best.near >= 2) return { x: best.x, y: best.y, why: `enemy cluster (${best.near} targets)` };
   if (known.length) return { x: known[0].x, y: known[0].y, why: 'last known enemy structure' };
   const mission = memory.mission;
   if (Number.isFinite(mission?.x) && Number.isFinite(mission?.y)) return { x: mission.x, y: mission.y, why: 'current mission' };
