@@ -15,7 +15,7 @@
 >
 > 1. **大部分是这套规则根本没有的物件**——游戏跑的是**基础红警 2**规则
 >    （入库的 `docs/rules(规则文件).ini` 就是游戏覆盖层那一份：`Name=Red Alert 2 -- Official Rules of Engagement`，
->    401517 字节 / 21958 行 / 1257 个 `[节]`，`[Countries]` 无 `YuriCountry`），所以整批尤里阵营单位与建筑
+>    1258 个 `[节]` / 19443 条键值，`[Countries]` 无 `YuriCountry`），所以整批尤里阵营单位与建筑
 >    （`INIT VIRUS BRUTE YURICLONE YURIPRIME LASHER GATTTANK CHAOSDRONE MASTERMIND MAGNETRON
 >    YMCV YACNST YBARRACKS YWARFACTORY YNAVAL YBLAB YAPSYT YAPPET` 等）以及部分后期盟苏单位
 >    （`GUARDIANGI ROBOTANK BATTLEFORTRESS SIEGECHOPPER BEAGLE DISK BORIS NABNKR NATBNK GAHPAD` …）
@@ -28,9 +28,10 @@
 > **对代码的影响**：运行时 `catalog[u.name]` 的键来自游戏 API 返回的真实 ID，**不来自本表**，
 > 所以本表不会让引擎查错单位。但**不要照本表在代码里硬编码 ID 或建表**——查不到就取不到护甲和武器，
 > 而护甲正是武器 `Verses`（11 项克制系数表）的索引。护甲与克制一律读运行时 `api.rules()`。
-> 反过来，`docs/rules(规则文件).ini` **可以**当作本表的校对源：2026-10-15 换入之后它就是游戏覆盖层
-> 那一份（此前入库的是 25124 行 / 581399 字节 / 1244 个 `[节]` 的带中文注释版本，比覆盖层少 13 个节，
-> 已从仓库移除）。查不到 `[节]` 的那 51 个 ID，就是这个客户端没有的东西。
+> 反过来，`docs/rules(规则文件).ini` **可以**当作本表的校对源：2026-10-15 换入之后它是游戏覆盖层那一份，
+> 并且逐键加了中文注释。换入时做过逐键比对 —— **1258 个节、19443 条键值与覆盖层完全一致，一个取值都没改**，
+> 只多了注释（旧的那份正是栽在「看着像注释版、实则比覆盖层少 13 个节」，所以这条比对是必需的）。
+> 查不到 `[节]` 的那 51 个 ID，就是这个客户端没有的东西。
 
 ---
 
