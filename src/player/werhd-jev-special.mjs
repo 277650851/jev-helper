@@ -25,6 +25,26 @@ const IVAN = /^C?IVAN$/i;
 // `agent` nor `infiltrate` (`werhd-player-api.d.ts` lists `engineer` and `occupier`), so the name is the only
 // handle there is -- the same reason `IVAN` above is a name test.
 const SPY = /^SPY$/i;
+// What a spy may enter is the game's own list: `Spyable=yes` on 27 buildings in rules(规则文件).ini --
+// refineries, barracks, war factories, battle labs, airforce commands, power plants and reactors, radar
+// towers, superweapons. `PlayerConsoleRules` does not carry that field (`werhd-player-api.d.ts` stops at
+// `c4`), so the set is rebuilt from the fields it does carry, and kept deliberately NARROW: every branch below
+// is one of the effects the rules file documents (`SpyMoneyStealPercent=.5`, `SpyPowerBlackout=1000`, the
+// veteran upgrades, the stolen technology). A building this cannot name is never offered, because a spy sent
+// somewhere it cannot enter is simply lost -- a missing target is a gap, a wrong one costs 1000 credits and
+// the walk. Nothing neutral or civilian can match: the caller filters to hostile-owned buildings, which is
+// also what the game allows (a spy cannot enter a civilian house or a neutral structure).
+//
+// The battle lab is the one case the exposed fields cannot pin down alone: `BuildCat=Tech` with a high
+// `TechLevel` also matches the Cloning Vats (9) and the Civilian Armory (8), neither of which a spy can enter.
+// The label separates them, the same way `isCapturable` separates technology buildings.
+const spyEffect = (r) => !r || r.wall ? undefined
+  : r.refinery ? 'steals part of the money the enemy is holding (SpyMoneyStealPercent=.5)'
+  : r.power > 0 ? 'blacks their base out for about a minute (SpyPowerBlackout=1000 frames)'
+  : r.factory === 'InfantryType' ? 'makes our infantry come out of the barracks at veteran rank for the rest of the match'
+  : r.factory === 'UnitType' ? 'makes our vehicles come out of the war factory at veteran rank for the rest of the match'
+  : r.buildCategory === 'Tech' && (r.techLevel ?? 0) >= 7 && /\blab\b/i.test(r.label ?? '') ? 'unlocks a special unit'
+  : undefined;
 // Leaving a building once its job is done: no armed enemy within RELEASE_RADIUS for this long.
 export const ENTRY_RESENDS = 3;
 export const RELEASE_RADIUS = 10, RELEASE_TICKS = { siege: 150, forward: 900, base: 2700 }, REENTER_COOLDOWN = 1800;
@@ -592,22 +612,17 @@ export function specialGroups(api, catalog, snapshot, memory, groups) {
   // `test/player-spy.test.mjs`; the engine's answer is not, and the option is left for the model to accept.
   const spy = units.find((u) => SPY.test(String(u.name ?? '')) && idle(u, memory, tick));
   if (spy) {
-    // A spy is consumed either way, so it goes after what pays: half the enemy's credits out of a refinery
-    // (`SpyMoneyStealPercent=.5`), a blackout out of a power plant (`SpyPowerBlackout=1000` frames), or
-    // technology. Undefended first, then nearest -- the capture loop's ordering, and for the same reason: a
-    // spy that dies on the way steals nothing.
+    // A spy is consumed either way, so it goes after what pays, and only at a building `spyEffect` recognises.
+    // Undefended first, then nearest -- the capture loop's ordering, and for the same reason: a spy that dies
+    // on the way steals nothing.
     const spyTargets = enemies
-      .filter((e) => e.type === api.ObjectType.Building && !catalog[e.name]?.wall
-        && (catalog[e.name]?.refinery || catalog[e.name]?.power > 0 || catalog[e.name]?.factory || catalog[e.name]?.yard || (catalog[e.name]?.techLevel ?? 0) >= 2))
+      .filter((e) => e.type === api.ObjectType.Building && !!spyEffect(catalog[e.name]))
       .map((e) => ({ unit: e, defended: armedNear(e.tile), dist: distance(spy.tile, e.tile) }))
       .sort((a, b) => Number(a.defended) - Number(b.defended) || a.dist - b.dist);
     const target = spyTargets[0];
     if (target) {
-      const r = catalog[target.unit.name] ?? {};
-      const what = r.refinery ? 'steals half the credits the enemy is holding (SpyMoneyStealPercent=.5)'
-        : r.power > 0 ? 'blacks the enemy base out for about a minute (SpyPowerBlackout=1000 frames)'
-        : 'steals the technology it is guarding';
-      const infiltration = group('infiltration', 'Send a spy into an enemy building: it steals credits from a refinery, blacks out power, or steals technology. The spy is consumed and never comes back, and it dies to dogs, to mind control and to anything that shoots, so send it where the defence is thin.');
+      const what = spyEffect(catalog[target.unit.name]);
+      const infiltration = group('infiltration', 'Send a spy into an enemy building: it steals credits from a refinery, blacks out power, or steals technology for us. The spy is consumed and never comes back, and it dies to dogs, to mind control and to anything that shoots, so send it where the defence is thin. A spy can only enter enemy buildings; it cannot enter a civilian house or a neutral structure.');
       infiltration(`infiltrate_${target.unit.id}`,
         `SPY: send spy #${spy.id} into ${catalog[target.unit.name]?.label ?? target.unit.name} #${target.unit.id} at (${target.unit.tile.rx},${target.unit.tile.ry}), ${Math.round(target.dist)} tiles away; it ${what}${target.defended ? '; armed enemies are within nine tiles of it and a spy dies to anything that shoots' : ''}. The spy is consumed by the attempt. Note that whether this game accepts the order at all is unverified.`,
         { type: 'special', kind: 'infiltrate', ids: [spy.id], targetId: target.unit.id,

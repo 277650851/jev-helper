@@ -19,7 +19,16 @@ const catalog = {
   SPY: { label: 'Spy', cost: 1000, armor: 'none', category: 'Soldier', weapon: { damage: 0, range: 0, versus: [] } },
   NAREFN: { refinery: true, label: 'Ore Refinery', power: -50 },
   NAPOWR: { power: 200, label: 'Tesla Reactor' },
-  NATECH: { techLevel: 6, label: 'Battle Lab' },
+  GAPILE: { factory: 'InfantryType', label: 'Allied Barracks', buildCategory: 'Tech', techLevel: 2, power: -10 },
+  GAWEAP: { factory: 'UnitType', label: 'Allied War Factory', buildCategory: 'Tech', techLevel: 2, power: -25 },
+  GATECH: { buildCategory: 'Tech', techLevel: 8, power: -100, label: 'Allied Battle Lab' },
+  // `BuildCat=Tech` with a high `TechLevel` too, but `Spyable` is absent: the label is what separates these
+  // two from the battle lab above, and the prism tower is the one the first cut of this filter let through.
+  NACLON: { buildCategory: 'Tech', techLevel: 9, power: -200, label: 'Cloning Vats' },
+  GADEPT: { buildCategory: 'Tech', techLevel: 6, power: -25, label: 'Service Depot' },
+  ATESLA: { buildCategory: 'Combat', techLevel: 6, power: -75, label: 'Prism Tower' },
+  GACNST: { yard: true, label: 'Construction Yard' },
+  CAOILD: { techLevel: -1, label: 'Tech Oil Derrick' },
   GAWALL: { wall: true, label: 'Wall' },
   MTNK: { label: 'Grizzly', armor: 'heavy', category: 'AFV', weapon: { damage: 65, rof: 60, range: 5, ag: true, versus: [1, 1, 1, 1, 1, 1] } },
 };
@@ -67,6 +76,34 @@ test('an idle spy and a visible enemy building produce one infiltration option, 
   assert.equal(action.engineOwned, undefined);
   assert.match(groups.infiltration.criteria['infiltrate_300'], /SpyMoneyStealPercent/);
   assert.match(groups.infiltration.criteria['infiltrate_300'], /unverified/);
+});
+
+test('a building a spy cannot enter is never offered, whatever its tech level', () => {
+  // The first cut accepted anything with `techLevel >= 2`, which also matches the prism tower (6), the
+  // service depot (6), the Cloning Vats (9) and a construction yard. None of them carries `Spyable=yes`, so a
+  // spy sent there is lost -- and while a fixture cannot prove what the engine does with the order, it can
+  // prove which buildings the option is ever built for.
+  const spy = unit(20, 'SPY', 3, 14, 12);
+  for (const [name, label] of [['ATESLA', 'Prism Tower'], ['GADEPT', 'Service Depot'], ['NACLON', 'Cloning Vats'], ['GACNST', 'Construction Yard']]) {
+    const w = world({ own: [...base(), spy], enemies: [unit(400, name, 2, 20, 14)] });
+    assert.equal(groupsOf(w).infiltration, undefined, `${label} is not spyable`);
+  }
+});
+
+test('the spyable buildings are offered and each says what it does', () => {
+  const spy = unit(20, 'SPY', 3, 14, 12);
+  const barrack = world({ own: [...base(), spy], enemies: [unit(420, 'GAPILE', 2, 20, 14)] });
+  assert.match(groupsOf(barrack).infiltration.criteria['infiltrate_420'], /our infantry come out of the barracks at veteran rank/);
+  const factory = world({ own: [...base(), spy], enemies: [unit(430, 'GAWEAP', 2, 20, 14)] });
+  assert.match(groupsOf(factory).infiltration.criteria['infiltrate_430'], /our vehicles come out of the war factory at veteran rank/);
+  // `BuildCat=Tech` and a high tech level are not enough on their own to call something a battle lab: the
+  // Cloning Vats above carry both. The label is the tiebreaker, and this is the option it produces.
+  const lab = world({ own: [...base(), spy], enemies: [unit(410, 'GATECH', 2, 20, 14)] });
+  assert.match(groupsOf(lab).infiltration.criteria['infiltrate_410'], /unlocks a special unit/);
+  // A spy cannot enter a neutral structure at all, so a neutral refinery that looks exactly like a target is
+  // not one: `enemies` holds hostile-owned buildings, and that is the list this reads.
+  const neutral = world({ own: [...base(), spy], enemies: [], neutral: [unit(440, 'NAREFN', 2, 18, 14), unit(441, 'CAOILD', 2, 19, 14)] });
+  assert.equal(groupsOf(neutral).infiltration, undefined, 'nothing neutral is offered');
 });
 
 test('without a spy, or without anything worth entering, there is no question at all', () => {
