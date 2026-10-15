@@ -1096,8 +1096,9 @@ if (only && g.engineOwned?.[only] === true) { delete criteria[only]; ... }
 - 它仍**不是数值的最终来源**：游戏读自己的覆盖层，而入库的是一份快照，两者会各自演进。
   **一切数值仍读运行时 `api.rules()`。**
 - 「带中文注释」仍然是这份文件入库的理由（注释解释了每项含义），只是现在**注释版就是权威那一份**，
-  不再是一份旁支：换下那一版的规则集已从仓库移除，其内容副本留在工作区未跟踪的
-  `docs/rules-尤里复仇(规则文件).ini` 里。
+  不再是一份旁支。被换下的那一版（旧规则集）已从仓库**和工作区一并删除**：它对应的不是这个客户端跑的
+  规则，留着只会再被误当成权威。`docs/ra2-unit-catalog.md` 里「尤里复仇 / 词典 ID 集」那句说的是那张表的
+  出处，不是仓库里还留着这样一份文件。
 - 游戏跑的是**基础红警 2** 规则（`Name=Red Alert 2 -- Official Rules of Engagement`，
   `[Countries]` 无 `YuriCountry`），`rules.ini` 里 `TANY`/`BEAG`/`GAAIRC` 才是真 ID，
   **没有 `TANYA`/`BEAGLE`/`GAHPAD`**。
