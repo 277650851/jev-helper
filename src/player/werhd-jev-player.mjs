@@ -1444,14 +1444,18 @@ export function executeCandidate(api, action, catalog) {
     // otherwise this is the batch step. The batch is still decided against the LIVE queue and balance here --
     // the same re-check and the same arithmetic `executeProduction` uses for a commander order -- so a queue
     // that filled up or a balance that fell since the question was asked shrinks the batch instead of
-    // over-committing. Structures stay one at a time: the game's structure queue holds one, and a second power
-    // plant is not a batch.
-    const structure = !!api.QueueType && (action.queue === api.QueueType.Structures || action.queue === api.QueueType.Armory);
+    // over-committing.
+    //
+    // Only the INFANTRY and VEHICLE pages queue in quantity. A structure is one at a time because the game's
+    // structure queue holds one; aircraft and ships are one at a time for the same reason -- their queue
+    // takes a single item and `produce(name, quantity)` does not multiply it.
+    const batchable = !!api.QueueType && (action.queue === api.QueueType.Infantry || action.queue === api.QueueType.Vehicles);
     const cost = action.cost ?? 0;
     const room = Number.isFinite(queue?.maxSize) ? Math.max(1, queue.maxSize - (queue?.size ?? 0)) : Infinity;
     const affordable = cost > 0 ? Math.floor(api.me().credits / cost) : Infinity;
-    const count = structure ? 1
-      : Math.max(1, Math.min(PRODUCE_BATCH, Math.max(1, Math.floor(action.count ?? PRODUCE_BATCH)), room, affordable));
+    const count = batchable
+      ? Math.max(1, Math.min(PRODUCE_BATCH, Math.max(1, Math.floor(action.count ?? PRODUCE_BATCH)), room, affordable))
+      : 1;
     api.produce(action.name, count);
     return { accepted: true, count };
   }

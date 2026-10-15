@@ -8,15 +8,16 @@ import { ATTACK_FORCE_SIZE } from '../src/player/werhd-jev-strategy.mjs';
 // the size of it is re-checked against the live queue and balance at that moment -- the same way
 // `executeProduction` already does for a commander order -- so a balance that fell since the question was
 // asked shrinks the batch instead of over-committing.
-const world = ({ credits = 9000, size = 0, maxSize = 5 } = {}) => {
+const world = ({ credits = 9000, size = 0, maxSize = 5, queueType = 3 } = {}) => {
   const calls = [];
+  const offers = { 0: [{ name: 'GAPOWR', type: 2 }], 2: [{ name: 'E1', type: 3 }], 3: [{ name: 'MTNK', type: 7 }], 4: [{ name: 'ORCA', type: 1 }], 5: [{ name: 'DEST', type: 4 }] };
   const api = {
     ObjectType: { Building: 2, Vehicle: 7, Infantry: 3, Aircraft: 1 },
     QueueType: { Structures: 0, Armory: 1, Infantry: 2, Vehicles: 3, Aircrafts: 4, Ships: 5 },
     me: () => ({ credits, power: { total: 100, drain: 0 } }),
     production: {
-      queues: () => [{ type: 3, size, maxSize, items: [] }, { type: 0, size: 0, maxSize: 5, items: [] }],
-      available: (q) => (q === 3 ? [{ name: 'MTNK', type: 7 }] : q === 0 ? [{ name: 'GAPOWR', type: 2 }] : []),
+      queues: () => Array.from({ length: 6 }, (_, type) => ({ type, size: type === queueType ? size : 0, maxSize: type === queueType ? maxSize : 5, items: [] })),
+      available: (q) => (q === undefined ? Object.values(offers).flat() : (offers[q] ?? [])),
     },
     produce: (name, n) => { calls.push(['produce', name, n]); },
   };
@@ -50,6 +51,20 @@ test('the batch never exceeds the queue room or the balance', () => {
   assert.equal(executeCandidate(poorer.api, action(), {}).count, 2, '1600 credits cover two Rhinos');
   const bare = world({ credits: 750 });
   assert.equal(executeCandidate(bare.api, action(), {}).count, 1, 'exactly one affordable is queued rather than refused');
+});
+
+test('only the infantry and vehicle pages queue in quantity', () => {
+  // The two pages the game queues by quantity. Everything else is one item per call: the structure queue
+  // holds a single building, and the aircraft and ship queues take one item and do not multiply it.
+  const infantry = world({ queueType: 2 });
+  assert.equal(executeCandidate(infantry.api, { type: 'produce', name: 'E1', queue: 2, cost: 180, minCredits: 500 }, {}).count, PRODUCE_BATCH);
+  const vehicles = world({ queueType: 3 });
+  assert.equal(executeCandidate(vehicles.api, action(), {}).count, PRODUCE_BATCH);
+  const aircraft = world({ queueType: 4 });
+  assert.equal(executeCandidate(aircraft.api, { type: 'produce', name: 'ORCA', queue: 4, cost: 1200, minCredits: 500 }, {}).count, 1);
+  assert.deepEqual(aircraft.calls, [['produce', 'ORCA', 1]]);
+  const ship = world({ queueType: 5 });
+  assert.equal(executeCandidate(ship.api, { type: 'produce', name: 'DEST', queue: 5, cost: 2000, minCredits: 500 }, {}).count, 1);
 });
 
 test('a structure is still queued one at a time', () => {

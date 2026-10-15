@@ -154,6 +154,13 @@ export function eventEntry(e, at) {
   // reason for a refusal cannot show whether the engine's own choice was refused by the game or the model
   // declined a real question, which is the distinction the whole takeover mechanism exists to create.
   if (kind === 'action') return { ...base, question: short(e.question, 40), choice: short(e.choice, 60), accepted: e.accepted === true, reason: short(e.reason, 40), ...(e.rejectedBecause ? { rejectedBecause: short(e.rejectedBecause, 40) } : {}), ...(e.engineOwned ? { engineOwned: true } : {}), actionType: short(e.action?.type, 24), actionName: short(e.action?.name ?? e.action?.mode, 40),
+    // Which units carried the order, and how many items one accepted production option actually queued. Both
+    // are already on the event -- `takeoverEvent` and the answer path both spread the executor's result, and
+    // `action.ids` is the order itself -- and both were being dropped right here: a mission that dispatched a
+    // party looked like one that dispatched a single unit, and a `produce` that queued three looked like one
+    // that queued one. Measured on jev-report-20261015-092542: 116 `produce` entries, none carrying a count,
+    // and 14 accepted `explore_` missions whose crew could not be read back at all.
+    ...(Array.isArray(e.action?.ids) && e.action.ids.length ? { ids: idList(e.action.ids) } : {}), ...(Number.isFinite(e.count) ? { count: e.count } : {}),
     // Where a `special` action was sent. Without it a saved report cannot tell a chrono miner recalled to
     // its refinery from the same miner stepped ten tiles into the open -- both are one `flee_miner_<id>`
     // action with no destination, which is exactly the difference the recall change turns on. Promised as
@@ -199,7 +206,13 @@ export function eventEntry(e, at) {
   // does not confirm placement (`docs/game-api-requests.md`: 放置是否成功「不确认，20 拍后重新选址」), so the
   // coordinate is also the only way to see one building placed twice.
   if (kind === 'place') return { ...base, name: short(e.name, 40), text: short(e.description ?? e.purpose ?? e.message, 160), x: number(e.x), y: number(e.y) };
-  if (['micro', 'observed', 'camera'].includes(kind)) return { ...base, name: short(e.name, 40), text: short(e.description ?? e.purpose ?? e.message, 160) };
+  // The camera record is the only one that can name the base tile: `werhd-jev-camera.mjs` falls back to
+  // `base.tile` when nothing more interesting is happening. Dropping x/y here -- the same loss `place` had --
+  // left the construction yard's position unreadable from a report, which is why the wall geometry of
+  // jev-report-20261015-092542 had to be recovered by fitting a circle to the segments instead of measuring
+  // them against the base.
+  if (kind === 'camera') return { ...base, name: short(e.name, 40), text: short(e.description ?? e.purpose ?? e.message, 160), x: number(e.x), y: number(e.y) };
+  if (['micro', 'observed'].includes(kind)) return { ...base, name: short(e.name, 40), text: short(e.description ?? e.purpose ?? e.message, 160) };
   return null; // observations are sampled by telemetry already; everything else is noise
 }
 

@@ -37,8 +37,21 @@ test('player events are reduced to typed records and observations are dropped',(
   const place=eventEntry({kind:'place',tick:20,name:'GAPOWR',purpose:'base_development',x:71,y:64},5);
   assert.equal(place.x,71);assert.equal(place.y,64);assert.equal(place.text,'base_development');
   assert.equal(eventEntry({kind:'place',tick:20,name:'GAPOWR'},5).x,null);
-  // micro/observed/camera stay as they were: no coordinate is added where none was recorded.
+  // micro/observed stay as they were: no coordinate is added where none was recorded.
   assert.equal('x' in eventEntry({kind:'micro',description:'m'},1),false);
+  // The camera record is the one that can name the base tile (`werhd-jev-camera.mjs` falls back to `base.tile`),
+  // so dropping x/y there left the construction yard unreadable and the wall geometry of
+  // jev-report-20261015-092542 had to be recovered by fitting a circle instead of measured against the base.
+  const cam=eventEntry({kind:'camera',tick:30,description:'观察基地',x:111,y:99},5);
+  assert.equal(cam.x,111);assert.equal(cam.y,99);assert.equal(cam.text,'观察基地');
+  // Which units carried an order, and how many items one production option queued. Both are on the event and
+  // both were dropped here: a mission that dispatched a party looked like one that dispatched a single unit,
+  // and 116 `produce` entries in jev-report-20261015-092542 carried no count at all.
+  const party=eventEntry({kind:'action',tick:20,question:'scouting',choice:'explore_11_89',accepted:true,action:{type:'mission',mode:'explore',ids:[20,21],x:11,y:89},count:2},5);
+  assert.deepEqual(party.ids,[20,21]);assert.equal(party.count,2);
+  const plain=eventEntry({kind:'action',tick:20,accepted:true,action:{type:'wait'}},5);
+  assert.equal('ids' in plain,false,'no unit list is invented');
+  assert.equal('count' in plain,false,'and no quantity either');
 });
 test('the summary carries the economy plan, so a loss to the economy can be read back from the report',()=>{
   // Five matches in a row were lost to `economic_stall` and this field was not in the summary, so the

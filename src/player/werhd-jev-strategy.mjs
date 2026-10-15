@@ -18,6 +18,13 @@ export const DEFENSE_SECTORS = 3;
 // approach (or inland when none is known). A ring with no gap traps our own miners and tanks at home, which
 // is strictly worse than no wall at all.
 export const WALL_RING_RADIUS = 6, WALL_RING_SECTORS = 12, WALL_EXIT_SECTORS = 3;
+// `WALL_RING_RADIUS` is the ring the chooser ASKS for, not the ring that gets built. A segment may not stand
+// within six tiles of a refinery or a war factory (`trafficClearance`, which is also what leaves the opening at
+// the hub) nor within three tiles of any other building, so on a real base the inner band is illegal and the
+// nearest legal tile is further out. Measured on jev-report-20261015-092542's seven segments: one circle,
+// radius 8.1-9.2 around the base-side centre (spread 1.6), one segment per 30-degree sector over ~210 degrees
+// with the remainder open. That is the intended shape, and asking for 6 is what keeps it as far in as the rules
+// allow -- raising the number here would only let it drift further out, so it is left alone deliberately.
 // How many segments the ring is built from: the whole perimeter minus the gap, so the ring is laid once and
 // then stops rather than thickening. Cheap per segment (100 credits), and the cap is what keeps it honest.
 export const WALL_RING_SEGMENTS = WALL_RING_SECTORS - WALL_EXIT_SECTORS;
