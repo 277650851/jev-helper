@@ -1116,12 +1116,22 @@ export function candidateGroups(api, catalog, snapshot, memory) {
         // on offer so the base can still be cracked, but only the units that can return fire are
         // sent; when none can, the longest-ranged ones go and the siege plan builds the rest.
         let assaultIds = ids;
+        // Only units that can actually hurt THIS target. `defend_base` has always filtered that way
+        // (`canUnitHurt`); the assault path asked about RANGE only, and only when the target was a
+        // fortification -- so an attack on anything without a ground weapon carried the whole party. A dog
+        // cannot attack a vehicle or a building at all (`docs/ra2-unit-catalog.md`: 军犬「无法攻击载具、建筑」),
+        // and jev-report-20261015-110417 built 17 of them: the largest infantry group in the match, listed
+        // beside the tanks in every attack option. When NOTHING can hurt the target the party is left as it
+        // was, so the option still exists and the production/siege plan can answer it.
+        const able = active.filter((u) => canUnitHurt(u, enemy, catalog, api));
+        const pool = able.length ? able : active;
+        if (able.length) assaultIds = able.map((u) => u.id);
         if (hitsGround(enemy)) {
           const threatRange = Math.max(0, ...activeWeapons(enemy, catalog)
             .filter((w) => (w.damage ?? 0) > 0 && w.ag !== false).map((w) => w.range ?? 0));
-          const reach = active.filter((u) => unitRange(u) >= threatRange);
-          const best = Math.max(0, ...active.map(unitRange));
-          const chosen = reach.length ? reach : best > 0 ? active.filter((u) => unitRange(u) >= best) : active;
+          const reach = pool.filter((u) => unitRange(u) >= threatRange);
+          const best = Math.max(0, ...pool.map(unitRange));
+          const chosen = reach.length ? reach : best > 0 ? pool.filter((u) => unitRange(u) >= best) : pool;
           if (chosen.length) assaultIds = chosen.map((u) => u.id);
         }
         tactics(
@@ -1161,6 +1171,12 @@ export function candidateGroups(api, catalog, snapshot, memory) {
       .filter(e=>e.score>0).sort((a,b)=>b.score-a.score)[0]?.enemy;
     if (ready && mobileEnemy && !threatening.length) {
       const e = mobileEnemy;
+      // The same test the assaults above now run, and the same defect: the party is `active`, dogs included,
+      // and `mobileEnemy` is by construction a mobile unit WITH a weapon -- so a dog was routinely ordered onto
+      // a tank it cannot bite. (The enemy was picked because the party's total score against it is positive;
+      // this aligns who is SENT with the score that justified picking it.) jev-report-20261015-110417 built 17
+      // ADOGs. When nothing can hurt it, the party is left as it was, exactly like the assault branch.
+      const engagement = active.filter((u) => canUnitHurt(u, e, catalog, api));
       tactics(
         "engage_visible",
         `Engage ${catalog[e.name]?.label ?? e.name} #${e.id} at (${e.tile.rx},${e.tile.ry}), ${Math.round(gap(e))} tiles from our ${ids.length} troops; health ${(state.averageArmyHealth * 100).toFixed(0)}%.`,
@@ -1168,7 +1184,7 @@ export function candidateGroups(api, catalog, snapshot, memory) {
           type: "mission",
           mode: "attack",
           label: "迎击可见敌军",
-          ids,
+          ids: engagement.length ? engagement.map((u) => u.id) : ids,
           targetId: e.id,
           x: e.tile.rx,
           y: e.tile.ry,
