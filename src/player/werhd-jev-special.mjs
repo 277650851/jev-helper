@@ -890,23 +890,32 @@ function maintainEscort(api, memory, task, own, tick, emit, catalog, done) {
   return true;
 }
 
-// Free infantry, dropped almost anywhere, granted by OWNING the building that carries the special:
-//   [CAAIRP] Tech Airport  -- neutral, `Capturable=yes`/`NeedsEngineer=yes`, so any faction that walks an
-//                             engineer in gets it -- declares `SuperWeapon=ParaDropSpecial`;
-//   [AMRADR] American Air Force Command HQ declares `SuperWeapon=AmericanParaDropSpecial`.
-// Both specials charge for `RechargeTime=4` (minutes) and the payload is fixed by the rules, not chosen:
-// `AllyParaDropNum=6` (E1), `SovParaDropNum=9` (E2), `AmerParaDropNum=8` (E1), scattered inside
-// `ParadropRadius=1024` leptons. So the only decision left is WHERE, and that is already answered by the
-// decision layer -- which is why this needs no round trip.
+// Free infantry, dropped almost anywhere, granted by OWNING one of the three buildings the rules give a
+// paratrooper special to. All three are taken from `docs/rules(规则文件).ini`, which declares exactly these:
+//   [CAAIRP] Tech Airport (科技机场)   -- `Capturable=yes`/`NeedsEngineer=yes`, so ANY faction that walks an
+//                                         engineer in gets it -- `SuperWeapon=ParaDropSpecial`;
+//   [CARADR] Radar Tower (雷达塔)      -- neutral and capturable too -- `SuperWeapon=ParaDropSpecial`;
+//   [AMRADR] American Airforce Command HQ -- its `UIName=Name:GAAIRC`, so the client shows 空指部 --
+//                                         `SuperWeapon=AmericanParaDropSpecial`.
+// They are every declaration in the file (lines 8991, 10509, 11054), and `[SuperWeaponTypes]` lists them
+// one-based (6=ParaDropSpecial, 7=AmericanParaDropSpecial) against the API's zero-based enum -> ParaDrop=5,
+// AmerParaDrop=6.
+//
+// Which special a building grants is NOT which infantry arrive. The payload comes from `[General]` and follows
+// the OWNER's faction: `AllyParaDropNum=6` (E1), `SovParaDropNum=9` (E2), `AmerParaDropNum=8` (E1). So an
+// American owner of the airport (or the radar tower) drops 8 E1 through `ParaDropSpecial`, while the 空指部
+// carries the separate `AmericanParaDropSpecial`. Both charge for `RechargeTime=4` minutes and scatter inside
+// `ParadropRadius=1024` leptons. The only decision left is WHERE, and the decision layer has answered that --
+// which is why this needs no round trip.
 //
 // The API can fire but cannot say whether the charge is up. `superweapon(type, x, y, x2?, y2?)` returns void,
 // and nothing on `PlayerConsoleUnit` reports a charge (`docs/game-api-requests.md` asks for it). So the cadence
-// comes from the rules: 4 minutes at the measured 14.83 ticks/s is 3559 ticks (71095 ticks / 4794 s on
-// jev-report-20261015-110417 -- the client runs the standard ~15 logic frames per second). Every attempt emits
-// its tick and its tile, and those are what the next report compares against the E1/E2 count -- if a drop lands
-// late or not at all, the cadence is what moves.
+// comes from the rules: 4 minutes at the measured 14.83 ticks/s (63893 ticks over 4308.47 s on
+// jev-report-20261015-110417 -- the client runs the standard ~15 logic frames per second) is 3559 ticks. Every
+// attempt emits its tick and its tile, and those are what the next report compares against the E1/E2 count --
+// if a drop lands late or not at all, this is the constant that moves.
 export const PARADROP_TICKS = 3560;
-export const PARADROP_CARRIERS = [['CAAIRP', 'ParaDrop'], ['AMRADR', 'AmerParaDrop']];
+export const PARADROP_CARRIERS = [['CAAIRP', 'ParaDrop'], ['CARADR', 'ParaDrop'], ['AMRADR', 'AmerParaDrop']];
 export function maybeParadrop(api, memory, emit, catalog) {
   // Both halves of the API have to be there: the fire call AND the enum that names the weapon type.
   if (typeof api.superweapon !== 'function' || !api.SuperWeaponType) return;

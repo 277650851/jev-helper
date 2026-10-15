@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { maybeParadrop, PARADROP_TICKS } from '../src/player/werhd-jev-special.mjs';
+import { maybeParadrop, PARADROP_TICKS, PARADROP_CARRIERS } from '../src/player/werhd-jev-special.mjs';
 
 // Free infantry, granted by owning the building that carries the special. The authoritative rules file is the
 // source of every number here: `[CAAIRP]` Tech Airport is neutral, Capturable/NeedsEngineer, and declares
@@ -35,6 +35,20 @@ test('the American command HQ uses its own special', () => {
   assert.deepEqual(fixture({ own: ['AMRADR'] }).calls, [[6, 60, 44]], 'AmerParaDrop, not ParaDrop');
   // Both carriers is two independent charges, so both fire.
   assert.deepEqual(fixture({ own: ['CAAIRP', 'AMRADR'] }).calls, [[5, 60, 44], [6, 60, 44]]);
+});
+
+test('the radar tower carries the same drop as the airport, and the two are one charge', () => {
+  // `[CARADR] Radar Tower` is the second neutral capturable building with `SuperWeapon=ParaDropSpecial`
+  // (rules line 10509). It was missing from this table, so a captured radar tower dropped nothing.
+  assert.deepEqual(fixture({ own: ['CARADR'] }).calls, [[5, 60, 44]], 'the radar tower drops paratroopers too');
+  assert.deepEqual(fixture({ own: ['CAAIRP', 'CARADR'] }).calls, [[5, 60, 44]],
+    'holding both is still ONE ParaDrop charge, not two drops in a turn');
+});
+
+test('the carrier table is every building the rules give a paratrooper special to', () => {
+  // The three declarations in `docs/rules(规则文件).ini` are lines 8991 (AMRADR), 10509 (CARADR) and 11054
+  // (CAAIRP). A missing carrier here is a silent capability loss, which is what this test exists to catch.
+  assert.deepEqual(PARADROP_CARRIERS, [['CAAIRP', 'ParaDrop'], ['CARADR', 'ParaDrop'], ['AMRADR', 'AmerParaDrop']]);
 });
 
 test('the cadence is the rules recharge time, not every turn', () => {
