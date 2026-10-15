@@ -1,4 +1,4 @@
-import { isAirSupport, effectiveness, counterValue, canAnswerVisible, canEngageTarget, defenseProfile } from './werhd-jev-strategy.mjs';
+import { isAirSupport, effectiveness, counterValue, canAnswerVisible, canEngageTarget, defenseProfile, WALL_RING_SEGMENTS } from './werhd-jev-strategy.mjs';
 import { isCapturable } from './werhd-jev-catalog.mjs';
 export const ATTACK_STUCK_TICKS = 2700, CAPTURE_RESENDS = 3, SIEGE_RANGE = 8, BASE_GARRISON_SPARE = 8;
 // A crate is a single tile on the ground, so walking there is quick and the resend window is short. The
@@ -653,13 +653,13 @@ export function specialGroups(api, catalog, snapshot, memory, groups) {
     const existing = buildings.filter((u) => catalog[u.name]?.isBaseDefense || catalog[u.name]?.wall);
     for (const item of api.production.available(api.QueueType.Armory)) {
       const r = catalog[item.name];
-      if (!r || !afford(r, 1000) || existing.filter((u) => u.name === item.name).length >= (r.wall ? 4 : 2)) continue;
+      if (!r || !afford(r, 1000) || existing.filter((u) => u.name === item.name).length >= (r.wall ? WALL_RING_SEGMENTS : 2)) continue;
       // A tower that cannot engage what the enemy is showing is not a choice. The strategy layer applies the
       // same test; this layer runs first and used to add everything affordable, so a pillbox reached the model
       // as the answer to an air raid it cannot touch. Walls are exempt: they screen movement rather than shoot.
       if (r.isBaseDefense && !r.wall && !canAnswerVisible(r, enemies, catalog, api)) continue;
       if (r.isBaseDefense || r.wall)
-        addProduction(defenses, { ...item, queue: api.QueueType.Armory }, r.wall ? 'Build a wall segment to screen a vulnerable approach, leaving a passage'
+        addProduction(defenses, { ...item, queue: api.QueueType.Armory }, r.wall ? 'Build the next segment of the wall ring around the base; one sector is always left open as the way out, so our own miners and tanks can still leave'
           : `${r.label ?? item.name}: ${defenseProfile(r)}`);
     }
   }

@@ -9,6 +9,18 @@ export const ATTACK_AA_ESCORTS = 2;
 export const MIN_BASE_DEFENSES = 3;
 // Turrets are laid out in this many even sectors around the base, i.e. a triangle for three guns.
 export const DEFENSE_SECTORS = 3;
+// The wall ring. A wall is not a defence tower and is no longer placed like one: the sector layout above is
+// `isBaseDefense && !wall`, so the approach-facing branch the walls used to fall into was written for the
+// weapons page (patriot, pillbox, grand cannon, prism tower) before those towers got their own layout -- what
+// it produced was a few segments stacked on the side the enemy was expected from, which screens nothing and
+// cannot be called enclosing the base. The ring walks the perimeter instead, one sector per segment standing,
+// and never closes: `WALL_EXIT_SECTORS` of the twelve are reserved for the way out, opposite the observed
+// approach (or inland when none is known). A ring with no gap traps our own miners and tanks at home, which
+// is strictly worse than no wall at all.
+export const WALL_RING_RADIUS = 6, WALL_RING_SECTORS = 12, WALL_EXIT_SECTORS = 3;
+// How many segments the ring is built from: the whole perimeter minus the gap, so the ring is laid once and
+// then stops rather than thickening. Cheap per segment (100 credits), and the cap is what keeps it honest.
+export const WALL_RING_SEGMENTS = WALL_RING_SECTORS - WALL_EXIT_SECTORS;
 // How many real defence choices the question may offer, walls included. It used to be three
 // counter-weapons with the special layer's wall options silently deleted; now that they survive, the
 // cap has to cover the whole list, because one multiple-choice question is what the local model reads.
@@ -456,32 +468,48 @@ export function chooseBuildingSite(api, catalog, name, own, memory, limit = 200,
   const base = buildings.find(u => catalog[u.name]?.yard) ?? buildings[0];
   if (!base) return undefined;
   const r = catalog[name] ?? {}, approach = memory.strategy?.approach;
-  const defense = r.isBaseDefense || r.wall;
   // A turret is placed around the base, not piled onto whichever side the first one took. Three
   // even sectors a third of a turn apart make a triangle, so the base is covered all round; the
-  // sector holding the observed approach is filled first. Walls keep the approach-facing rule.
+  // sector holding the observed approach is filled first. Only turrets take this branch -- the weapons
+  // page. Walls have the ring below, and everything else goes behind the base.
   const turret = r.isBaseDefense && !r.wall;
+  const sectorOf = (p, sectors) => Math.floor(((Math.atan2(p.ry - base.tile.ry, p.rx - base.tile.rx) + Math.PI) / (Math.PI * 2)) * sectors) % sectors;
   let desired;
-  if (turret) {
-    const sectorOf = (p) => {
-      const a = Math.atan2(p.ry - base.tile.ry, p.rx - base.tile.rx);
-      return Math.floor(((a + Math.PI) / (Math.PI * 2)) * DEFENSE_SECTORS) % DEFENSE_SECTORS;
-    };
+  if (r.wall) {
+    const built = own.filter(u => catalog[u.name]?.wall).length;
+    // The way out, and the reason a ring is safe at all: away from the observed approach, or inland when no
+    // approach is known (a base is usually in a corner, so the map centre is the side our miners leave by).
+    const size = api.map.size();
+    const exitTo = approach
+      ? { rx: 2 * base.tile.rx - approach.rx, ry: 2 * base.tile.ry - approach.ry }
+      : { rx: size.width / 2, ry: size.height / 2 };
+    const exitSector = sectorOf(exitTo, WALL_RING_SECTORS);
+    const gap = new Set();
+    for (let k = 0; k < WALL_EXIT_SECTORS; k++)
+      gap.add((exitSector + k - ((WALL_EXIT_SECTORS - 1) >> 1) + WALL_RING_SECTORS) % WALL_RING_SECTORS);
+    const startAt = approach ? sectorOf(approach, WALL_RING_SECTORS) : 0;
+    // Start on the threatened side and sweep one way, so the segment that matters is built first.
+    const walk = [...Array(WALL_RING_SECTORS).keys()].filter(s => !gap.has(s))
+      .sort((a, b) => ((a - startAt + WALL_RING_SECTORS) % WALL_RING_SECTORS) - ((b - startAt + WALL_RING_SECTORS) % WALL_RING_SECTORS));
+    const sector = walk[built % walk.length];
+    const angle = ((sector + 0.5) / WALL_RING_SECTORS) * Math.PI * 2 - Math.PI;
+    desired = { rx: base.tile.rx + Math.cos(angle) * WALL_RING_RADIUS, ry: base.tile.ry + Math.sin(angle) * WALL_RING_RADIUS };
+  } else if (turret) {
     const counts = new Array(DEFENSE_SECTORS).fill(0);
-    for (const u of buildings) if (catalog[u.name]?.isBaseDefense && !catalog[u.name]?.wall) counts[sectorOf(u.tile)]++;
+    for (const u of buildings) if (catalog[u.name]?.isBaseDefense && !catalog[u.name]?.wall) counts[sectorOf(u.tile, DEFENSE_SECTORS)]++;
     const fewest = Math.min(...counts);
     const open = counts.map((c, i) => [c, i]).filter(([c]) => c === fewest).map(([, i]) => i);
-    const approachSector = approach ? sectorOf(approach) : -1;
+    const approachSector = approach ? sectorOf(approach, DEFENSE_SECTORS) : -1;
     const sector = open.includes(approachSector) ? approachSector : open[0];
     const angle = ((sector + 0.5) / DEFENSE_SECTORS) * Math.PI * 2 - Math.PI;
     // Stand off far enough to fire across an approach but close enough to cover the base itself.
     const radius = Math.max(4, Math.min(10, (r.weapon?.range ?? 5) * 0.7));
     desired = { rx: base.tile.rx + Math.cos(angle) * radius, ry: base.tile.ry + Math.sin(angle) * radius };
   } else {
+    // Everything else goes behind the base, away from the approach: production is what a raid is after.
     const vector = approach ? { x: approach.rx - base.tile.rx, y: approach.ry - base.tile.ry } : { x: 1, y: 1 };
     const length = Math.hypot(vector.x, vector.y) || 1;
-    const offset = defense ? Math.min(6, length * 0.5) : -4;
-    desired = { rx: base.tile.rx + vector.x / length * offset, ry: base.tile.ry + vector.y / length * offset };
+    desired = { rx: base.tile.rx - vector.x / length * 4, ry: base.tile.ry - vector.y / length * 4 };
   }
   const candidates = new Map();
   for (const anchor of buildings.slice(0, 12)) for (let dx = -10; dx <= 10; dx++) for (let dy = -10; dy <= 10; dy++) {
@@ -489,14 +517,14 @@ export function chooseBuildingSite(api, catalog, name, own, memory, limit = 200,
     const tile = api.map.tile(x, y);
     if (!tile) continue;
     const p = { rx: x, ry: y };
-    if (defense && targets.length && !targets.some(e =>
+    if (turret && targets.length && !targets.some(e =>
       weaponEffectiveness(r.weapon, [e], catalog, api) > 0 &&
       dist(p, e.tile) <= (r.weapon?.range ?? 0) && dist(p, e.tile) >= (r.weapon?.minRange ?? 0))) continue;
     // canPlace answers legality; spacing and access are ordinary player strategy.
-    if (buildings.some(b => dist(p,b.tile) < (catalog[b.name]?.yard ? 4 : defense ? 3 : 4)) || !trafficClearance(p,buildings,own,catalog)) continue;
+    if (buildings.some(b => dist(p,b.tile) < (catalog[b.name]?.yard ? 4 : turret || r.wall ? 3 : 4)) || !trafficClearance(p,buildings,own,catalog)) continue;
     if (r.wall && buildings.some(b => catalog[b.name]?.factory && dist(b.tile, p) < 4)) continue;
     let score = -dist(p, desired) - dist(p, base.tile) * 0.15;
-    if (approach && defense) {
+    if (approach && turret) {
       const range = r.weapon?.range || 4, enemyDistance = dist(p, approach);
       score += enemyDistance <= range + 2 ? 6 : -Math.max(0, enemyDistance - range - 2);
       if (enemyDistance < 2) score -= 12;
