@@ -218,7 +218,10 @@ export function specialGroups(api, catalog, snapshot, memory, groups) {
       });
       // One unit per crate: handing the same id to every option meant whichever box the model picked
       // redirected the unit already walking to a different one.
-      pool.shift();
+      // `pool.shift()` removed `pool[0]`, which is normally a DIFFERENT unit from `u` -- the one just assigned
+      // stayed in the pool (so it could be handed to a second crate) while an unassigned unit was silently
+      // dropped. The one-unit-per-crate rule this exists for is what the comment above is about.
+      pool.splice(pool.indexOf(u), 1);
     }
   }
   snapshot.state.infrastructure = {
@@ -439,7 +442,7 @@ export function specialGroups(api, catalog, snapshot, memory, groups) {
       && (distance(vehicle.tile, base.tile) < 14 || !!memory.mission);
     if (crewing) {
       const fits = (u) => idle(u, memory, tick) && u.id !== memory.scoutId && distance(u.tile, vehicle.tile) < 10
-        && (catalog[u.name]?.size ?? 1) <= r.sizeLimit && (catalog[u.name]?.size ?? 1) <= vehicle.transport.capacity;
+        && (catalog[u.name]?.size ?? 1) <= r.sizeLimit && (catalog[u.name]?.size ?? 1) <= vehicle.transport.capacity - vehicle.transport.occupied;
       const candidates = infantry.filter(fits);
       // The gunner's weapon IS the passenger's weapon, so the passenger to load is the one that can engage
       // what is actually visible. `effectiveness` does not check engagement at all -- it averages raw damage

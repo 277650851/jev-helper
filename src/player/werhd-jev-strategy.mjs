@@ -883,13 +883,16 @@ export function investmentGroups(api, catalog, snapshot, memory, groups) {
     }
     // A missing barracks belongs here with power, the first refinery and the first factory: it is
     // the opening's defence, and the reserve must not hold it back.
-    // A refinery BELOW the economy's own target counts as essential too, but only while `outran` -- that
-    // flag means the replacement bill is beating income, which is the one situation where refining
-    // capacity is the thing losing the match. Without this the field had no consumer at all: the target
-    // was raised to 2 (and now to `ceil(miners / 2)`) and nothing ever acted on it, so the extra miners
-    // the miner target asks for had no capacity to unload into. The reserve still governs every other
-    // non-essential building, and the original over-correction (a second refinery stealing the army's and
-    // the defences' build orders) stays corrected because this needs `outran` to be true.
+    // A refinery BELOW the economy's own target counts as essential too. It used to need `outran` (the
+    // replacement bill beating income); it now fires whenever the STANDING miners exceed what the refineries can
+    // serve, which is the case `targetRefineries` reports -- asking for capacity the ore already paid for is not
+    // the over-correction, asking for it on spec was, and that still cannot happen because nothing is asked for
+    // until the miners are already on the field.
+    // Without this the field had no consumer at all: the target was raised to 2 (and now to `ceil(miners / 2)`)
+    // and nothing ever acted on it, so the extra miners the target asks for had no capacity to unload into. The
+    // reserve still governs every other non-essential building, so the original over-correction -- a second
+    // refinery stealing the army's and the defences' build orders -- stays corrected: nothing is asked for until
+    // more miners stand than can unload, which is the same condition this exemption is bounded by.
     const essential = id === 'construction' && (r.power > 0
       || r.factory === 'InfantryType' && !buildings.some(b => catalog[b.name]?.factory === 'InfantryType')
       || r.refinery && (!s.economy.refineries || s.economy.refineries < s.economy.targetRefineries)
