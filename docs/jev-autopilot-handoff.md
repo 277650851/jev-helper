@@ -215,7 +215,15 @@
 9. **升级箱会占用侦察兵** —— 已按距离缓解，但未与"侦察前线"的收益做显式比较。
 10. **`tools/` 下其余脚本仍不在测试覆盖内**（`audit-report` 的渲染与 `postmortem` 的判定已抽成可测函数）。
 11. 有提交未推送时，先确认 FastGithub 是否在运行。
-12. **`ECONOMY FIRST` 矿车的 `auto` 兜底（本轮新加）需要一份战报确认它到底开不开火**：
+12. **`ECONOMY FIRST` 矿车的 `auto` 兜底（本轮新加）需要一份战报确认那道闸门开不开火**：
+    「开火」说的是 `auto:` **兜底闸门**被触发，与采矿车打不打人无关 —— 这两件事容易被连起来读，所以写清楚：
+    - `CMIN`/`CMON`（超时空采矿车）**没有自卫武器**、血量薄；`HARV`/`HORV`（武装采矿车）自带机枪，
+      能自卫打步兵（`docs/ra2-unit-catalog.md:110-111`，`src/unit-role.mjs` 里面向模型的那一半也一致：
+      `CMIN` 是 "…unarmed"，`HARV` 是 "…armed with a machine gun but slow"）。
+    - 但**两种矿车在引擎里都只算收入、从不计入作战单位**：`collectState` 的 `army`、`combatUnits`、
+      `vehicleOptions` 的 `combat`、`defenders`、`armorCount`/`mobileCount` 都把
+      `catalog[..].harvester` 排除在外。武装矿车的机枪只对应它自己挨打时的自保
+      （`special.mjs` 的 `flee_miner` / `baseThreats` 把矿车当要保护的基础设施，不当火力）。
     判据在 `gates` 记录里 —— `vehicles` 组的 `produce_*MINER` 若出现 `armed` 且 **`fired > 0`**，
     说明模型连续拒绝 `PLAN_STEP_AUTO` 次后引擎接管了；若 `armed` 很多而 `fired` 恒为 0，说明拒绝次数
     没到阈值，或被同组别的 `auto` 抢先（`autos[0]` 取最小的那个）。
