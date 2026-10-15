@@ -69,6 +69,12 @@ export const UNIT_PURPOSE = {
   GAOREP: 'ore purifier; raises the credits every load of ore is worth',
   INDUSTRIALPLANT: 'industrial plant; every vehicle afterwards costs less',
   CAOILD: 'tech oil derrick; capture it and it pays credits for the rest of the match',
+  // Whole-map vision, permanently. `[GASPYSAT] Cost=1500, Power=-100, Prerequisite=GATECH,GACNST` -- it is
+  // the one purchase that answers "where is the enemy" for the rest of the match, and it is exactly what a
+  // comfortable economy should be spending on instead of another tank.
+  GASPYSAT: 'spy satellite uplink; reveals the whole map permanently, lost if the building dies',
+  CASPYSAT: 'spy satellite uplink; reveals the whole map permanently, lost if the building dies',
+  NAPSIS: 'psychic sensor; shows enemy movement in its reach, not the whole map',
   // The neutral buildings a barracks-and-engineer opening should go and take. They are the cheapest
   // advantage on the map: an engineer costs 500 and one of these is permanent (docs/ra2-unit-catalog.md §0).
   // `isCapturable` already recognises all seven by name; these lines are what makes their value rankable.
