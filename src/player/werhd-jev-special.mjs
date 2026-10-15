@@ -940,6 +940,25 @@ export const SUPERWEAPONS = [
   ['AMRADR', 'AmerParaDrop', 4, false],
 ];
 export const ENEMY_AIMED = new Set(['MultiMissile', 'LightningStorm', 'ParaDrop', 'AmerParaDrop']);
+// A drop zone is only useful if the troops live long enough to be commanded, and the enemy main base is the most
+// defended tile on the map: dropping eight riflemen onto it is a gift unless it is already broken. So the aim is
+// scored first -- how many enemies near it can actually shoot at INFANTRY -- and a defended target falls back to
+// a position the units can hold and wait for orders in. The nuke and the storm are not treated this way: they
+// WANT the densest enemy, and they do not have to survive the trip.
+export const DROP_THREAT_TILES = 8, DROP_THREAT_LIMIT = 4;
+export function dropAim(api, catalog, memory) {
+  const aim = superWeaponTarget(api, catalog, memory);
+  if (!aim) return undefined;
+  const threat = (api.units('enemy') ?? []).filter((e) => e.tile && e.type !== api.ObjectType?.Building &&
+    Math.hypot(e.tile.rx - aim.x, e.tile.ry - aim.y) <= DROP_THREAT_TILES &&
+    (catalog?.[e.name]?.weapon?.damage > 0 || e.primaryWeapon)).length;
+  if (threat <= DROP_THREAT_LIMIT) return aim;
+  const hold = memory.forwardPoint ? { x: memory.forwardPoint.rx, y: memory.forwardPoint.ry } : memory.mission;
+  if (!hold) return aim;
+  const x = Number.isFinite(hold.x) ? hold.x : hold.rx, y = Number.isFinite(hold.y) ? hold.y : hold.ry;
+  return Number.isFinite(x) && Number.isFinite(y)
+    ? { x, y, why: `safe position (${threat} armed enemies at the target)` } : aim;
+}
 // Two rows of `docs/ra2-unit-catalog.md` §7 do not survive a check against this file: `YAPPET` (Yuri's Psychic
 // Dominator) and `FORCESHIELD` (Force Shield) have no section here at all, and that table's `NUKE` row names the
 // WARHEAD section (line 19169) -- the building is `NAMISL`, which is what this table keys on. The catalog's own
@@ -994,11 +1013,13 @@ export function maybeFireSuperweapons(api, memory, emit, catalog) {
     aim ??= superWeaponTarget(api, catalog, memory);
     if (!aim) return;
     const drop = weapon === 'ParaDrop' || weapon === 'AmerParaDrop';
-    if (!drop && own.some((u) => u.tile && Math.hypot(u.tile.rx - aim.x, u.tile.ry - aim.y) <= SUPERWEAPON_FRIENDLY_CLEARANCE)) continue;
+    // A drop aims where the troops can survive and then be commanded; a nuke or a storm aims at the enemy.
+    const at = drop ? (dropAim(api, catalog, memory) ?? aim) : aim;
+    if (!drop && own.some((u) => u.tile && Math.hypot(u.tile.rx - at.x, u.tile.ry - at.y) <= SUPERWEAPON_FRIENDLY_CLEARANCE)) continue;
     fired[weapon] = tick;
-    api.superweapon(api.SuperWeaponType[weapon], aim.x, aim.y);
-    emit({ kind: 'micro', tick, reply: 'superweapon', target: { x: aim.x, y: aim.y },
-      description: `超武 ${weapon}（载体 ${building}）：${drop ? '空投' : '攻击'} ${aim.why} (${aim.x},${aim.y})，下一次最早第 ${tick + minutes * TICKS_PER_MINUTE} 拍` });
+    api.superweapon(api.SuperWeaponType[weapon], at.x, at.y);
+    emit({ kind: 'micro', tick, reply: 'superweapon', target: { x: at.x, y: at.y },
+      description: `超武 ${weapon}（载体 ${building}）：${drop ? '空投' : '攻击'} ${at.why} (${at.x},${at.y})，下一次最早第 ${tick + minutes * TICKS_PER_MINUTE} 拍` });
   }
 }
 // ---- vehicle repair ---------------------------------------------------------------------------------------
