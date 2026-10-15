@@ -31,6 +31,14 @@ test('player events are reduced to typed records and observations are dropped',(
   assert.equal(eventEntry({kind:'action',choice:'wait',accepted:false,reason:'wait',action:{type:'wait'}},1).reason,'wait');
   assert.equal(eventEntry({kind:'observation',state:{}},1),null);assert.equal(eventEntry({kind:'stop',reason:'battle_ended'},1).reason,'battle_ended');
   assert.equal(eventEntry({kind:'error',message:'m'.repeat(500)},1).message.length,240);assert.equal(eventEntry({kind:'place',name:'GAPOWR',purpose:'base_development'},1).text,'base_development');
+  // The placement record keeps WHERE: the name alone could not distinguish a plant put beside the refinery
+  // from one put in the far corner, and that coordinate is the decision. An older record with no coordinate
+  // reports null rather than a fabricated tile.
+  const place=eventEntry({kind:'place',tick:20,name:'GAPOWR',purpose:'base_development',x:71,y:64},5);
+  assert.equal(place.x,71);assert.equal(place.y,64);assert.equal(place.text,'base_development');
+  assert.equal(eventEntry({kind:'place',tick:20,name:'GAPOWR'},5).x,null);
+  // micro/observed/camera stay as they were: no coordinate is added where none was recorded.
+  assert.equal('x' in eventEntry({kind:'micro',description:'m'},1),false);
 });
 test('the summary carries the economy plan, so a loss to the economy can be read back from the report',()=>{
   // Five matches in a row were lost to `economic_stall` and this field was not in the summary, so the

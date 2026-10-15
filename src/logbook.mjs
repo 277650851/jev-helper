@@ -193,7 +193,13 @@ export function eventEntry(e, at) {
     ...(number(e.ownBuildings) !== null ? { ownBuildings: e.ownBuildings } : {}) };
   if (kind === 'error') return { ...base, message: short(e.message, 240) };
   if (kind === 'meta') return { ...base, pageTitle: short(e.pageTitle, 120), playerCount: number(e.playerCount), opponents: number(e.opponents), map: e.map && number(e.map.width) !== null ? { width: e.map.width, height: e.map.height } : null, startTick: number(e.startTick) };
-  if (['place', 'micro', 'observed', 'camera'].includes(kind)) return { ...base, name: short(e.name, 40), text: short(e.description ?? e.purpose ?? e.message, 160) };
+  // Where a building was actually placed. The record kept the name and one line of text, so a saved report
+  // could not tell a power plant put beside the refinery from one put in the far corner -- which is the whole
+  // content of the choice, and the field the placement code itself re-reads (`memory.lastPlaced`). The game
+  // does not confirm placement (`docs/game-api-requests.md`: 放置是否成功「不确认，20 拍后重新选址」), so the
+  // coordinate is also the only way to see one building placed twice.
+  if (kind === 'place') return { ...base, name: short(e.name, 40), text: short(e.description ?? e.purpose ?? e.message, 160), x: number(e.x), y: number(e.y) };
+  if (['micro', 'observed', 'camera'].includes(kind)) return { ...base, name: short(e.name, 40), text: short(e.description ?? e.purpose ?? e.message, 160) };
   return null; // observations are sampled by telemetry already; everything else is noise
 }
 
