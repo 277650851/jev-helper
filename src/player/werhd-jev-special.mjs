@@ -890,8 +890,48 @@ function maintainEscort(api, memory, task, own, tick, emit, catalog, done) {
   return true;
 }
 
+// Free infantry, dropped almost anywhere, granted by OWNING the building that carries the special:
+//   [CAAIRP] Tech Airport  -- neutral, `Capturable=yes`/`NeedsEngineer=yes`, so any faction that walks an
+//                             engineer in gets it -- declares `SuperWeapon=ParaDropSpecial`;
+//   [AMRADR] American Air Force Command HQ declares `SuperWeapon=AmericanParaDropSpecial`.
+// Both specials charge for `RechargeTime=4` (minutes) and the payload is fixed by the rules, not chosen:
+// `AllyParaDropNum=6` (E1), `SovParaDropNum=9` (E2), `AmerParaDropNum=8` (E1), scattered inside
+// `ParadropRadius=1024` leptons. So the only decision left is WHERE, and that is already answered by the
+// decision layer -- which is why this needs no round trip.
+//
+// The API can fire but cannot say whether the charge is up. `superweapon(type, x, y, x2?, y2?)` returns void,
+// and nothing on `PlayerConsoleUnit` reports a charge (`docs/game-api-requests.md` asks for it). So the cadence
+// comes from the rules: 4 minutes at the measured 14.83 ticks/s is 3559 ticks (71095 ticks / 4794 s on
+// jev-report-20261015-110417 -- the client runs the standard ~15 logic frames per second). Every attempt emits
+// its tick and its tile, and those are what the next report compares against the E1/E2 count -- if a drop lands
+// late or not at all, the cadence is what moves.
+export const PARADROP_TICKS = 3560;
+export const PARADROP_CARRIERS = [['CAAIRP', 'ParaDrop'], ['AMRADR', 'AmerParaDrop']];
+export function maybeParadrop(api, memory, emit, catalog) {
+  // Both halves of the API have to be there: the fire call AND the enum that names the weapon type.
+  if (typeof api.superweapon !== 'function' || !api.SuperWeaponType) return;
+  const tick = api.tick();
+  // Reinforce what we are already doing, else hit the last structure we know of, else hold. Dropping on nothing
+  // is the one outcome with no upside, and a drop is never urgent enough to justify it.
+  const mission = memory.mission;
+  const target = Number.isFinite(mission?.x) && Number.isFinite(mission?.y) ? { x: mission.x, y: mission.y }
+    : memory.forwardPoint ? { x: memory.forwardPoint.rx, y: memory.forwardPoint.ry } : undefined;
+  if (!target) return;
+  const owned = new Set(api.units('self').map((u) => u.name));
+  for (const [building, weapon] of PARADROP_CARRIERS) {
+    if (!owned.has(building)) continue;
+    const fired = (memory.paradrop ??= {});
+    if (fired[weapon] !== undefined && tick - fired[weapon] < PARADROP_TICKS) continue;
+    fired[weapon] = tick;
+    api.superweapon(api.SuperWeaponType[weapon], target.x, target.y);
+    emit({ kind: 'micro', tick, reply: 'paradrop', target,
+      description: `伞兵空投 ${weapon}（载体 ${building}）：投放 (${target.x},${target.y})，下一次最早在第 ${tick + PARADROP_TICKS} 拍` });
+  }
+}
 export function maintainSpecial(api, memory, emit, catalog) {
   releaseGarrisons(api, memory, emit);
+  // Independent of `specialTasks`, so it runs before the early return below: owning the airport IS the task.
+  maybeParadrop(api, memory, emit, catalog);
   if (!memory.specialTasks?.length) return;
   const own = new Map(api.units('self').map((u) => [u.id, u]));
   const tick = api.tick();
