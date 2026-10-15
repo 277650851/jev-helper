@@ -729,23 +729,6 @@ export function candidateGroups(api, catalog, snapshot, memory) {
             engineOwned: true,
           },
         );
-    // MAP VISION: a spy satellite is the one purchase that answers "where is the enemy" for the rest of the
-    // match. It was never built -- and not because the model refused it, but because nothing ever OFFERED
-    // it: the loop above only ever asks for the next step of the opening (power, barracks, refinery,
-    // factory), and a 1500 structure behind a battle lab is never that next step. Comfortable money is
-    // exactly what should buy it, which is what `state.economy.surplus` means, with a margin so the base is
-    // not left unable to pay for the next real need. `[GASPYSAT] Cost=1500, Prerequisite=GATECH,GACNST`.
-    {
-      const sat = (api.production.available(constructionType) ?? []).find((i) => /^(GA|CA)SPYSAT$/i.test(i.name));
-      const satRule = sat && catalog[sat.name];
-      const satOwned = sat && (units ?? []).some((u) => u.name === sat.name);
-      if (sat && satRule && !satOwned && state.economy?.surplus && state.self.credits >= satRule.cost + 800)
-        build(
-          `produce_${sat.name}`,
-          `MAP VISION: build ${satRule.label}; cost ${satRule.cost}; ${roleOf(satRule, sat.name)}. Money is piling up and nothing else needs it: permanent sight of the whole map is worth more than another tank.`,
-          { type: "produce", name: sat.name, queue: constructionType, cost: satRule.cost, minCredits: satRule.cost },
-        );
-    }
     }
   groups.construction.criteria.wait =
     "The construction queue is already occupied, or credits are below the cost of every offered building. Neither infrastructure recovery nor production expansion is affordable.";
