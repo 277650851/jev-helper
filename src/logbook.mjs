@@ -161,6 +161,12 @@ export function eventEntry(e, at) {
     // that queued one. Measured on jev-report-20261015-092542: 116 `produce` entries, none carrying a count,
     // and 14 accepted `explore_` missions whose crew could not be read back at all.
     ...(Array.isArray(e.action?.ids) && e.action.ids.length ? { ids: idList(e.action.ids) } : {}), ...(Number.isFinite(e.count) ? { count: e.count } : {}),
+    // Where a refused deployment was sent instead, and where it was standing when the game said no. Without
+    // these two, the §0.48 fix ("drive to a tile the building fits in, then unpack") is unverifiable: the move
+    // happens inside the deploy executor, so the only trace is this pair. jev-report-20261015-110417 has 46
+    // `deploy_no_space` and no way to tell a working fix from a loop that keeps moving the same vehicle.
+    ...(Number.isFinite(e.movedTo?.x) && Number.isFinite(e.movedTo?.y) ? { movedTo: [e.movedTo.x, e.movedTo.y] } : {}),
+    ...(Array.isArray(e.refusedAt) && e.refusedAt.length ? { refusedAt: e.refusedAt.slice(0, 4).map(([id, tile]) => [number(id), short(String(tile), 12)]) } : {}),
     // Where a `special` action was sent. Without it a saved report cannot tell a chrono miner recalled to
     // its refinery from the same miner stepped ten tiles into the open -- both are one `flee_miner_<id>`
     // action with no destination, which is exactly the difference the recall change turns on. Promised as

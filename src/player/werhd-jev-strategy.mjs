@@ -2,6 +2,31 @@
 const dist = (a, b) => Math.hypot(a.rx - b.rx, a.ry - b.ry);
 const hp = u => (u.hitPoints ?? 100) / (u.maxHitPoints || 100);
 export const isAirSupport = r => r?.factory === 'AircraftType';
+// `BuildCat=Combat` is shared by exactly two kinds of building: the defence towers and the superweapons -- so
+// the construction candidate filter below (which exists to keep the towers out, they have their own group)
+// dropped both. Measured in the authoritative rules file: the superweapon sections are `BuildCat=Combat` with
+// `TechLevel=10` (GAWEAT 5000/-200, NAIRON 2500/-200, NAMISL 5000/-200, GACSPH 2500/-200), the towers are
+// `BuildCat=Defense`, and the Grand Cannon -- also Combat -- is `TechLevel=7` and IS a defence. `techLevel >= 9`
+// separates them. jev-report-20261015-110417 never offered one of the four in 1198 decisions, while the
+// screenshots of the same match show the whole menu unlocked.
+export const isSuperWeapon = r => r?.buildCategory === 'Combat' && !r?.isBaseDefense && (r?.techLevel ?? 0) >= 9;
+// Which superweapons the base can carry right now, cheapest first. Extracted so the premises can be tested as
+// premises instead of as a whole match: free structure queue (--no second building on one slot), no such
+// building standing already, the WHOLE price on the table (these are 2500-5000, and a down payment is how you
+// end up with a half-finished superweapon and no army), the 200 power already spare, a core that is settled,
+// and no attack in progress.
+export function superWeaponChoices({ available = [], catalog = {}, owned = new Set(), credits = 0, powerMargin = 0, ready = false, queued = false, underPressure = false } = {}) {
+  if (!ready || underPressure || queued) return [];
+  return available.filter((i) => { const r = catalog[i.name];
+    return r && isSuperWeapon(r) && !owned.has(i.name) && credits >= r.cost && powerMargin >= Math.max(0, -r.power); })
+    .sort((a, b) => catalog[a.name].cost - catalog[b.name].cost).slice(0, 2);
+}
+// Defence towers are ranked by bang-per-buck, which is the right question when topping up and the wrong one
+// when a type is missing entirely: it always prefers one more of the cheapest gun. A type we own NONE of
+// outranks a type we already have, and the bonus vanishes as soon as one stands, so nothing is capped.
+export const firstOfTypeBonus = (defenseUnits = [], name) => defenseUnits.some((u) => u.name === name) ? 1 : 2;
+export const defenseRank = (defenseUnits, catalog) => (a, b) => (b.value / Math.sqrt(catalog[b.name].cost)) * firstOfTypeBonus(defenseUnits, b.name)
+  - (a.value / Math.sqrt(catalog[a.name].cost)) * firstOfTypeBonus(defenseUnits, a.name);
 export const ATTACK_FORCE_SIZE = 8;
 export const ATTACK_AA_ESCORTS = 2;
 // Base defenses to hold once a barracks exists, before the army is large enough to matter. Both
@@ -605,7 +630,12 @@ export function investmentGroups(api, catalog, snapshot, memory, groups) {
     coverage = defenseUnits.filter(u => defenseRanking.length
       ? defenseRanking.some(e => canFireAt(api, catalog, u, e))
       : counterValue(catalog[u.name], [], catalog, api) > 0).length;
-    if (coverage < targetDefenses && (defenseUnits.length < 8 || strategy.underPressure && coverage < 2)) for (const item of options.sort((a, b) => b.value / Math.sqrt(catalog[b.name].cost) - a.value / Math.sqrt(catalog[a.name].cost))) {
+    // Bang-per-buck alone always answers "one more of the cheapest gun", and that is what the base got:
+    // jev-report-20261015-110417 placed 11 pillboxes, 2 Patriots and 1 Tesla coil, and never once the Grand
+    // Cannon, with the whole defence menu unlocked. So a type we own NONE of outranks a type we already have --
+    // the bonus disappears as soon as one stands, so this reorders the list rather than capping anything, and
+    // the affordability gates below are untouched.
+    if (coverage < targetDefenses && (defenseUnits.length < 8 || strategy.underPressure && coverage < 2)) for (const item of options.sort(defenseRank(defenseUnits, catalog))) {
       // Cap the whole question, not just this layer's share: the special layer's wall and strongpoint
       // options are already in the group, and the local model reads one multiple-choice list, so the
       // total number of real choices is what has to stay small. Counter-weapons are added first, so a
@@ -765,6 +795,22 @@ export function investmentGroups(api, catalog, snapshot, memory, groups) {
         const power = api.production.available(api.QueueType.Structures).filter(i => catalog[i.name]?.power > 0).sort((a,b) => catalog[a.name].cost-catalog[b.name].cost)[0];
         if (power && s.self.credits >= 300) { techPlan = { name: power.name, cost: catalog[power.name].cost, queue: api.QueueType.Structures }; add(cg, {...power, queue:api.QueueType.Structures}, 'POWER FOR TECH: supply the planned technology and defenses',300, undefined, { engineOwned: true, auto: PLAN_STEP_AUTO }); }
       }
+    }
+  }
+  // Superweapons are their own question, deliberately NOT part of `candidates` above: that list feeds the one
+  // engine-owned plan step (`engineOwned + auto`), and it sorts by techLevel -- so a TechLevel-10 superweapon
+  // would have taken the slot from the battle lab and spent 2500-5000 credits without the model ever weighing
+  // it. §4 keeps that choice with the model. Offered only when the engine can prove the premises: the structure
+  // queue is free, the prerequisite building already stands (that is what `available` means), the whole price is
+  // on the table, and the 200 power the thing drains is already spare -- a brown-out is not a superweapon.
+  if (!strategy.underPressure && coreReady && free(api.QueueType.Structures)) {
+    const supers = superWeaponChoices({ available, catalog, owned: ownNames, credits: s.self.credits,
+      powerMargin: s.economy?.powerMargin ?? 0, ready: coreReady, queued: false, underPressure: strategy.underPressure });
+    for (const item of supers) {
+      const r = catalog[item.name];
+      add(cg, { ...item, queue: api.QueueType.Structures },
+        `SUPERWEAPON: ${r.label ?? item.name} costs ${r.cost} and drains ${-r.power} power. A long commitment rather than a defence -- it does nothing for the base while it is being built. Take it when the army and the economy can carry it; waiting is a legitimate answer, and this is the model's call.`,
+        r.cost);
     }
   }
   const urgentDefense = strategy.underPressure && coverage < (strategy.critical ? 6 : 2) && defensePlan;
