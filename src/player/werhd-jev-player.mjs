@@ -1525,13 +1525,42 @@ export function executeCandidate(api, action, catalog) {
       const u = unitOf(id), into = catalog?.[u?.name]?.deploysInto;
       return !!u?.tile && !!into && typeof api.canPlace === "function" && !api.canPlace(into, u.tile.rx, u.tile.ry);
     });
-    return {
-      accepted: false,
-      reason: blocked ? "deploy_no_space" : "deploy_refused",
-      // Where each vehicle stood when the game said no: a refusal is a verdict about that spot, so a vehicle
-      // that moves is worth one more try (and that is the path the placement case above would be fixed by).
-      refusedAt: standing.flatMap((id) => { const u = unitOf(id); return u?.tile ? [[id, `${u.tile.rx},${u.tile.ry}`]] : []; }),
-    };
+    // Where each vehicle stood when the game said no: a refusal is a verdict about that spot, so a vehicle
+    // that moves is worth one more try (and that is the path the placement case above would be fixed by).
+    const refusedAt = standing.flatMap((id) => { const u = unitOf(id); return u?.tile ? [[id, `${u.tile.rx},${u.tile.ry}`]] : []; });
+    // `deploy_no_space` blames the spot, and the spot is the one thing here that can be fixed: this is the
+    // "vehicle that moves is worth one more try" above, done by the engine instead of hoped for. The handoff
+    // asked the next report which of the two refusals a real match produces and prescribed this fix for the
+    // placement one -- jev-report-20261015-092542 answered with 18 `deploy_no_space` and zero
+    // `deploy_refused`. Without it the vehicle is written off at every tile it happens to stop on.
+    //
+    // Two ways to find that tile, because the two situations differ. With a base standing the ordinary chooser
+    // decides (behind the base, clear of traffic). With the base GONE -- which is exactly when a crate hands
+    // over a construction vehicle, the case §0.46 records -- there is no building for `chooseBuildingSite` to
+    // anchor on at all (it returns undefined with none), so the vehicle's own neighbourhood is searched
+    // instead, nearest ring first. The empty memory is deliberate: this executor's contract is
+    // `(api, action, catalog)`, and the only thing the chooser reads from memory is the observed approach.
+    if (blocked) {
+      const vehicle = unitOf(standing[0]), into = catalog?.[vehicle?.name]?.deploysInto;
+      const anchored = self.filter((u) => u.type === api.ObjectType.Building && !catalog[u.name]?.wall);
+      const near = (name, u) => {
+        for (let r = 1; r <= 12; r++)
+          for (let dx = -r; dx <= r; dx++) for (let dy = -r; dy <= r; dy++) {
+            if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+            const tile = api.map?.tile?.(u.tile.rx + dx, u.tile.ry + dy);
+            if (tile && api.canPlace(name, tile.rx, tile.ry)) return { x: tile.rx, y: tile.ry };
+          }
+        return undefined;
+      };
+      const site = into && vehicle?.tile
+        ? (anchored.length ? chooseBuildingSite(api, catalog, into, self, {}, 500) : undefined) ?? near(into, vehicle)
+        : undefined;
+      if (site) {
+        api.move(standing, site.x, site.y);
+        return { accepted: false, reason: "deploy_no_space", movedTo: site, refusedAt };
+      }
+    }
+    return { accepted: false, reason: blocked ? "deploy_no_space" : "deploy_refused", refusedAt };
   }
   if (action.type === "attack") {
     if (!api.units("enemy").some((u) => u.id === action.targetId))

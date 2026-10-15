@@ -103,3 +103,34 @@ console.log('Opening: the engine unpacks the construction vehicle itself rather 
   own.push({ id: 1, name: 'MCV', kind: 'MCV', type: 7, tile: { rx: 20, ry: 20 }, hitPoints: 1000, maxHitPoints: 1000, isIdle: true });
 }
 console.log('A construction vehicle the game refused to unpack is not offered again while a yard stands, and is still offered when the base is gone');
+// `deploy_no_space` blames the spot, and the spot is now fixed instead of merely named: the vehicle is driven
+// to a tile `canPlace` accepts, so the next attempt unpacks there. The report that settled which of the two
+// refusals a real match produces is jev-report-20261015-092542 -- 18 `deploy_no_space`, zero `deploy_refused`.
+{
+  const carrying = [{ id: 30, name: 'MCV', kind: 'MCV', type: 7, tile: { rx: 22, ry: 22 }, hitPoints: 1000, maxHitPoints: 1000, isIdle: true }];
+  const moves = [];
+  // The base is gone -- the crate case -- so there is no building for the chooser to anchor on and the
+  // vehicle's own neighbourhood has to answer.
+  const cramped = { ...api, units: (r) => (r === 'self' ? carrying : []), canPlace: (name, x, y) => !(x === 22 && y === 22), move: (ids, x, y) => moves.push([ids, x, y]), deploy: () => false };
+  const out = executeCandidate(cramped, { type: 'deploy', ids: [30] }, catalog);
+  assert.equal(out.reason, 'deploy_no_space');
+  assert.ok(out.movedTo, 'the engine picks a tile instead of only naming the problem');
+  assert.equal(cramped.canPlace('YARD', out.movedTo.x, out.movedTo.y), true, 'and it is a tile the building fits in');
+  assert.deepEqual(moves, [[[30], out.movedTo.x, out.movedTo.y]], 'the vehicle is sent there');
+  assert.deepEqual(out.refusedAt, [[30, '22,22']], 'the refusal still remembers where it was refused');
+  // Nothing anywhere fits: the refusal stands and no order is invented.
+  const nowhere = { ...cramped, canPlace: () => false };
+  const stuck = executeCandidate(nowhere, { type: 'deploy', ids: [30] }, catalog);
+  assert.equal(stuck.reason, 'deploy_no_space');
+  assert.equal(stuck.movedTo, undefined);
+  assert.equal(moves.length, 1, 'and nothing was ordered');
+  // With a base standing the ordinary chooser answers instead, and it does not send the vehicle to the tile it
+  // is already stuck on.
+  const yard = { id: 40, name: 'YARD', kind: 'YARD', type: 2, tile: { rx: 20, ry: 20 }, hitPoints: 1000, maxHitPoints: 1000, isIdle: false };
+  const withBase = { ...cramped, units: (r) => (r === 'self' ? [carrying[0], yard] : []) };
+  const anchored = executeCandidate(withBase, { type: 'deploy', ids: [30] }, catalog);
+  assert.ok(anchored.movedTo, 'a base gives the chooser something to anchor on');
+  assert.notEqual(`${anchored.movedTo.x},${anchored.movedTo.y}`, '22,22', 'and it is not where the vehicle already stands');
+  assert.equal(withBase.canPlace('YARD', anchored.movedTo.x, anchored.movedTo.y), true);
+}
+console.log('A construction vehicle that cannot unpack where it stands is driven to a tile the building fits in');
