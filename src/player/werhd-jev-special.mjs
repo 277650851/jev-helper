@@ -983,10 +983,57 @@ export function maybeFireSuperweapons(api, memory, emit, catalog) {
       description: `超武 ${weapon}（载体 ${building}）：${drop ? '空投' : '攻击'} ${aim.why} (${aim.x},${aim.y})，下一次最早第 ${tick + minutes * TICKS_PER_MINUTE} 拍` });
   }
 }
+// ---- vehicle repair ---------------------------------------------------------------------------------------
+// The rules give a vehicle two ways to be repaired, and both end as `OrderType.Repair` -- the order the client
+// fires with the G key, carrying the object to be repaired:
+//   * a building with `UnitRepair=yes`. Seven sections carry the field, but the shipyards (`GAYARD`/`NAYARD`/
+//     `CAYARD`) repair naval units, so the ones that matter for tanks are the three service depots
+//     (`GADEPT`/`NADEPT`/`CADEPT`, Cost=800, TechLevel=6) and the neutral capturable `CAOUTP` Tech Outpost.
+//     Here the DAMAGED VEHICLE is ordered to repair AT the building.
+//   * an IFV with an engineer aboard: `[FV]` is `Passengers=1`, `Gunner=yes`, `WeaponCount=13`, so its weapon IS
+//     its passenger's weapon and an engineer makes it the repair vehicle. Here the REPAIR VEHICLE is ordered to
+//     repair the damaged unit. The passenger list is own-only (`transport.unitIds`) and is resolved through
+//     `api.unit`, so if a build does not expose cargo identities this path simply does not fire -- it never
+//     guesses.
+//
+// Repairs cost credits and a repair interrupted by fire is wasted work, so the trigger is deliberately narrow:
+// an IDLE vehicle, real damage (below `VEHICLE_REPAIR_BELOW` of full health), one order at a time on a cooldown,
+// and a credit floor left over.
+// The rules put `UnitRepair=yes` on seven sections, and which one can help depends on what is hurt: the three
+// service depots and the neutral Tech Outpost repair LAND vehicles, while the three shipyards carry the same
+// field for NAVAL units. So the two lists are kept apart and the patient picks the list -- a tank sent to a
+// shipyard is a wasted order, which is exactly what the first version of this did.
+export const VEHICLE_REPAIR_BELOW = 0.7, VEHICLE_REPAIR_COOLDOWN = 300, VEHICLE_REPAIR_FLOOR = 300;
+export const REPAIR_BUILDINGS = new Set(['GADEPT', 'NADEPT', 'CADEPT', 'CAOUTP']);
+export const REPAIR_YARDS = new Set(['GAYARD', 'NAYARD', 'CAYARD']);
+export function maybeRepairVehicles(api, catalog, memory, emit) {
+  const tick = api.tick(), own = api.units('self');
+  if (tick - (memory.repairAt ?? -Infinity) < VEHICLE_REPAIR_COOLDOWN) return;
+  const vehicle = api.ObjectType?.Vehicle, building = api.ObjectType?.Building;
+  if (vehicle === undefined) return;
+  // A transport carrying something is not a repair candidate: the passenger is the point of it.
+  const hurt = own.filter((u) => u.type === vehicle && u.isIdle && !u.transport?.unitIds?.length
+    && Number.isFinite(u.hitPoints) && (u.maxHitPoints ?? 0) > 0 && u.hitPoints < u.maxHitPoints * VEHICLE_REPAIR_BELOW)
+    .sort((a, b) => a.hitPoints / a.maxHitPoints - b.hitPoints / b.maxHitPoints);
+  if (!hurt.length) return;
+  const worst = hurt[0];
+  const naval = !!catalog?.[worst.name]?.naval;
+  const repairer = own.find((u) => (u.transport?.unitIds ?? []).some((id) => catalog?.[api.unit?.(id)?.name]?.engineer));
+  const depot = own.find((u) => u.type === building && (naval ? REPAIR_YARDS.has(u.name) : REPAIR_BUILDINGS.has(u.name)));
+  // The order names the object to be repaired: the vehicle in the repair-vehicle case, the building in the other.
+  const ids = repairer ? [repairer.id] : depot ? [worst.id] : undefined;
+  if (!ids) return;
+  if (!((api.me?.()?.credits ?? 0) >= VEHICLE_REPAIR_FLOOR)) return;
+  memory.repairAt = tick;
+  api.order(ids, { type: api.OrderType.Repair, target: { objectId: repairer ? worst.id : depot.id } });
+  emit({ kind: 'micro', tick, reply: 'repair', ids, targetId: repairer ? worst.id : depot.id,
+    description: `维修 ${catalog[worst.name]?.label ?? worst.name} #${worst.id}（${Math.round(worst.hitPoints / worst.maxHitPoints * 100)}% 血）：${repairer ? `维修车 #${repairer.id} 前往` : `送往 ${catalog[depot.name]?.label ?? depot.name} #${depot.id}`}` });
+}
 export function maintainSpecial(api, memory, emit, catalog) {
   releaseGarrisons(api, memory, emit);
-  // Independent of `specialTasks`, so it runs before the early return below: owning the building IS the task.
+  // Independent of `specialTasks`, so they run before the early return below: owning the building IS the task.
   maybeFireSuperweapons(api, memory, emit, catalog);
+  maybeRepairVehicles(api, catalog, memory, emit);
   if (!memory.specialTasks?.length) return;
   const own = new Map(api.units('self').map((u) => [u.id, u]));
   const tick = api.tick();
