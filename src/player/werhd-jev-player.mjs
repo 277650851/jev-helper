@@ -574,6 +574,18 @@ export const MAX_ASSAULTS = 6, MAX_ASSAULTS_WITH_OBJECTIVE = 4, ENGAGE_RADIUS = 
 // (FORCE_STALL_TICKS, STALE_ATTACK_TICKS, ATTACK_STUCK_TICKS). Past it the scout counts as stuck and the
 // frontiers are offered again, which is the case the old 450 was really guarding against.
 export const SCOUT_TRAVEL_TICKS = 2700;
+// Scouting is a party, not a lone unit. A dog walking into an enemy base is killed by the first thing that
+// shoots -- it cannot even answer -- and the whole point is that something comes back with the map. Two units
+// is the redundancy; a third would be most of an opening army, so this is a constant and not a formula.
+export const SCOUT_PARTY = 2;
+// How many frontiers may be walked at once once the enemy is known. The gate below counts live routes against
+// this instead of silencing the group the moment one unit leaves, and a route already being walked is never
+// offered again -- so the second route is a different direction, not the same question twice (which is the
+// §0.50 defect: 1342 of 4696 questions, 29% of the decision budget, were this group re-asking one frontier).
+// While the enemy base is still unknown the engine keeps its single question-free route (`scoutUnowned`): that
+// one option is what took scouting questions from 29% of the budget to 8.4%, and re-opening it as a choice
+// between two near-identical coordinates is exactly what it closed.
+export const SCOUT_ROUTES = 2;
 // The rally point used to be re-scored every turn, including how many of our units stood nearby,
 // so it wandered and the gather order was re-sent over and over. It now stays for a while.
 export function stableRallySite(api, catalog, own, base, memory) {
@@ -1177,23 +1189,18 @@ export function candidateGroups(api, catalog, snapshot, memory) {
         },
       );
   }
-  // A scout sent out while the army attacks is tracked apart from the army's mission.
-  const oldMission = memory.mission?.mode === "explore" ? memory.mission : memory.scoutMission;
-  const explorers =
-    oldMission?.mode === "explore"
-      ? army.filter((u) => oldMission.ids.includes(u.id))
-      : [];
-  const travelling =
-    explorers.length &&
-    explorers.every(
-      (u) => Math.hypot(u.tile.rx - oldMission.x, u.tile.ry - oldMission.y) > 4,
-    ) &&
-    api.tick() - oldMission.since < SCOUT_TRAVEL_TICKS;
-  // The model is asked to judge "a scout is already moving", and that fact is NOT in `activeMission`: a
-  // scout sent out while the army attacks is tracked in `memory.scoutMission`, which `activeMission` (built
-  // from `memory.mission` above) never shows. Measured on ten reports, 86% of the scouting questions were
-  // asked while `activeMission.mode` read rally / defend / attack. So the one field the criterion needs is
-  // published here, next to the criterion that uses it.
+  // Every route a scout is walking, the army's own explore mission included. A scout sent out while the army
+  // attacks is tracked apart from it, in `memory.scoutMissions`, which `activeMission` (built from
+  // `memory.mission` above) never shows. There can be more than one route now, so the list is the unit of
+  // truth and the boolean the criterion reads is derived from it.
+  const routes = [...(memory.mission?.mode === "explore" ? [memory.mission] : []), ...(memory.scoutMissions ?? [])];
+  const crewOf = (m) => army.filter((u) => m.ids?.includes(u.id));
+  const liveRoutes = routes.filter((m) => crewOf(m).length && api.tick() - m.since < SCOUT_TRAVEL_TICKS);
+  const travelling = liveRoutes.some((m) => crewOf(m).every((u) => Math.hypot(u.tile.rx - m.x, u.tile.ry - m.y) > 4));
+  // The model is asked to judge "a scout is already moving", and that fact is NOT in `activeMission`.
+  // Measured on ten reports, 86% of the scouting questions were asked while `activeMission.mode` read
+  // rally / defend / attack. So the one field the criterion needs is published here, next to the criterion
+  // that uses it.
   state.scoutMoving = !!travelling;
   // Why an engineer was or was not offered. `produce_ENG` appearing zero times in a match cannot be read
   // without knowing whether there was anything to capture, whether a barracks stood, and how many engineers
@@ -1208,11 +1215,16 @@ export function candidateGroups(api, catalog, snapshot, memory) {
   // Keep revealing the map while no attack is possible: an enemy building seen once must not end scouting.
   // The objective has never been seen: keep looking for it even while the army can attack.
   const objectiveUnseen = !!memory.objectiveKeys?.words?.length && !memory.objectiveTarget;
+  // One question-free route while the enemy base is unknown, two once it is known. The gate counts the routes
+  // already walking instead of silencing the group as soon as one unit leaves, which is what makes a second
+  // direction possible at all.
+  const scoutUnowned = enemies.length === 0 && !memory.enemyBuildings.size;
+  const routesWanted = scoutUnowned ? 1 : SCOUT_ROUTES;
   const shouldExplore =
-    (!memory.enemyBuildings.size || !readiness.ready || objectiveUnseen) && !travelling && !state.baseUnderAttack;
+    (!memory.enemyBuildings.size || !readiness.ready || objectiveUnseen) && liveRoutes.length < routesWanted && !state.baseUnderAttack;
   const scoutChoice = group(
     "scouting",
-    "Choose a frontier to reveal the unknown enemy base. Use one expendable infantry early; do not wait for tanks to scout. If an idle scout is available and the enemy base is unknown, scouting now is useful. An existing travelling scout is handled separately.",
+    "Choose a frontier to reveal the unknown enemy base. Use expendable infantry early; do not wait for tanks to scout. If an idle scout is available and the enemy base is unknown, scouting now is useful. An existing travelling scout is handled separately.",
   );
   if (shouldExplore && army.length) {
     const scout =
@@ -1228,29 +1240,42 @@ export function candidateGroups(api, catalog, snapshot, memory) {
     if (objectiveUnseen) groups.scouting.instructions = `SEARCHING FOR THE OBJECTIVE (${memory.objectiveKeys.words.join(" / ")}): it has not been seen yet; scouting is how to find it. ` + groups.scouting.instructions;
     groups.scouting.criteria.wait =
       memory.enemyBuildings.size
-        ? "Wait only if a scout is already moving (state.scoutMoving is true). The force is not ready to attack, so one expendable unit should keep revealing the map for objectives and enemy positions."
+        ? "Wait only if a scout is already moving (state.scoutMoving is true). The force is not ready to attack, so our scouts should keep revealing the map for objectives and enemy positions."
         : "Wait only if a scout is already moving (state.scoutMoving is true). With idle troops and an unknown enemy base, choose one of the frontiers.";
-    // Frontier scouting while the enemy base is unknown is not a judgement call, and the two frontiers are
-    // near-identical options that differ only in coordinates -- a multiple-choice model cannot rank them
-    // meaningfully (the local one answered `wait` to 13 of 15 scouting questions in one match). So the
-    // engine takes the first frontier and owns it: one option, no question. The option was already tagged
-    // automatic for exactly this state, which meant ask, be refused, ask, be refused, ask, be refused,
-    // then act. Asking twice about two equivalent points first is the part with no value.
-    const scoutUnowned = enemies.length === 0 && !memory.enemyBuildings.size;
-    for (const p of memory.points.slice(0, scoutUnowned ? 1 : 2))
+    // A frontier a route is already walking is never offered again: that is the §0.50 fix, and it is what makes
+    // the second route a different direction instead of the same question asked twice. While the enemy base is
+    // unknown the engine keeps its single option and owns it (`engineOwned`) -- one option, no question, which
+    // is that same fix; the party below is what compensates for having only one direction to walk.
+    const free = memory.points
+      .filter((p) => !liveRoutes.some((m) => Math.hypot(p.x - m.x, p.y - m.y) < 7))
+      .slice(0, Math.max(0, routesWanted - liveRoutes.length));
+    // The party: fast and expendable first (`scoutScore` weighs speed against cost, which is why a dog wins),
+    // with the unit already designated as the scout at its head. A unit already on a special task, or already
+    // walking a route, is not spare, and no unit is offered twice.
+    const busy = new Set(liveRoutes.flatMap((m) => m.ids ?? []));
+    const spare = army
+      .filter((u) => u.type === api.ObjectType.Infantry && !catalog[u.name]?.engineer && u.isIdle && !busy.has(u.id)
+        && !(memory.specialTasks ?? []).some((t) => t.action?.ids?.includes(u.id)))
+      .sort((a, b) => (a.id === scout.id ? -1 : b.id === scout.id ? 1 : 0) || scoutScore(catalog[b.name] ?? {}) - scoutScore(catalog[a.name] ?? {}));
+    let cursor = 0;
+    for (const p of free) {
+      const crew = mobilize ? tanks.map((u) => u.id) : spare.slice(cursor, cursor + SCOUT_PARTY).map((u) => u.id);
+      if (!crew.length) break;
+      if (!mobilize) cursor += crew.length;
       scoutChoice(
         `explore_${p.x}_${p.y}`,
-        `${objectiveUnseen ? "Find the objective: " : ""}${mobilize ? "Advance " + tanks.length + " tanks" : "Scout with one expendable unit"} to known frontier (${p.x},${p.y}), ${p.fog} unexplored adjacent samples. Reveal the enemy base, attack any opposition.`,
+        `${objectiveUnseen ? "Find the objective: " : ""}${mobilize ? "Advance " + tanks.length + " tanks" : crew.length > 1 ? `Scout with ${crew.length} units` : "Scout with one expendable unit"} to known frontier (${p.x},${p.y}), ${p.fog} unexplored adjacent samples. Reveal the enemy base, attack any opposition.`,
         {
           type: "mission",
           mode: "explore",
           label: mobilize ? "装甲推进侦察" : "前沿侦察",
-          ids: mobilize ? tanks.map((u) => u.id) : [scout.id],
+          ids: crew,
           x: p.x,
           y: p.y,
           ...(scoutUnowned ? { engineOwned: true } : {}),
         },
       );
+    }
   }
   specialGroups(api, catalog, snapshot, memory, groups);
   investmentGroups(api, catalog, snapshot, memory, groups);
@@ -1328,7 +1353,9 @@ export function acceptMission(memory, action, execution, tick) {
   const old = memory.mission, ids = execution?.ids ?? action.ids;
   // A lone scout sent out while the army fights does not replace the army's mission.
   if (action.mode === "explore" && old && old.mode !== "explore" && ids.every((id) => !old.ids?.includes(id))) {
-    memory.scoutMission = { ...action, ids, since: tick };
+    // One entry per route. Expired ones are dropped here rather than accumulating: a route past the travel
+    // horizon is a stuck one, and the direction it was walking is offered again.
+    memory.scoutMissions = [...(memory.scoutMissions ?? []).filter((m) => tick - m.since < SCOUT_TRAVEL_TICKS), { ...action, ids, since: tick }];
     return memory.mission;
   }
   const keep = old && old.mode === action.mode && sameTarget(old, action);

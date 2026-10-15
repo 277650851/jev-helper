@@ -29,7 +29,7 @@ test('a scout still travelling is not asked about again, even far past the old 4
 
 test('the unanswered condition is published, so the criterion can be evaluated', () => {
   // The question's `wait` criterion is "a scout is already moving", and that fact is NOT in `activeMission`:
-  // a scout sent while the army attacks lives in `memory.scoutMission`. `state.scoutMoving` is the field the
+  // a scout sent while the army attacks lives in `memory.scoutMissions`. `state.scoutMoving` is the field the
   // criterion names, and it has to be true exactly when the engine is suppressing the question.
   const travelling = worldWithMission({ since: 12000 - 1000, ids: [10] });
   const snap = collectState(travelling.api, catalog);

@@ -256,7 +256,7 @@ STATE_PRIORITY = (
     "committedCredits", "uncommittedCredits", "escalation",
     # The two mission facts a question's own criterion asks about. `activeMission` is what the scouting
     # question means by "a scout is already moving", and `scoutMoving` is the same fact for a scout that runs
-    # in `memory.scoutMission` (sent while the army attacks) -- which `activeMission` never shows. Measured
+    # in `memory.scoutMissions` (sent while the army attacks) -- which `activeMission` never shows. Measured
     # over ten reports: 86% of the 1342 scouting questions were asked while `activeMission.mode` read
     # rally / defend / attack, so the model was told to wait on a condition it could not evaluate. Both are
     # tiny (a mode string, an age, a boolean), so they belong ahead of the bulk fields.

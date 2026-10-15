@@ -45,7 +45,7 @@ export function stateSummary(state = {}) {
     // summary carries no coordinates and no unit lists.
     activeMission: state.activeMission ? { mode: short(state.activeMission.mode, 16), ageTicks: number(state.activeMission.ageTicks) } : null,
     // Whether a scout is currently on its way, independent of `activeMission`: a scout sent while the army
-    // attacks is tracked in `memory.scoutMission`, which `activeMission` never shows. Without it archived,
+    // attacks is tracked in `memory.scoutMissions`, which `activeMission` never shows. Without it archived,
     // the scouting question's own `wait` criterion ("wait only if a scout is already moving") could not be
     // checked against a report at all -- and that criterion is why 1328 of 1342 scouting questions were
     // answered `wait` across ten matches.
