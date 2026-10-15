@@ -12,6 +12,11 @@ export const LOG_MAX_ENTRIES = 20000;
 export const LOG_MAX_CHARS = 32_000_000;
 const short = (value, n) => typeof value === 'string' ? value.slice(0, n) : value == null ? '' : String(value).slice(0, n);
 const number = n => typeof n === 'number' && Number.isFinite(n) ? n : null;
+// The units a task was ordered on. `targetId` says WHICH building, crate or bridge; it never says WHO was
+// sent, so "one capture target was re-sent 89 times" could be one engineer that never arrived or three that
+// each tried once -- and only the ids tell those apart, because both shapes were the same `resends` total.
+// Bounded like every other list in this file.
+const idList = (list) => (Array.isArray(list) ? list.map(number).filter((v) => v !== null).slice(0, 8) : []);
 
 const afterCapture = (a) => a ? { afterCapture: { tick: number(a.tick), how: short(a.how, 16), lastHp: number(a.lastHp) } } : {};
 // Compact snapshot of the state that was sent with a decision: numbers and flags only.
@@ -169,7 +174,7 @@ export function eventEntry(e, at) {
   // times", "one capture target was re-sent 89 times"): the game API has no command receipts
   // (docs/game-api-requests.md §7.1), so an order it silently ignores looks exactly like one that worked,
   // and `resends` on this record is the only place that difference becomes visible in a saved report.
-  if (kind === 'task') return { ...base, task: short(e.task, 32), result: short(e.result, 32), targetId: number(e.targetId), resends: number(e.resends), text: short(e.description, 160) };
+  if (kind === 'task') return { ...base, task: short(e.task, 32), result: short(e.result, 32), targetId: number(e.targetId), ids: idList(e.ids), resends: number(e.resends), text: short(e.description, 160) };
   // The `auto: N` fallback tally, written once when a match ends. A kind of its own rather than extra fields
   // on `stop`, because `stop`'s shape is read by the panel and by analyze-log: widening a record that other
   // readers already parse changes its meaning for all of them at once.

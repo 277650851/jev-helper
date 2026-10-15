@@ -12,10 +12,16 @@
 // mean in jev-report-20261015-024314 cover just the last 85% of the match.
 export const MAX_RESEND_ROWS = 400;
 
+// Who the order was sent to. The key says which task and which target, never which unit, so two engineers
+// that each failed once and one engineer that failed twice looked identical -- and the fix is different in
+// each case (a bad order versus a unit that keeps being replaced). Four is enough to recognise the cast of a
+// task without letting a squad-sized order widen the row.
+const unitList = (list) => (Array.isArray(list) ? list.map(Number).filter((v) => Number.isFinite(v)).slice(0, 4) : []);
+
 export const emptyResendStats = () => ({ tasks: 0, resends: 0, rows: [], byKind: {} });
 
 /** One finished or abandoned task: how many times its order had to be sent, and how it ended. */
-export function recordResend(stats, { key, kind, resends, ticks, outcome, tick }) {
+export function recordResend(stats, { key, kind, resends, ticks, outcome, tick, unitIds }) {
   if (!stats) return;
   const n = Math.max(0, Math.round(Number(resends) || 0));
   const k = String(kind ?? 'other').slice(0, 24);
@@ -32,6 +38,7 @@ export function recordResend(stats, { key, kind, resends, ticks, outcome, tick }
     ticks: Math.max(0, Math.round(Number(ticks) || 0)),
     outcome: String(outcome ?? 'unknown').slice(0, 24),
     tick: Math.round(Number(tick) || 0),
+    units: unitList(unitIds),
   });
   // Only the display list is bounded; the counters above are already updated.
   if (stats.rows.length > MAX_RESEND_ROWS) {
@@ -74,9 +81,11 @@ export function formatResendReport(s, file) {
   }
   lines.push('重复最多：');
   for (const r of s.worst)
-    lines.push(`  ${String(r.resends).padStart(4)} 次  ${r.kind.padEnd(12)} ${r.key.padEnd(28)} ${r.outcome}  ${r.ticks} 拍`);
+    lines.push(`  ${String(r.resends).padStart(4)} 次  ${r.kind.padEnd(12)} ${r.key.padEnd(28)} ${r.outcome}  ${r.ticks} 拍${r.units?.length ? `  单位 ${r.units.map((u) => `#${u}`).join(' ')}` : ''}`);
   lines.push('', '怎么读：一次都没重发的任务不在这里，所以总数是「代价」不是「工作量」。');
   lines.push('  重复很多次且结果是 refused/uncapturable/no_progress = 那条命令游戏根本没接受，');
   lines.push('  而 API 没有回执（§7.1），扩展只能靠超时判断——这就是它存在的理由。');
+  lines.push('  行尾的「单位 #id」是被派去执行的那个单位：同一目标被两个工程师各试一次，和一个工程师试两次，');
+  lines.push('  是两种不同的毛病（订单本身错 vs 单位被反复替换）。');
   return lines.join('\n');
 }

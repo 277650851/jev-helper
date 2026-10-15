@@ -135,7 +135,9 @@ test('a capture that had to be re-sent keeps its count even when it succeeds', (
   assert.equal(last.result,'completed');
   assert.equal(last.kind,'task','a completed task that cost a re-send is not just an observation');
   assert.equal(last.resends,1);
+  assert.deepEqual(last.ids,[20],'the task record says which engineer was sent, not only which building');
   assert.equal(eventEntry(last,0).resends,1,'and the serializer must keep the count');
+  assert.deepEqual(eventEntry(last,0).ids,[20],'and the executing unit with it');
 });
 
 test('after two declined capture questions the neutral structure is captured automatically', async () => {

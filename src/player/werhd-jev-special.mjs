@@ -814,7 +814,7 @@ export function maintainSpecial(api, memory, emit, catalog) {
     // `api.unit()`, and a crate id is not a unit id -- it came back undefined and the task was torn down as
     // `incomplete` on the very next turn, one step after the unit had been ordered.
     if (action.kind === 'collect_crate') {
-      const done = (result) => { for (const id of action.ids) memory.specialOrders.delete(id); emit({ kind: 'task', tick, task: 'collect_crate', description: `collect_crate ${result}: #${action.crateId}`, result, targetId: action.crateId, resends: task.resends ?? 0 }); return false; };
+      const done = (result) => { for (const id of action.ids) memory.specialOrders.delete(id); emit({ kind: 'task', tick, task: 'collect_crate', description: `collect_crate ${result}: #${action.crateId}`, result, targetId: action.crateId, ids: action.ids, resends: task.resends ?? 0 }); return false; };
       const crate = (api.crates?.() ?? []).find((c) => c.id === action.crateId);
       // A crate that is no longer listed was collected -- by us or by someone else; either way the order is over.
       if (!crate) return done('collected');
@@ -838,7 +838,7 @@ export function maintainSpecial(api, memory, emit, catalog) {
     }
     if (action.kind === 'capture') {
       const engineer = own.get(action.ids[0]), target = api.unit(action.targetId);
-      const done = (result) => { for (const id of action.ids) memory.specialOrders.delete(id); emit({ kind: result === 'completed' && !(task.resends > 0) ? 'observed' : 'task', tick, task: 'capture', description: `capture ${result}: #${action.targetId}`, result, targetId: action.targetId, resends: task.resends ?? 0 }); return false; };
+      const done = (result) => { for (const id of action.ids) memory.specialOrders.delete(id); emit({ kind: result === 'completed' && !(task.resends > 0) ? 'observed' : 'task', tick, task: 'capture', description: `capture ${result}: #${action.targetId}`, result, targetId: action.targetId, ids: action.ids, resends: task.resends ?? 0 }); return false; };
       if (task.escort) return maintainEscort(api, memory, task, own, tick, emit, catalog, done);
       if (own.has(action.targetId)) return done('completed');
       if (!engineer) return target ? done('engineer_lost') : done('incomplete');
@@ -864,7 +864,7 @@ export function maintainSpecial(api, memory, emit, catalog) {
       for (const id of [...action.ids, ...(action.kind === 'load' ? [action.targetId] : [])]) memory.specialOrders.delete(id);
       emit({ kind: result === 'completed' && !(task.resends > 0) ? 'observed' : 'task', tick, task: action.kind,
         description: `${action.kind} ${result}: ${entered.length}/${action.ids.length}`,
-        result, targetId: action.targetId, enteredIds: entered, resends: task.resends ?? 0 });
+        result, targetId: action.targetId, ids: action.ids, enteredIds: entered, resends: task.resends ?? 0 });
       return false;
     };
     if (entered.length === action.ids.length) return finish('completed');
@@ -911,7 +911,7 @@ function maintainDemolition(api, memory, task, own, tick, emit) {
       for (const name of task.attackerNames) memory.bridgeRetryAfter.set(`${bridge.id}:${name}`, tick + 900);
     }
     emit({ kind: result === 'completed' && !(task.resends > 0) ? 'observed' : 'task', tick, task: action.kind,
-      description: `demolish_bridge ${result}`, result, bridgeId: bridge.id, x: bridge.x, y: bridge.y,
+      description: `demolish_bridge ${result}`, result, ids: action.ids, bridgeId: bridge.id, x: bridge.x, y: bridge.y,
       initialHitPoints: bridge.hitPoints, lastHitPoints: current?.hitPoints ?? task.hitPoints, resends: task.resends ?? 0 });
     return false;
   };

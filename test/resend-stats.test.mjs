@@ -74,6 +74,38 @@ test('a task outcome survives the log serializer, with its resend count', () => 
   assert.equal(eventEntry({ kind: 'not-a-kind', tick: 1 }, 0), null);
 });
 
+test('a task record says which units were sent, not only which target', () => {
+  // `targetId` alone cannot tell "one engineer was re-sent 89 times" from "three engineers each tried once",
+  // and the difference decides whether the order is wrong or the unit keeps being replaced -- the review had
+  // to dig that distinction out of reports by hand because the record carried the target and nothing else.
+  const e = eventEntry({ kind: 'task', tick: 5000, task: 'capture', result: 'uncapturable', targetId: 1489, ids: [20], resends: 89, description: 'capture uncapturable: #1489' }, 0);
+  assert.deepEqual(e.ids, [20]);
+  assert.equal(e.targetId, 1489, 'both ends of the order are on the record now');
+  // Bounded, numeric-only: this record is written to disk, so a long or malformed list must not widen it.
+  const wide = eventEntry({ kind: 'task', tick: 1, task: 'garrison', targetId: 900, ids: [1, 2, 3, 4, 'x', 6, 7, 8, 9, 10, 11], resends: 0 }, 0);
+  assert.deepEqual(wide.ids, [1, 2, 3, 4, 6, 7, 8, 9]);
+  // A record written before the ids existed reports an empty list rather than inventing a unit.
+  assert.deepEqual(eventEntry({ kind: 'task', tick: 1, task: 'capture' }, 0).ids, []);
+});
+
+test('the resend row carries the executing unit and the report prints it', () => {
+  const s = emptyResendStats();
+  recordResend(s, row(89, { key: 'capture#1489', unitIds: [20] }));
+  recordResend(s, row(3, { key: 'capture#1489', unitIds: [31, 32] }));
+  assert.deepEqual(summarizeResends(s).worst.map((r) => r.units), [[20], [31, 32]]);
+  const text = formatResendReport(summarizeResends(s), 'jev-report-x.json');
+  assert.match(text, /单位 #20/);
+  assert.match(text, /单位 #31 #32/);
+  // A squad-sized order is still one row: the list is capped rather than letting the order widen the record.
+  const s2 = emptyResendStats();
+  recordResend(s2, row(1, { key: 'garrison#900', unitIds: [1, 2, 3, 4, 5] }));
+  assert.deepEqual(summarizeResends(s2).worst[0].units, [1, 2, 3, 4]);
+  // No ids stays an empty list, not a fabricated unit.
+  const s3 = emptyResendStats();
+  recordResend(s3, row(1, { key: 'capture#1' }));
+  assert.deepEqual(summarizeResends(s3).worst[0].units, []);
+});
+
 test('an absent record is reported as absent, not as "nothing was repeated"', () => {
   // A report written before this record existed has no `kind:"task"` entry at all. Printing "0 次" for that
   // is the same mistake as reading a truncated log as "it did not happen" (§0.47).

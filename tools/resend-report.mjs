@@ -43,6 +43,9 @@ for (const e of tasks) {
     resends: e.resends,
     outcome: e.result,
     tick: e.tick,
+    // The units the task was ordered on (`logbook.eventEntry` keeps them). Without them a row cannot say
+    // whether one engineer failed 89 times or 89 different units failed once each.
+    unitIds: e.ids,
   });
 }
 const summary = summarizeResends(stats);
