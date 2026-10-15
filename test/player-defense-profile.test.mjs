@@ -9,7 +9,7 @@ import { defenseProfile } from '../src/player/werhd-jev-strategy.mjs';
 // cheapest. That is the wrong answer to an armour push and cannot answer an air raid at all.
 
 const pct = (s) => Object.fromEntries(s.split(',').map((v, i) => [i, parseFloat(v) / 100]));
-// Rows copied verbatim from docs/rules-规则文件.ini, the rules file vendored into this repository.
+// Rows copied verbatim from docs/rules(规则文件).ini, the rules file vendored into this repository.
 const PILLBOX = '100%,100%,100%,100%,80%,80%,100%,60%,60%,100%,100%';
 const PRISM = '90%,90%,90%,80%,60%,25%,100%,50%,10%,90%,100%';
 

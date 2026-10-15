@@ -11,24 +11,26 @@
 > - 表格按原始 CSV 顺序保留，字段：`内部 ID, 中文名称, 阵营, 特性, 优点, 缺点`。
 >
 > **⚠️ 本表的 ID 属于「尤里复仇 / 词典 ID 集」，与本客户端实际使用的规则 ID 集不一致。**
-> 实测：本表 139 个内部 ID 中 **88 个**能在 `docs/rules-规则文件.ini` 里找到同名 `[节]`，**51 个找不到**。原因有两类：
+> 实测：本表 139 个内部 ID 中 **88 个**能在 `docs/rules(规则文件).ini` 里找到同名 `[节]`，**51 个找不到**。原因有两类：
 >
-> 1. **46 个是那套规则根本没有的物件**——游戏跑的是**基础红警 2**规则
->    （覆盖层 `res/overlay/rules.ini` 里 `Name=Red Alert 2 -- Official Rules of Engagement`，
->    `[Countries]` 无 `YuriCountry`），所以整批尤里单位与尤里建筑
+> 1. **大部分是这套规则根本没有的物件**——游戏跑的是**基础红警 2**规则
+>    （入库的 `docs/rules(规则文件).ini` 就是游戏覆盖层那一份：`Name=Red Alert 2 -- Official Rules of Engagement`，
+>    401517 字节 / 21958 行 / 1257 个 `[节]`，`[Countries]` 无 `YuriCountry`），所以整批尤里阵营单位与建筑
 >    （`INIT VIRUS BRUTE YURICLONE YURIPRIME LASHER GATTTANK CHAOSDRONE MASTERMIND MAGNETRON
 >    YMCV YACNST YBARRACKS YWARFACTORY YNAVAL YBLAB YAPSYT YAPPET` 等）以及部分后期盟苏单位
->    （`GUARDIANGI ROBOTANK BATTLEFORTRESS SIEGECHOPPER BEAGLE DISK BORIS NABNKR NATBNK` …）
+>    （`GUARDIANGI ROBOTANK BATTLEFORTRESS SIEGECHOPPER BEAGLE DISK BORIS NABNKR NATBNK GAHPAD` …）
 >    在本客户端里**不存在**，不是 ID 写错了。本表描述的是完整的红警 2 单位表。
-> 2. **5 个是同物件、不同 ID**（工具条词典用本表的写法，规则文件用另一套）：
->    `TANYA`→`TANY`、`PCOMMANDO`→`PTROOP`、`SMIN`→`DROD`、`VLADBOAT`→`VLAD`、`BEAGLE`→`BEAG`。
->    `GAHPAD`/`NAHPAD`（机场/直升机场）在规则里是 `GAAIRC`/`GAHPAD` 的另一套命名。
+> 2. **少数是同物件、不同 ID**（工具条词典用本表的写法，规则文件用另一套）：
+>    `TANYA`→`TANY`、`YURIPRIME`→`YURIPR`、`PCOMMANDO`→`PTROOP`、`SMIN`→`DROD`、
+>    `VLADBOAT`→`VLAD`、`BEAGLE`→`BEAG`。（`YURIPRIME`→`YURIPR` 是补上的第 6 条：规则里
+>    `[YURIPR] Name=Yuri Prime`，而 `[YURIPRIME]` 不存在。`GAHPAD` 在规则里没有同名节，归第 1 类。）
 >
 > **对代码的影响**：运行时 `catalog[u.name]` 的键来自游戏 API 返回的真实 ID，**不来自本表**，
 > 所以本表不会让引擎查错单位。但**不要照本表在代码里硬编码 ID 或建表**——查不到就取不到护甲和武器，
 > 而护甲正是武器 `Verses`（11 项克制系数表）的索引。护甲与克制一律读运行时 `api.rules()`。
-> 反过来，`docs/rules-规则文件.ini` 也**不能**当作本表的权威校对源：它比游戏覆盖层还旧一点
-> （缺 `GGI/J5/GUARDIANPARA/J10` 等 14 个节），且同样缺少整套尤里阵营。
+> 反过来，`docs/rules(规则文件).ini` **可以**当作本表的校对源：2026-10-15 换入之后它就是游戏覆盖层
+> 那一份（此前入库的是 25124 行 / 581399 字节 / 1244 个 `[节]` 的带中文注释版本，比覆盖层少 13 个节，
+> 已从仓库移除）。查不到 `[节]` 的那 51 个 ID，就是这个客户端没有的东西。
 
 ---
 

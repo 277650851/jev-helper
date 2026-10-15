@@ -8,7 +8,7 @@ import { eventEntry } from '../src/logbook.mjs';
 const catalog = {
   YARD:{yard:true,label:'YARD'}, BARRACKS:{factory:'InfantryType',label:'BARRACKS',cost:500}, ENG:{engineer:true,cost:500,label:'Engineer'}, GI:{occupier:true,cost:200,weapon:{damage:15,range:4},label:'GI'},
   TECH:{techLevel:2,label:'Tech Outpost'}, EREF:{refinery:true,label:'Enemy Refinery'}, HOUSE:{label:'House'}, DEF:{isBaseDefense:true,weapon:{damage:50,range:8},label:'Pillbox'}, ETANK:{weapon:{damage:60,range:5},label:'Enemy Tank'},
-  // Exactly as docs/rules-规则文件.ini has it: TechLevel=-1, no power, and none of refinery/factory/yard.
+  // Exactly as docs/rules(规则文件).ini has it: TechLevel=-1, no power, and none of refinery/factory/yard.
   // It is capturable only because an engineer can take it, which is what `isCapturable` knows by name.
   CAOILD:{techLevel:-1,label:'Tech Oil Derrick'},
 };

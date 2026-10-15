@@ -1060,7 +1060,10 @@ if (only && g.engineOwned?.[only] === true) { delete criteria[only]; ... }
 
 **必须知道的规则来源陷阱**：
 
-- `docs/rules-规则文件.ini` 是**早期红色警戒 2** 规则，**不是尤里复仇**——没有尤里阵营、没有 YR 单位；
+- `docs/rules(规则文件).ini`（**2026-10-15 换入**）就是游戏覆盖层那一份：
+  `Name=Red Alert 2 -- Official Rules of Engagement`，`[Countries]` 无 `YuriCountry`，
+  没有整套尤里阵营（`INIT`/`VIRUS`/`BRUTE`/`YURICLONE`/`YACNST` 等都不存在）；
+  `[YURI]`/`[CIVAN]`/`[YURIPR]` 是苏联侧的个别单位，不是尤里阵营。
   `ra2-unit-catalog.md` 里的 `GATTTANK` / `MASTERMIND` / `ROBOTANK` 是**显示名，不是内部 ID**。
 - **任何 RA2 规则文件里都没有 `[ArmorTypes]` 段**；11 项护甲顺序（`None,Flak,Plate,Light,Medium,Heavy,Wood,Steel,Concrete,Special_1,Special_2`）
   只在武器系统词典里有权威记载。
@@ -1068,11 +1071,14 @@ if (only && g.engineOwned?.[only] === true) { delete criteria[only]; ... }
 
 所以护甲与克制**只能读运行时 `api.rules()`**；照 `docs/` 抄表至少会错这两个。
 
-### 0.3 `docs/rules-规则文件.ini` 与游戏实际规则的关系（已实测）
+### 0.3 `docs/rules(规则文件).ini` 与游戏实际规则的关系（已实测）
 
 游戏真正使用的是覆盖层 `C:\ra2web.github.io\res\overlay\rules.ini`（392 KB / 21958 行，
-目录里另有 `ra2.csf` 字符串表与 `art.ini`）。把入库的 `docs/rules-规则文件.ini`
-（568 KB / 25124 行）与它逐节比对：
+目录里另有 `ra2.csf` 字符串表与 `art.ini`）。
+
+**2026-10-15 换入之后，入库的 `docs/rules(规则文件).ini` 就是这一份覆盖层**（401517 字节 / 21958 行 /
+1257 个 `[节]`，与上面的 live 逐项吻合）。所以下面那张表描述的是**被换下的那一版**
+（25124 行 / 581399 字节 / 1244 个 `[节]` 的带中文注释版本），保留作为历史记录：
 
 | 项 | 结果 |
 |---|---|
@@ -1082,11 +1088,15 @@ if (only && g.engineOwned?.[only] === true) { delete criteria[only]; ... }
 | 只在 live 的节 | 14 个：`GGI`、`J5(J5MISSILE)`、`GUARDIANPARA`、`J10`、`SEAWOLFMP5`、`MIRAGEWH` … |
 | 只在 doc 的节 | 1 个：`AIRTOGROUNDMISSILE1` |
 
-**结论**：入库的那份是覆盖层的**带中文注释版本，不是另一套规则**——两者是同一规则集，
-live 更新一点（多 14 个尤里复仇后期单位）。所以：
+**结论（换入之后）**：入库的那份不再是「带注释的旁支」——**它就是权威的那一份**，
+游戏读的是同一套规则。所以：
 
-- 该文件适合当**注释版参考**（注释解释了每项含义），这是它比覆盖层更适合入库的原因。
-- 但它**不是权威**：真正的权威是覆盖层，且两者会各自演进。**一切数值仍读运行时 `api.rules()`。**
+- 拿它校对节名、ID 与数值是成立的；上面表里那些差异（live 多 14 个节、共有节中 1169 个完全一致等）
+  属于**已换下的那一版**，不再描述入库文件与 live 的差距。
+- 它仍**不是数值的最终来源**：游戏读自己的覆盖层，而入库的是一份快照，两者会各自演进。
+  **一切数值仍读运行时 `api.rules()`。**
+- 换下的那一版更适合当**注释版参考**（注释解释了每项含义）。它已从仓库移除；
+  若还要留着，把副本放进 `docs/` 并在本节记一行即可。
 - 游戏跑的是**基础红警 2** 规则（`Name=Red Alert 2 -- Official Rules of Engagement`，
   `[Countries]` 无 `YuriCountry`），`rules.ini` 里 `TANY`/`BEAG`/`GAAIRC` 才是真 ID，
   **没有 `TANYA`/`BEAGLE`/`GAHPAD`**。
