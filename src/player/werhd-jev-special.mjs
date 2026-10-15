@@ -21,6 +21,10 @@ export const IVAN_GUARD_COOLDOWN = 600, IVAN_GUARD_ARRIVE = 3;
 // defuse guard takes, so the slot and the guard agree on what a home engineer is.
 export const HOME_ENGINEER = 1, HOME_ENGINEER_RADIUS = 12;
 const IVAN = /^C?IVAN$/i;
+// The only unit in rules(规则文件).ini with `Infiltrate=yes`. The console's rule object carries neither
+// `agent` nor `infiltrate` (`werhd-player-api.d.ts` lists `engineer` and `occupier`), so the name is the only
+// handle there is -- the same reason `IVAN` above is a name test.
+const SPY = /^SPY$/i;
 // Leaving a building once its job is done: no armed enemy within RELEASE_RADIUS for this long.
 export const ENTRY_RESENDS = 3;
 export const RELEASE_RADIUS = 10, RELEASE_TICKS = { siege: 150, forward: 900, base: 2700 }, REENTER_COOLDOWN = 1800;
@@ -576,6 +580,40 @@ export function specialGroups(api, catalog, snapshot, memory, groups) {
         // real choice -- so the model keeps the choice, and it retains the `auto: 1` fallback besides.
         ...(objectiveEngineer ? { engineOwned: true } : {}) });
   }
+  // Spies. `[SPY]` is the one unit in rules(规则文件).ini with `Infiltrate=yes` (Cost=1000,
+  // Prerequisite=Barracks,TECH, Agent=yes), and what it does to an enemy building is the one thing the
+  // console cannot name: `OrderType` has no `Infiltrate`, and the closest verb it does document is
+  // `Occupy = 8`, 进入建筑 (`docs/player-console-api.md`). That is what this task issues.
+  //
+  // UNVERIFIED. The `availableActions` / `canEnter` pair -- the only place an `infiltrate` action is even
+  // named -- is still a request to the game (`docs/game-api-requests.md` §7.3). So whether the engine accepts
+  // `Occupy` on an ENEMY building for a spy, or rejects it as an order only civilians accept, is a question
+  // no fixture can answer. Everything here that CAN be checked without a match is covered by
+  // `test/player-spy.test.mjs`; the engine's answer is not, and the option is left for the model to accept.
+  const spy = units.find((u) => SPY.test(String(u.name ?? '')) && idle(u, memory, tick));
+  if (spy) {
+    // A spy is consumed either way, so it goes after what pays: half the enemy's credits out of a refinery
+    // (`SpyMoneyStealPercent=.5`), a blackout out of a power plant (`SpyPowerBlackout=1000` frames), or
+    // technology. Undefended first, then nearest -- the capture loop's ordering, and for the same reason: a
+    // spy that dies on the way steals nothing.
+    const spyTargets = enemies
+      .filter((e) => e.type === api.ObjectType.Building && !catalog[e.name]?.wall
+        && (catalog[e.name]?.refinery || catalog[e.name]?.power > 0 || catalog[e.name]?.factory || catalog[e.name]?.yard || (catalog[e.name]?.techLevel ?? 0) >= 2))
+      .map((e) => ({ unit: e, defended: armedNear(e.tile), dist: distance(spy.tile, e.tile) }))
+      .sort((a, b) => Number(a.defended) - Number(b.defended) || a.dist - b.dist);
+    const target = spyTargets[0];
+    if (target) {
+      const r = catalog[target.unit.name] ?? {};
+      const what = r.refinery ? 'steals half the credits the enemy is holding (SpyMoneyStealPercent=.5)'
+        : r.power > 0 ? 'blacks the enemy base out for about a minute (SpyPowerBlackout=1000 frames)'
+        : 'steals the technology it is guarding';
+      const infiltration = group('infiltration', 'Send a spy into an enemy building: it steals credits from a refinery, blacks out power, or steals technology. The spy is consumed and never comes back, and it dies to dogs, to mind control and to anything that shoots, so send it where the defence is thin.');
+      infiltration(`infiltrate_${target.unit.id}`,
+        `SPY: send spy #${spy.id} into ${catalog[target.unit.name]?.label ?? target.unit.name} #${target.unit.id} at (${target.unit.tile.rx},${target.unit.tile.ry}), ${Math.round(target.dist)} tiles away; it ${what}${target.defended ? '; armed enemies are within nine tiles of it and a spy dies to anything that shoots' : ''}. The spy is consumed by the attempt. Note that whether this game accepts the order at all is unverified.`,
+        { type: 'special', kind: 'infiltrate', ids: [spy.id], targetId: target.unit.id,
+          order: { type: api.OrderType.Occupy, target: { objectId: target.unit.id } } });
+    }
+  }
   for (const bridge of bridges.slice(0, 12)) {
     const tile = { rx: bridge.x, ry: bridge.y };
     if (friendlyOnBridge(api, bridge) || memory.specialTasks?.some(t => t.bridge?.id === bridge.id)) continue;
@@ -759,6 +797,12 @@ export function rememberSpecial(memory, action, execution, tick) {
     memory.specialTasks.push({ action, started: tick, submitted: tick, ...(action.escort ? { escort: true, moved: -10000 } : {}) });
     for (const id of action.ids) memory.specialOrders.set(id, { tick, kind: action.kind });
   }
+  // Spy infiltration is a one-way trip the game never reports on: the task exists to re-send the order while
+  // the spy is still there and to stop once it is not. There is no completion state to watch for.
+  if (action.ids?.length && action.kind === 'infiltrate' && execution.accepted) {
+    memory.specialTasks.push({ action, started: tick, submitted: tick });
+    for (const id of action.ids) memory.specialOrders.set(id, { tick, kind: action.kind });
+  }
   if (action.kind === 'garrison' && execution.accepted) {
     memory.garrisons ??= new Map();
     memory.garrisons.set(action.targetId, { purpose: action.purpose ?? 'base', defenseId: action.defenseId, since: tick });
@@ -853,6 +897,27 @@ export function maintainSpecial(api, memory, emit, catalog) {
         if (!execution.accepted) return done('rejected');
         task.submitted = tick; task.resends = (task.resends ?? 0) + 1;
         emit({ kind: 'micro', tick, description: `capture: 工程师 #${engineer.id} 重新前往 #${action.targetId}`, targetId: action.targetId, ids: [engineer.id] });
+      }
+      return true;
+    }
+    // Spy infiltration: the one task whose outcome the game never reports. A spy that got in is consumed, and
+    // a spy shot on the way is gone as well, so `spy_gone` is the honest result for both -- and an
+    // infiltration changes neither the building's owner nor its health, so there is nothing else to re-read.
+    // That is the missing-receipt problem `resends` exists for (`docs/game-api-requests.md` §7.1), and the
+    // only record this path can produce is "the order went out N times, then the spy was gone".
+    if (action.kind === 'infiltrate') {
+      const spy = own.get(action.ids[0]), target = api.unit(action.targetId);
+      const done = (result) => { for (const id of action.ids) memory.specialOrders.delete(id); emit({ kind: 'task', tick, task: 'infiltrate', description: `infiltrate ${result}: #${action.targetId} (the spy is consumed by the attempt either way, so this says nothing about whether it got in)`, result, targetId: action.targetId, ids: action.ids, resends: task.resends ?? 0 }); return false; };
+      if (!target) return done('target_lost');
+      if (!spy) return done('spy_gone');
+      if (tick - task.started > 2400) return done('timeout');
+      memory.specialOrders.set(spy.id, { tick, kind: 'infiltrate' });
+      if (spy.isIdle && tick - task.submitted >= 150) {
+        if ((task.resends ?? 0) >= ENTRY_RESENDS) return done('refused');
+        const execution = executeSpecial(api, action);
+        if (!execution.accepted) return done('rejected');
+        task.submitted = tick; task.resends = (task.resends ?? 0) + 1;
+        emit({ kind: 'micro', tick, description: `infiltrate: 间谍 #${spy.id} 重新前往 #${action.targetId}`, targetId: action.targetId, ids: [spy.id] });
       }
       return true;
     }
